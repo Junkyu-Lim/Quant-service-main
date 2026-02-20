@@ -1,0 +1,417 @@
+# =========================================================
+# db.py  —  DuckDB 데이터베이스 헬퍼
+# ---------------------------------------------------------
+# quant.duckdb 단일 파일로 모든 수집/스크리닝 데이터를 관리.
+# collected_date 컬럼으로 날짜별 버전 관리 (기존 CSV 파일명 대체).
+# SQLite → DuckDB 마이그레이션: 컬럼형 스토리지로 집계 쿼리 성능 향상.
+# =========================================================
+
+import logging
+from contextlib import contextmanager
+
+import duckdb
+import pandas as pd
+
+import config
+
+log = logging.getLogger("DB")
+
+# ─────────────────────────────────────────────
+# 테이블 스키마
+# ─────────────────────────────────────────────
+_SCHEMA_STATEMENTS = [
+    """CREATE TABLE IF NOT EXISTS master (
+    종목코드      TEXT NOT NULL,
+    종목명        TEXT,
+    시장구분      TEXT,
+    종목구분      TEXT,
+    collected_date TEXT NOT NULL,
+    PRIMARY KEY (종목코드, collected_date)
+)""",
+    """CREATE TABLE IF NOT EXISTS daily (
+    종목코드      TEXT NOT NULL,
+    종목명        TEXT,
+    종가          DOUBLE,
+    시가총액      DOUBLE,
+    상장주식수    DOUBLE,
+    EPS           DOUBLE,
+    BPS           DOUBLE,
+    주당배당금    DOUBLE,
+    기준일        TEXT,
+    collected_date TEXT NOT NULL,
+    PRIMARY KEY (종목코드, collected_date)
+)""",
+    """CREATE TABLE IF NOT EXISTS financial_statements (
+    종목코드      TEXT NOT NULL,
+    기준일        TEXT,
+    계정          TEXT,
+    주기          TEXT,
+    값            DOUBLE,
+    추정치        INTEGER,
+    collected_date TEXT NOT NULL
+)""",
+    """CREATE TABLE IF NOT EXISTS indicators (
+    종목코드      TEXT NOT NULL,
+    기준일        TEXT,
+    지표구분      TEXT,
+    계정          TEXT,
+    값            DOUBLE,
+    collected_date TEXT NOT NULL
+)""",
+    """CREATE TABLE IF NOT EXISTS shares (
+    종목코드      TEXT NOT NULL,
+    기준일        TEXT,
+    발행주식수    BIGINT,
+    자사주        BIGINT,
+    유통주식수    BIGINT,
+    collected_date TEXT NOT NULL,
+    PRIMARY KEY (종목코드, collected_date)
+)""",
+    """CREATE TABLE IF NOT EXISTS price_history (
+    종목코드      TEXT NOT NULL,
+    날짜          TEXT NOT NULL,
+    시가          DOUBLE,
+    고가          DOUBLE,
+    저가          DOUBLE,
+    종가          DOUBLE,
+    거래량        DOUBLE,
+    거래대금      DOUBLE,
+    collected_date TEXT NOT NULL,
+    PRIMARY KEY (종목코드, 날짜, collected_date)
+)""",
+    "CREATE INDEX IF NOT EXISTS idx_fs_code_date ON financial_statements (종목코드, collected_date)",
+    "CREATE INDEX IF NOT EXISTS idx_ind_code_date ON indicators (종목코드, collected_date)",
+    "CREATE INDEX IF NOT EXISTS idx_ph_code_date ON price_history (종목코드, collected_date)",
+    """CREATE TABLE IF NOT EXISTS investor_trading (
+    종목코드      TEXT NOT NULL,
+    날짜          TEXT NOT NULL,
+    외국인순매수  DOUBLE,
+    기관순매수    DOUBLE,
+    개인순매수    DOUBLE,
+    collected_date TEXT NOT NULL,
+    PRIMARY KEY (종목코드, 날짜, collected_date)
+)""",
+    "CREATE INDEX IF NOT EXISTS idx_inv_code_date ON investor_trading (종목코드, collected_date)",
+    """CREATE TABLE IF NOT EXISTS analysis_reports (
+    종목코드      TEXT NOT NULL,
+    종목명        TEXT,
+    report_html   TEXT,
+    scores_json   TEXT,
+    model_used    TEXT,
+    generated_date TEXT NOT NULL,
+    PRIMARY KEY (종목코드)
+)""",
+    """CREATE TABLE IF NOT EXISTS dashboard_result (
+    종목코드      TEXT PRIMARY KEY,
+    종목명        TEXT,
+    종가          DOUBLE,
+    시가총액      DOUBLE,
+    상장주식수    DOUBLE,
+    TTM_매출      DOUBLE,
+    TTM_순이익    DOUBLE,
+    TTM_영업CF    DOUBLE,
+    TTM_CAPEX     DOUBLE,
+    TTM_FCF       DOUBLE,
+    자본          DOUBLE,
+    부채          DOUBLE,
+    PER           DOUBLE,
+    PBR           DOUBLE,
+    "ROE(%)"      DOUBLE,
+    "부채비율(%)" DOUBLE,
+    "영업이익률(%)" DOUBLE,
+    "배당수익률(%)" DOUBLE,
+    EPS           DOUBLE,
+    BPS           DOUBLE,
+    DPS_최근      DOUBLE,
+    PSR           DOUBLE,
+    PEG           DOUBLE,
+    "이익수익률(%)" DOUBLE,
+    "FCF수익률(%)" DOUBLE,
+    "현금전환율(%)" DOUBLE,
+    "CAPEX비율(%)" DOUBLE,
+    이익품질_양호 INTEGER,
+    부채상환능력  DOUBLE,
+    F스코어       DOUBLE,
+    F1_수익성     INTEGER,
+    F2_영업CF     INTEGER,
+    F3_ROA개선    INTEGER,
+    F4_이익품질   INTEGER,
+    F5_레버리지   INTEGER,
+    F6_유동성     INTEGER,
+    F7_희석없음   INTEGER,
+    "F8_매출총이익률" INTEGER,
+    F9_자산회전율 INTEGER,
+    적정주가_SRIM DOUBLE,
+    "괴리율(%)"   DOUBLE,
+    S_PER         DOUBLE,
+    S_PBR         DOUBLE,
+    S_ROE         DOUBLE,
+    S_매출CAGR    DOUBLE,
+    S_영업이익CAGR DOUBLE,
+    S_순이익CAGR  DOUBLE,
+    S_연속성장    DOUBLE,
+    S_이익률개선  DOUBLE,
+    S_배당수익률  DOUBLE,
+    S_배당연속증가 DOUBLE,
+    S_괴리율      DOUBLE,
+    S_F스코어     DOUBLE,
+    S_FCF수익률   DOUBLE,
+    종합점수      DOUBLE,
+    매출_CAGR     DOUBLE,
+    영업이익_CAGR DOUBLE,
+    순이익_CAGR   DOUBLE,
+    매출_연속성장 DOUBLE,
+    영업이익_연속성장 DOUBLE,
+    순이익_연속성장 DOUBLE,
+    이익률_변동폭 DOUBLE,
+    배당_연속증가 DOUBLE,
+    데이터_연수   INTEGER,
+    순이익_전년음수 INTEGER,
+    순이익_당기양수 INTEGER,
+    PER_이상      INTEGER,
+    시장구분      TEXT,
+    종목구분      TEXT
+)""",
+]
+
+
+# ─────────────────────────────────────────────
+# 연결
+# ─────────────────────────────────────────────
+
+@contextmanager
+def get_conn():
+    """DuckDB 연결 컨텍스트 매니저 — with get_conn() as conn: 패턴으로 사용"""
+    conn = duckdb.connect(str(config.DB_PATH))
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def init_db():
+    with get_conn() as conn:
+        for stmt in _SCHEMA_STATEMENTS:
+            conn.execute(stmt)
+    log.info("DB 초기화 완료: %s", config.DB_PATH)
+
+
+# ─────────────────────────────────────────────
+# 쓰기
+# ─────────────────────────────────────────────
+
+def table_has_data(table: str, collected_date: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE collected_date = ?",
+            [collected_date],
+        )
+        return cur.fetchone()[0] > 0
+
+
+def _insert_df(conn, df: pd.DataFrame, table: str):
+    """DataFrame을 DuckDB 테이블에 삽입"""
+    conn.register("_insert_tmp", df)
+    conn.execute(f"INSERT INTO {table} SELECT * FROM _insert_tmp")
+    conn.unregister("_insert_tmp")
+
+
+def save_df(df: pd.DataFrame, table: str, collected_date: str):
+    if df.empty:
+        return
+    data = df.copy()
+    data["collected_date"] = collected_date
+
+    # Timestamp → "YYYY-MM-DD" 문자열 변환
+    for col in data.columns:
+        if pd.api.types.is_datetime64_any_dtype(data[col]):
+            data[col] = data[col].dt.strftime("%Y-%m-%d")
+
+    with get_conn() as conn:
+        conn.execute(
+            f"DELETE FROM {table} WHERE collected_date = ?",
+            [collected_date],
+        )
+        _insert_df(conn, data, table)
+
+    log.info("저장: %s (%d건, date=%s)", table, len(data), collected_date)
+
+
+def save_dashboard(df: pd.DataFrame):
+    if df.empty:
+        return
+    with get_conn() as conn:
+        # 이전 배치 결과 보존: dashboard_result → dashboard_result_prev
+        try:
+            cnt = conn.execute(
+                "SELECT COUNT(*) FROM information_schema.tables "
+                "WHERE table_name = 'dashboard_result'"
+            ).fetchone()[0]
+            if cnt:
+                conn.execute("DROP TABLE IF EXISTS dashboard_result_prev")
+                conn.execute(
+                    "CREATE TABLE dashboard_result_prev AS "
+                    "SELECT * FROM dashboard_result"
+                )
+        except Exception:
+            pass  # 최초 실행 시 이전 테이블 없음
+
+        conn.execute("DROP TABLE IF EXISTS dashboard_result")
+        conn.register("_dash_tmp", df)
+        conn.execute("CREATE TABLE dashboard_result AS SELECT * FROM _dash_tmp")
+        conn.unregister("_dash_tmp")
+    log.info("저장: dashboard_result (%d건)", len(df))
+
+
+# ─────────────────────────────────────────────
+# 읽기
+# ─────────────────────────────────────────────
+
+def load_latest(table: str) -> pd.DataFrame:
+    with get_conn() as conn:
+        try:
+            cur = conn.execute(f"SELECT MAX(collected_date) FROM {table}")
+        except Exception:
+            return pd.DataFrame()
+
+        row = cur.fetchone()
+        if row is None or row[0] is None:
+            return pd.DataFrame()
+
+        latest = row[0]
+        df = conn.execute(
+            f"SELECT * FROM {table} WHERE collected_date = ?",
+            [latest],
+        ).df()
+
+    if "collected_date" in df.columns:
+        df = df.drop(columns=["collected_date"])
+
+    log.info("로드: %s (%d건, date=%s)", table, len(df), latest)
+    return df
+
+
+def load_dashboard() -> pd.DataFrame:
+    with get_conn() as conn:
+        try:
+            df = conn.execute("SELECT * FROM dashboard_result").df()
+        except Exception:
+            return pd.DataFrame()
+    return df
+
+
+def load_dashboard_prev() -> pd.DataFrame:
+    """이전 배치의 dashboard_result를 반환한다."""
+    with get_conn() as conn:
+        try:
+            df = conn.execute("SELECT * FROM dashboard_result_prev").df()
+        except Exception:
+            return pd.DataFrame()
+    return df
+
+
+# ─────────────────────────────────────────────
+# 상태 조회 (webapp용)
+# ─────────────────────────────────────────────
+
+def save_report(code: str, name: str, html: str, scores_json: str,
+                 model: str, date: str):
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO analysis_reports
+               (종목코드, 종목명, report_html, scores_json, model_used, generated_date)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            [code, name, html, scores_json, model, date],
+        )
+    log.info("보고서 저장: %s %s", code, name)
+
+
+def load_report(code: str) -> dict | None:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT * FROM analysis_reports WHERE 종목코드 = ?",
+            [code.zfill(6)],
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        cols = [d[0] for d in cur.description]
+        return dict(zip(cols, row))
+
+
+def list_reports() -> list[dict]:
+    with get_conn() as conn:
+        try:
+            cur = conn.execute(
+                "SELECT 종목코드, 종목명, model_used, generated_date "
+                "FROM analysis_reports ORDER BY generated_date DESC"
+            )
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+        except Exception:
+            return []
+
+
+def delete_report(code: str):
+    with get_conn() as conn:
+        conn.execute(
+            "DELETE FROM analysis_reports WHERE 종목코드 = ?",
+            [code.zfill(6)],
+        )
+
+
+def load_stock_financials(code: str) -> pd.DataFrame:
+    """특정 종목의 연간 재무제표 시계열 (매출액/영업이익/당기순이익, 실적치만)"""
+    with get_conn() as conn:
+        try:
+            row = conn.execute(
+                "SELECT MAX(collected_date) FROM financial_statements"
+            ).fetchone()
+            if not row or not row[0]:
+                return pd.DataFrame()
+            latest = row[0]
+            df = conn.execute(
+                """SELECT 기준일, 계정, 값
+                   FROM financial_statements
+                   WHERE 종목코드 = ?
+                   AND collected_date = ?
+                   AND 주기 = 'A'
+                   AND 계정 IN ('매출액', '영업이익', '당기순이익')
+                   AND 추정치 = 0
+                   ORDER BY 기준일""",
+                [code.zfill(6), latest],
+            ).df()
+        except Exception:
+            return pd.DataFrame()
+    return df
+
+
+def get_data_status() -> dict:
+    tables = ["master", "daily", "financial_statements",
+              "indicators", "shares", "price_history", "investor_trading",
+              "dashboard_result"]
+    status = {}
+
+    with get_conn() as conn:
+        for t in tables:
+            try:
+                cur = conn.execute(f"SELECT COUNT(*) FROM {t}")
+                total = cur.fetchone()[0]
+            except Exception:
+                continue
+
+            if total == 0:
+                continue
+
+            if t == "dashboard_result":
+                status[t] = {"rows": total, "collected_date": "-"}
+            else:
+                cur2 = conn.execute(f"SELECT MAX(collected_date) FROM {t}")
+                latest = cur2.fetchone()[0]
+                status[t] = {"rows": total, "collected_date": latest}
+
+    return status

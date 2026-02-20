@@ -1,0 +1,143 @@
+"""
+Pipeline orchestrator: runs quant_collector_enhanced → quant_screener
+and saves dashboard results to SQLite alongside the Excel outputs.
+"""
+
+import logging
+from datetime import datetime
+
+import db as _db
+from quant_collector_enhanced import run_full as collector_run, test_crawling
+from quant_screener import (
+    load_table,
+    preprocess_indicators,
+    detect_unit_multiplier,
+    analyze_all,
+    calc_valuation,
+    calc_technical_indicators,
+    calc_investor_strength,
+    calc_strategy_scores,
+    apply_leaders_screen,
+    apply_quality_value_screen,
+    apply_growth_mom_screen,
+    apply_cash_div_screen,
+    apply_turnaround_screen,
+    save_to_excel,
+    DATA_DIR,
+)
+
+log = logging.getLogger("PIPELINE")
+
+
+def run_pipeline(skip_collect: bool = False, test_mode: bool = False, skip_price_history: bool = False, progress_callback=None):
+    """Run full pipeline: collect data then screen.
+
+    Args:
+        skip_collect: If True, skip collection and only run screener
+            (useful when data already exists in DB).
+        test_mode: If True, only collect 3 sample stocks.
+        skip_price_history: If True, skip price history collection (faster, but no technical indicators).
+        progress_callback: Optional callable(stage: str, pct: int) to track progress.
+    """
+    def _progress(stage: str, pct: int):
+        """Call progress callback if provided."""
+        if progress_callback:
+            progress_callback(stage, pct)
+
+    start = datetime.now()
+    log.info("Pipeline started at %s", start.strftime("%Y-%m-%d %H:%M:%S"))
+
+    _progress("DB 초기화 중", 2)
+    _db.init_db()
+
+    # ── Step 1: Collect ──
+    if not skip_collect:
+        _progress("데이터 수집 준비 중", 5)
+        if test_mode:
+            log.info("Running collector in TEST mode (3 stocks)...")
+            collector_run(test_mode=True, skip_price_history=skip_price_history)
+        else:
+            log.info("Running full collector...")
+            collector_run(skip_price_history=skip_price_history)
+        _progress("데이터 수집 완료", 48)
+    else:
+        log.info("Skipping collection (--skip-collect)")
+        _progress("수집 단계 건너뜀", 48)
+
+    # ── Step 2: Screen & Analyse ──
+    log.info("Running screener...")
+    _progress("데이터 로드 중", 52)
+    master = load_table("master")
+    daily = load_table("daily")
+    fs = load_table("financial_statements")
+    ind = load_table("indicators")
+    shares = load_table("shares")
+    price_hist = load_table("price_history")
+    inv = load_table("investor_trading")
+
+    if daily.empty:
+        log.error("daily data not found in DB – cannot run screener")
+        return
+
+    _progress("지표 전처리 중", 62)
+    ind = preprocess_indicators(ind)
+    multiplier = detect_unit_multiplier(ind)
+    anal_df = analyze_all(fs, ind)
+
+    _progress("밸류에이션 계산 중", 70)
+    full_df = calc_valuation(daily, anal_df, multiplier, shares)
+
+    # 기술적 지표 (주가 히스토리 기반)
+    _progress("기술적 지표 계산 중", 78)
+    full_df = calc_technical_indicators(full_df, price_hist)
+
+    # 수급 강도 (투자자별 매매동향 기반)
+    full_df = full_df.merge(calc_investor_strength(inv, daily), on="종목코드", how="left")
+
+    # Merge market/sector info from master
+    if not master.empty and "시장구분" in master.columns:
+        master_info = master[["종목코드", "시장구분", "종목구분"]].drop_duplicates("종목코드")
+        full_df = full_df.merge(master_info, on="종목코드", how="left")
+
+    # 전략별 종합점수 사전 계산 (기술적 지표 이후, DB 저장 전)
+    _progress("전략 점수 계산 중", 84)
+    full_df = calc_strategy_scores(full_df)
+
+    # ── Save dashboard to DB ──
+    _progress("데이터베이스 저장 중", 88)
+    _db.save_dashboard(full_df)
+    log.info("Dashboard saved to DB (%d rows)", len(full_df))
+
+    # ── Save Excel outputs (same as original screener) ──
+    _progress("엑셀 파일 저장 중", 90)
+    save_to_excel(
+        full_df.sort_values("종합점수", ascending=False),
+        DATA_DIR / "quant_all_stocks.xlsx", "전체종목",
+    )
+
+    leaders_df = apply_leaders_screen(full_df)
+    save_to_excel(leaders_df, DATA_DIR / "quant_leaders.xlsx", "주도주")
+
+    _progress("엑셀 파일 저장 중", 93)
+    quality_df = apply_quality_value_screen(full_df)
+    save_to_excel(quality_df, DATA_DIR / "quant_quality_value.xlsx", "우량가치")
+
+    growth_df = apply_growth_mom_screen(full_df)
+    save_to_excel(growth_df, DATA_DIR / "quant_growth_mom.xlsx", "고성장모멘텀")
+
+    _progress("엑셀 파일 저장 중", 96)
+    cashdiv_df = apply_cash_div_screen(full_df)
+    save_to_excel(cashdiv_df, DATA_DIR / "quant_cash_div.xlsx", "현금배당")
+
+    turnaround_df = apply_turnaround_screen(full_df)
+    save_to_excel(turnaround_df, DATA_DIR / "quant_turnaround.xlsx", "턴어라운드")
+
+    _progress("완료", 100)
+
+    elapsed = datetime.now() - start
+    log.info(
+        "Pipeline finished in %s — %d total, %d leaders, %d quality_value, "
+        "%d growth_mom, %d cash_div, %d turnaround",
+        elapsed, len(full_df), len(leaders_df), len(quality_df),
+        len(growth_df), len(cashdiv_df), len(turnaround_df),
+    )

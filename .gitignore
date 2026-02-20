@@ -1,0 +1,21 @@
+# Python 관련
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# 데이터 파일 (대용량 및 로컬 데이터 제외)
+# 특정 파일명뿐만 아니라 확장자 전체를 차단하는 것이 안전합니다.
+data/*.db
+data/*.xlsx
+data/*.csv
+data/*.duckdb
+*.duckdb
+
+# 운영체제 관련
+.DS_Store
+Thumbs.db
+
+# IDE (VS Code 등) 설정 파일
+.vscode/

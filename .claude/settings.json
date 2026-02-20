@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(pip show:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:pypi.org)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(Remove-Item \"c:\\\\Users\\\\limjk\\\\Quant-service-main\\\\=1.0\" -ErrorAction SilentlyContinue)"
+    ]
+  }
+}

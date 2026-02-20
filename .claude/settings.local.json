@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(claude update:*)",
+      "Bash(ls:*)",
+      "Bash(cd:*)",
+      "Bash(wc:*)",
+      "Bash(pip install:*)",
+      "Bash(python -c:*)"
+    ]
+  }
+}
