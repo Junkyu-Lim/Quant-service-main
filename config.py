@@ -30,3 +30,8 @@ GEMINI_RESEARCH_MODEL = os.environ.get("GEMINI_RESEARCH_MODEL", "gemini-2.0-flas
 
 REPORT_DIR = DATA_DIR / "reports"
 REPORT_DIR.mkdir(exist_ok=True)
+
+# S-RIM 할인율 설정 (동적 Ke = RISK_FREE_RATE + ERP)
+# 환경변수로 재정의 가능: RISK_FREE_RATE=3.5, EQUITY_RISK_PREMIUM=5.5
+RISK_FREE_RATE = float(os.environ.get("RISK_FREE_RATE", "3.5"))        # 국고채 3년물 기준 (%)
+EQUITY_RISK_PREMIUM = float(os.environ.get("EQUITY_RISK_PREMIUM", "5.5"))  # 시장위험프리미엄 (%)
