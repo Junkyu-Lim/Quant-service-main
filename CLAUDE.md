@@ -31,10 +31,10 @@ gunicorn -w 4 -b 0.0.0.0:5000 webapp.app:app
 |--------|---------|
 | `db.py` | DuckDB database (`data/quant.duckdb`). Tables: master, daily, financial_statements, indicators, shares, price_history, dashboard_result, analysis_reports |
 | `quant_collector_enhanced.py` | Data collection (FnGuide, KRX, FinanceDataReader) via ThreadPoolExecutor |
-| `quant_screener.py` | Screening engine (TTM, CAGR, S-RIM, F-Score, technical indicators, 6 strategies) |
+| `quant_screener.py` | Screening engine v14 (TTM, CAGR, S-RIM, F-Score, technical indicators, 5 strategies) |
 | `webapp/app.py` | Flask REST API + dashboard |
 | `config.py` | Config (DB_PATH, BATCH_HOUR, HOST, PORT, ANTHROPIC_API_KEY) |
-| `analysis/claude_analyzer.py` | AI analysis reports (Claude API, 5 investment gurus framework) |
+| `analysis/claude_analyzer.py` | AI analysis reports (Claude / Gemini API, 6 investment gurus framework) |
 
 ### Critical Notes for Code Changes
 
@@ -62,12 +62,16 @@ BATCH_MINUTE=0
 HOST=0.0.0.0
 PORT=5000
 DEBUG=false
-ANTHROPIC_API_KEY=sk-ant-...  # Optional (AI analysis)
+ANTHROPIC_API_KEY=sk-ant-...  # Optional (Claude AI analysis)
 ANALYSIS_MODEL=claude-sonnet-4-5-20250929
+GEMINI_API_KEY=...            # Optional (Gemini AI analysis, alternative to Claude)
+GEMINI_RESEARCH_MODEL=gemini-2.0-flash
+RISK_FREE_RATE=3.5            # S-RIM discount rate component (%)
+EQUITY_RISK_PREMIUM=5.5       # S-RIM equity risk premium (%)
 ```
 
 ---
 
 **See README.md for full documentation.**
 
-Last updated: 2026-02-18
+Last updated: 2026-02-21
