@@ -213,6 +213,39 @@ def analyze_one_stock(ticker, ind_grp, fs_grp):
             res[f"TTM_{label}"] = val
         res["최근분기"] = sorted(q_data["기준일"].unique())[-1] if not q_data.empty else ""
 
+        # ── 실적 가속도 (Earnings Acceleration) ──
+        # 영업이익/매출 각각 YoY의 미분값(ΔYoY) 계산, 2분기 연속 가속 여부 판별
+        def _calc_acceleration(qyoy_result):
+            """YoY 시리즈에서 최근 2개 ΔYoY 계산 → 2분기 연속 양(+) 여부 반환"""
+            yoy_s = qyoy_result.get("yoy_series", {})
+            if len(yoy_s) < 3:
+                return np.nan, False
+            dates = sorted(yoy_s.keys())
+            # 최근 3분기 YoY로 최근 2개 ΔYoY 산출
+            d0, d1, d2 = dates[-3], dates[-2], dates[-1]
+            delta_prev = yoy_s[d1] - yoy_s[d0]
+            delta_latest = yoy_s[d2] - yoy_s[d1]
+            consecutive = (delta_prev > 0 and delta_latest > 0)
+            return delta_latest, consecutive
+
+        op_qyoy = calc_quarterly_yoy(q_data, "영업이익")
+        rev_qyoy = calc_quarterly_yoy(q_data, "매출액")
+        op_accel, op_consec = _calc_acceleration(op_qyoy)
+        rev_accel, rev_consec = _calc_acceleration(rev_qyoy)
+        res["영업이익_가속도"] = op_accel
+        res["매출_가속도"] = rev_accel
+
+        # 4분기 빅배스 Fallback: 최신 분기가 Q4이고 영업이익 가속 꺾였어도
+        # 매출 가속 유지 + GPM 훼손 없으면 실적가속_연속 = 1 인정 (GPM은 아래서 산출)
+        # → 일단 연속 여부 잠정 저장, GPM 계산 후 최종 결정
+        latest_q = res.get("최근분기", "")
+        is_q4 = latest_q.endswith("12") or latest_q.endswith("Q4") or (
+            len(latest_q) >= 6 and latest_q[4:6] == "12"
+        )
+        res["_op_consec_accel"] = op_consec
+        res["_rev_consec_accel"] = rev_consec
+        res["_is_q4"] = is_q4
+
         total_assets_s = find_account_value(y_data, "자산총계")
         equity_s = find_account_value(y_data, "자본")
         debt_s = find_account_value(y_data, "부채")
@@ -338,6 +371,73 @@ def analyze_one_stock(ticker, ind_grp, fs_grp):
         res["F5_레버리지"], res["F6_유동성"], res["F7_희석없음"] = f5, f6, f7
         res["F8_매출총이익률"], res["F9_자산회전율"] = f8, f9
 
+        # ── GPM 연속값 & ROIC ──
+        gpm_cur_val = np.nan
+        gpm_prev_val = np.nan
+        if len(gross_profit_s) >= 2 and len(rev_s) >= 2:
+            gp_dates = sorted(gross_profit_s.keys())
+            rv_dates_y = sorted(rev_s.keys())
+            if len(gp_dates) >= 2 and len(rv_dates_y) >= 2:
+                gpm_cur_val = (gross_profit_s[gp_dates[-1]] / rev_s[rv_dates_y[-1]] * 100
+                               if rev_s[rv_dates_y[-1]] and gross_profit_s[gp_dates[-1]] is not None else np.nan)
+                gpm_prev_val = (gross_profit_s[gp_dates[-2]] / rev_s[rv_dates_y[-2]] * 100
+                                if rev_s[rv_dates_y[-2]] and gross_profit_s[gp_dates[-2]] is not None else np.nan)
+        gpm_delta = (gpm_cur_val - gpm_prev_val) if pd.notna(gpm_cur_val) and pd.notna(gpm_prev_val) else np.nan
+        res["GPM_최근(%)"] = gpm_cur_val
+        res["GPM_전년(%)"] = gpm_prev_val
+        res["GPM_변화(pp)"] = gpm_delta
+
+        # 4분기 빅배스 Fallback 최종 결정 (GPM 훼손 여부 반영)
+        op_consec = res.pop("_op_consec_accel", False)
+        rev_consec = res.pop("_rev_consec_accel", False)
+        is_q4 = res.pop("_is_q4", False)
+        gpm_ok = pd.notna(gpm_delta) and gpm_delta >= 0  # GPM 훼손 없음
+        if op_consec:
+            res["실적가속_연속"] = 1
+        elif is_q4 and rev_consec and gpm_ok:
+            res["실적가속_연속"] = 1  # 4Q fallback: 매출 가속 + GPM 유지
+        else:
+            res["실적가속_연속"] = 0
+
+        # ROIC 계산 (간이: NOPAT / Invested Capital)
+        # Invested Capital = 자산총계 - 유동부채 (유동부채 NaN 시 자산총계 그대로)
+        roic_cur = np.nan
+        roic_prev = np.nan
+        if op_s and total_assets_s:
+            op_dates_y = sorted(op_s.keys())
+            ta_dates_y = sorted(total_assets_s.keys())
+            cl_dates = sorted(current_liab_s.keys()) if current_liab_s else []
+            for i, (op_key, ta_key) in enumerate([
+                (op_dates_y[-1], ta_dates_y[-1]) if len(op_dates_y) >= 1 and len(ta_dates_y) >= 1 else (None, None),
+                (op_dates_y[-2], ta_dates_y[-2]) if len(op_dates_y) >= 2 and len(ta_dates_y) >= 2 else (None, None),
+            ]):
+                if op_key is None or ta_key is None:
+                    continue
+                op_val = op_s.get(op_key)
+                ta_val = total_assets_s.get(ta_key)
+                if op_val is None or ta_val is None or ta_val == 0:
+                    continue
+                cl_val = current_liab_s.get(cl_dates[-1 - i]) if cl_dates and len(cl_dates) > i else None
+                ic = (ta_val - cl_val) if cl_val is not None else ta_val
+                if ic <= 0:
+                    ic = ta_val
+                nopat = op_val * (1 - 0.22)
+                roic_val = nopat / ic * 100
+                if i == 0:
+                    roic_cur = roic_val
+                else:
+                    roic_prev = roic_val
+        res["ROIC(%)"] = roic_cur
+        res["ROIC_전년(%)"] = roic_prev
+        res["ROIC_개선"] = 1 if pd.notna(roic_cur) and pd.notna(roic_prev) and roic_cur > roic_prev else 0
+
+        # 퀄리티 턴어라운드 복합 신호
+        # GPM +2%p 이상 AND 영업CF > 0 AND ROIC 개선
+        ttm_ocf_val = res.get("TTM_영업CF")
+        ocf_positive = pd.notna(ttm_ocf_val) and ttm_ocf_val > 0
+        gpm_surge = pd.notna(gpm_delta) and gpm_delta >= 2.0
+        res["퀄리티_턴어라운드"] = 1 if (gpm_surge and ocf_positive and res["ROIC_개선"] == 1) else 0
+
         dps_s = find_account_value(ind_grp[ind_grp["지표구분"]=="DPS"], "배당금")
         res["DPS_최근"] = dps_s[max(dps_s.keys())] if dps_s else np.nan
         res["DPS_CAGR"], res["배당_연속증가"] = calc_cagr(dps_s), count_consecutive_growth(dps_s)
@@ -345,11 +445,27 @@ def analyze_one_stock(ticker, ind_grp, fs_grp):
 
     return res
 
-def analyze_all(fs_df, ind_df):
+def analyze_all(fs_df, ind_df, progress_callback=None):
+    """Analyze all stocks with optional progress callback.
+
+    Args:
+        fs_df: Financial statements dataframe
+        ind_df: Indicators dataframe
+        progress_callback: Optional callable(stage: str, pct: int) for progress tracking
+    """
     results = []
     tickers = list(set(fs_df["종목코드"].unique()) | set(ind_df["종목코드"].unique()))
-    for ticker in tqdm(tickers, desc="펀더멘털 분석"):
+    total = len(tickers)
+
+    for idx, ticker in enumerate(tqdm(tickers, desc="펀더멘털 분석")):
         results.append(analyze_one_stock(ticker, ind_grp=ind_df[ind_df["종목코드"]==ticker], fs_grp=fs_df[fs_df["종목코드"]==ticker]))
+        if progress_callback and idx % max(1, total // 10) == 0:
+            pct = 62 + int((idx / total) * 8)  # 62% ~ 70% 범위
+            progress_callback(f"펀더멘털 분석 중 ({idx}/{total})", pct)
+
+    if progress_callback:
+        progress_callback(f"펀더멘털 분석 완료 ({total}/{total})", 70)
+
     return pd.DataFrame(results)
 
 # ═════════════════════════════════════════════
@@ -410,8 +526,66 @@ def calc_valuation(daily, anal_df, multiplier, shares_df):
 
     return df
 
-def calc_technical_indicators(df, price_hist):
+def calc_technical_indicators(df, price_hist, index_hist=None, master=None):
+    """기술적 지표 계산. index_hist/master 제공 시 Composite RS도 계산.
+
+    Args:
+        df: 종목 데이터프레임 (종목코드 포함)
+        price_hist: 주가 히스토리 (종목코드, 날짜, 종가, 거래량 등)
+        index_hist: 지수 히스토리 (지수코드, 날짜, 종가) — KOSPI/KOSDAQ
+        master: 종목 마스터 (종목코드, 시장구분) — RS 계산 시 지수 선택에 사용
+    """
     if price_hist.empty: return df
+
+    # 지수 데이터 사전 준비 (날짜 → 종가 매핑)
+    idx_map = {}  # {"KOSPI": pd.Series(종가, index=날짜), "KOSDAQ": ...}
+    if index_hist is not None and not index_hist.empty:
+        for idx_code in ["KOSPI", "KOSDAQ"]:
+            sub = index_hist[index_hist["지수코드"] == idx_code].copy()
+            sub["날짜"] = pd.to_datetime(sub["날짜"])
+            sub = sub.sort_values("날짜").set_index("날짜")["종가"]
+            idx_map[idx_code] = sub
+
+    # 종목 → 시장구분 매핑
+    market_map = {}
+    if master is not None and not master.empty and "시장구분" in master.columns:
+        market_map = master.drop_duplicates("종목코드").set_index("종목코드")["시장구분"].to_dict()
+
+    def _rs_ret(price_series, n):
+        """날짜 인덱스 기반 n거래일 전 대비 수익률(%). shift 금지 — iloc 기반."""
+        if len(price_series) < n + 1:
+            return np.nan
+        p_now = price_series.iloc[-1]
+        p_prev = price_series.iloc[-(n + 1)]
+        if p_prev <= 0:
+            return np.nan
+        return (p_now / p_prev - 1) * 100
+
+    def _index_ret(idx_series, stock_dates, n):
+        """종목 날짜 기준으로 지수 수익률 계산 (날짜 merge 방식)."""
+        if idx_series is None or len(idx_series) == 0:
+            return np.nan
+        stock_dates_dt = pd.to_datetime(stock_dates)
+        # 종목의 최신/n거래일전 날짜와 가장 가까운 지수 날짜 사용
+        latest_date = stock_dates_dt.max()
+        idx_sorted = idx_series.sort_index()
+        # 최신 날짜 지수값
+        available = idx_sorted.index[idx_sorted.index <= latest_date]
+        if len(available) == 0:
+            return np.nan
+        p_now = idx_sorted[available[-1]]
+        # n거래일 전: 종목 기준 n번째 이전 날짜
+        if len(stock_dates_dt) < n + 1:
+            return np.nan
+        target_date = sorted(stock_dates_dt)[-(n + 1)]
+        available_prev = idx_sorted.index[idx_sorted.index <= target_date]
+        if len(available_prev) == 0:
+            return np.nan
+        p_prev = idx_sorted[available_prev[-1]]
+        if p_prev <= 0:
+            return np.nan
+        return (p_now / p_prev - 1) * 100
+
     techs = []
     for code in df["종목코드"].unique():
         ph = price_hist[price_hist["종목코드"]==code].sort_values("날짜")
@@ -420,29 +594,81 @@ def calc_technical_indicators(df, price_hist):
         ma20 = ph["종가"].rolling(20).mean().iloc[-1] if len(ph)>=20 else np.nan
         ma60 = ph["종가"].rolling(60).mean().iloc[-1] if len(ph)>=60 else np.nan
         h52, l52 = ph["종가"].max(), ph["종가"].min()
-        
+
         rsi = np.nan
         if len(ph) >= 15:
             delta = ph["종가"].diff()
             gain = (delta.where(delta > 0, 0)).rolling(14).mean().iloc[-1]
             loss = (-delta.where(delta < 0, 0)).rolling(14).mean().iloc[-1]
             rsi = 100 - (100 / (1 + (gain / loss))) if loss > 0 else 100
-        
-        v_col = "거래대금" if "거래대금" in ph.columns else None
+
+        # 거래대금 컬럼 존재하고 실제 값이 있으면 사용, 아니면 종가×거래량으로 계산
+        v_col = "거래대금" if ("거래대금" in ph.columns and ph["거래대금"].notna().any()) else None
         v20 = (ph[v_col].tail(20).mean() if v_col else (ph["종가"]*ph["거래량"]).tail(20).mean()) if len(ph)>=20 else np.nan
         v5 = (ph[v_col].tail(5).mean() if v_col else (ph["종가"]*ph["거래량"]).tail(5).mean())
         vol60 = ph["종가"].pct_change().tail(60).std() * np.sqrt(252) * 100 if len(ph)>=60 else np.nan
+
+        # ── Composite RS ──
+        rs_60d = rs_120d = rs_250d = composite_rs = np.nan
+        if idx_map:
+            market = market_map.get(str(code), "KOSPI")
+            if market not in idx_map:
+                market = "KOSPI"
+            idx_s = idx_map[market]
+            stock_dates = ph["날짜"]
+
+            stock_ret_60 = _rs_ret(ph["종가"], 60)
+            stock_ret_120 = _rs_ret(ph["종가"], 120)
+            stock_ret_250 = _rs_ret(ph["종가"], 250)
+
+            idx_ret_60 = _index_ret(idx_s, stock_dates, 60)
+            idx_ret_120 = _index_ret(idx_s, stock_dates, 120)
+            idx_ret_250 = _index_ret(idx_s, stock_dates, 250)
+
+            if pd.notna(stock_ret_60) and pd.notna(idx_ret_60):
+                rs_60d = stock_ret_60 - idx_ret_60
+            if pd.notna(stock_ret_120) and pd.notna(idx_ret_120):
+                rs_120d = stock_ret_120 - idx_ret_120
+            if pd.notna(stock_ret_250) and pd.notna(idx_ret_250):
+                rs_250d = stock_ret_250 - idx_ret_250
+
+            # 가중 복합 RS (사용 가능한 기간 기준으로 조합)
+            parts, weights = [], []
+            if pd.notna(rs_60d): parts.append(rs_60d * 0.4); weights.append(0.4)
+            if pd.notna(rs_120d): parts.append(rs_120d * 0.3); weights.append(0.3)
+            if pd.notna(rs_250d): parts.append(rs_250d * 0.3); weights.append(0.3)
+            if parts:
+                composite_rs = sum(parts) / sum(weights)  # 가중 평균으로 정규화
 
         techs.append({
             "종목코드": code, "RSI_14": rsi, "MA20_이격도(%)": (close/ma20-1)*100 if pd.notna(ma20) else np.nan,
             "MA60_이격도(%)": (close/ma60-1)*100 if pd.notna(ma60) else np.nan,
             "52주_최고대비(%)": (close/h52-1)*100, "52주_최저대비(%)": (close/l52-1)*100,
             "거래대금_20일평균": v20, "거래대금_증감(%)": (v5/v20-1)*100 if pd.notna(v20) and v20 > 0 else np.nan,
-            "변동성_60일(%)": vol60
+            "변동성_60일(%)": vol60,
+            "RS_60d": rs_60d, "RS_120d": rs_120d, "RS_250d": rs_250d, "Composite_RS": composite_rs,
         })
-    return df.merge(pd.DataFrame(techs), on="종목코드", how="left")
 
-def calc_investor_strength(inv_df, daily):
+    tech_df = pd.DataFrame(techs)
+    result = df.merge(tech_df, on="종목코드", how="left")
+
+    # RS_등급: Composite_RS의 전체 종목 백분위 (0~100)
+    if "Composite_RS" in result.columns and result["Composite_RS"].notna().any():
+        rs_rank = result["Composite_RS"].rank(pct=True, na_option="keep") * 100
+        result["RS_등급"] = rs_rank
+    else:
+        result["RS_등급"] = np.nan
+
+    return result
+
+def calc_investor_strength(inv_df, daily, price_hist=None):
+    """수급강도 + 스마트머니 매집 연속성 + VCP 신호 계산.
+
+    Args:
+        inv_df: 투자자 매매동향 (종목코드, 날짜, 외국인순매수, 기관순매수)
+        daily: 일별 시세 (종목코드, 시가총액)
+        price_hist: 주가 히스토리 (종목코드, 날짜, 종가, 거래량) — VCP 계산에 필요
+    """
     if inv_df.empty: return pd.DataFrame(columns=["종목코드", "수급강도", "외인순매수_20d", "기관순매수_20d"])
     res = []
     for code in inv_df["종목코드"].unique():
@@ -451,7 +677,49 @@ def calc_investor_strength(inv_df, daily):
         mcap = daily.loc[daily["종목코드"]==code, "시가총액"].values
         mcap = mcap[0] if len(mcap) > 0 else np.nan
         strength = ((f_sum + i_sum) / mcap) * 100 if pd.notna(mcap) and mcap > 0 else np.nan
-        res.append({"종목코드": code, "수급강도": strength, "외인순매수_20d": f_sum, "기관순매수_20d": i_sum})
+
+        # ── 스마트머니 매집 연속성 ──
+        n = len(df_code)
+        if n > 0:
+            buy_days = ((df_code["외국인순매수"] > 0) | (df_code["기관순매수"] > 0)).sum()
+            both_days = ((df_code["외국인순매수"] > 0) & (df_code["기관순매수"] > 0)).sum()
+            smart_ratio = buy_days / n
+            both_ratio = both_days / n
+        else:
+            smart_ratio = np.nan
+            both_ratio = np.nan
+
+        # ── VCP 신호 (가격 + 거래량 축소 동시 확인) ──
+        vcp = 0
+        if price_hist is not None and not price_hist.empty:
+            ph = price_hist[price_hist["종목코드"]==code].sort_values("날짜")
+            if len(ph) >= 60:
+                close_s = ph["종가"]
+                # 가격 CV(변동계수) 비교
+                cv20 = close_s.tail(20).std() / close_s.tail(20).mean() if close_s.tail(20).mean() > 0 else np.nan
+                cv60 = close_s.tail(60).std() / close_s.tail(60).mean() if close_s.tail(60).mean() > 0 else np.nan
+                price_compress = pd.notna(cv20) and pd.notna(cv60) and cv20 < cv60
+                # 거래량 축소 비교
+                vol_col = "거래량"
+                if vol_col in ph.columns:
+                    vol20 = ph[vol_col].tail(20).mean()
+                    vol60 = ph[vol_col].tail(60).mean()
+                    vol_compress = pd.notna(vol20) and pd.notna(vol60) and vol60 > 0 and vol20 < vol60
+                else:
+                    vol_compress = False
+                # 스마트머니 승률 60%+ AND 가격+거래량 동시 축소
+                sm_ok = pd.notna(smart_ratio) and smart_ratio >= 0.6
+                vcp = 1 if (price_compress and vol_compress and sm_ok) else 0
+
+        res.append({
+            "종목코드": code,
+            "수급강도": strength,
+            "외인순매수_20d": f_sum,
+            "기관순매수_20d": i_sum,
+            "스마트머니_승률": smart_ratio,
+            "양매수_비율": both_ratio,
+            "VCP_신호": vcp,
+        })
     return pd.DataFrame(res)
 
 # ═════════════════════════════════════════════
@@ -459,33 +727,71 @@ def calc_investor_strength(inv_df, daily):
 # ═════════════════════════════════════════════
 
 def calc_strategy_scores(df):
-    def get_rank(col, asc=True):
-        if col not in df.columns: return pd.Series(50.0, index=df.index)
-        series = df[col].fillna(df[col].median() if not df[col].isna().all() else 0)
-        return series.rank(pct=True) * 100 if asc else (1 - series.rank(pct=True)) * 100
-    
+    def get_rank(col, asc=True, zero_if_nan=False):
+        """백분위 랭킹 (0~100). zero_if_nan=True 시 NaN 종목은 0점 처리."""
+        if col not in df.columns:
+            return pd.Series(0.0 if zero_if_nan else 50.0, index=df.index)
+        series = df[col].copy()
+        if zero_if_nan:
+            nan_mask = series.isna()
+            # NaN을 최하위로 채운 뒤 랭킹, 이후 0으로 덮어쓰기
+            fill_val = series.min() - 1 if (asc and series.notna().any()) else series.max() + 1 if series.notna().any() else 0
+            series = series.fillna(fill_val)
+            ranked = series.rank(pct=True) * 100 if asc else (1 - series.rank(pct=True)) * 100
+            ranked[nan_mask] = 0.0
+            return ranked
+        else:
+            series = series.fillna(series.median() if not series.isna().all() else 0)
+            return series.rank(pct=True) * 100 if asc else (1 - series.rank(pct=True)) * 100
+
     S_PER_inv, S_PBR_inv, S_PEG_inv = get_rank("PER", False), get_rank("PBR", False), get_rank("PEG", False)
     S_ROE, S_OpCAGR, S_QOpYoY = get_rank("ROE(%)"), get_rank("영업이익_CAGR"), get_rank("Q_영업이익_YoY(%)")
     S_FCF, S_Div, S_Supply, S_Vol = get_rank("FCF수익률(%)"), get_rank("배당수익률(%)"), get_rank("수급강도"), get_rank("거래대금_20일평균")
-    
-    df["주도주_점수"] = (S_Supply*0.3 + S_Vol*0.2 + S_OpCAGR*0.2 + S_QOpYoY*0.2 + get_rank("RSI_14")*0.1)
+
+    # 핵심 모멘텀/퀄리티 지표 — NaN은 0점 처리 (증명 안 된 종목에 점수 불허)
+    S_RS = get_rank("RS_등급", asc=True, zero_if_nan=True)
+    S_Accel = get_rank("실적가속_연속", asc=True, zero_if_nan=True)
+    S_SmartMoney = get_rank("스마트머니_승률", asc=True, zero_if_nan=True)
+    S_GPM_delta = get_rank("GPM_변화(pp)", asc=True, zero_if_nan=True)
+
+    # 주도주: RS_등급(25%) + 수급강도(20%) + 거래대금(10%) + 영업이익CAGR(15%) + Q_YoY(15%) + 실적가속(10%) + RSI(5%)
+    df["주도주_점수"] = (S_RS*0.25 + S_Supply*0.20 + S_Vol*0.10 + S_OpCAGR*0.15 + S_QOpYoY*0.15 + S_Accel*0.10 + get_rank("RSI_14")*0.05)
     df["우량가치_점수"] = (S_PEG_inv*0.3 + S_PER_inv*0.1 + S_ROE*0.3 + get_rank("F스코어")*0.2 + get_rank("부채비율(%)", False)*0.1)
     df["고성장_점수"] = (get_rank("매출_CAGR")*0.2 + S_OpCAGR*0.3 + S_QOpYoY*0.3 + get_rank("MA20_이격도(%)")*0.1 + get_rank("52주_최고대비(%)")*0.1)
     df["현금배당_점수"] = (S_FCF*0.3 + S_Div*0.3 + get_rank("DPS_CAGR")*0.2 + get_rank("F스코어")*0.1 + get_rank("부채비율(%)", False)*0.1)
+    # 턴어라운드: 이익률변동폭(20%) + 흑자전환(20%) + 스마트머니승률(20%) + GPM변화(15%) + F스코어(15%) + 괴리율(10%)
     df["턴어라운드_점수"] = (
-        get_rank("이익률_변동폭") * 0.3
-        + get_rank("흑자전환") * 0.3
-        + get_rank("순이익_당기양수") * 0.1
+        get_rank("이익률_변동폭") * 0.20
+        + get_rank("흑자전환") * 0.20
+        + S_SmartMoney * 0.20
+        + S_GPM_delta * 0.15
         + get_rank("F스코어") * 0.15
-        + get_rank("괴리율(%)") * 0.15
+        + get_rank("괴리율(%)") * 0.10
     )
-    
-    # Original v8 Comprehensive Score Weights
-    df["종합점수"] = (S_PER_inv*1.5 + S_PBR_inv*1.0 + S_ROE*2.0 + get_rank("매출_CAGR")*2.0 + S_OpCAGR*2.0 + get_rank("F스코어")*2.0 + S_FCF*1.5 + get_rank("괴리율(%)")*1.0) / 13.0 * 100
+
+    # ── 종합점수: 성장성 / 안정성 / 주가 세 축 균형 (각 0-100, 합산 평균 → 0-100) ──
+    # 성장성 (33%): 영업이익CAGR 35% + 매출CAGR 30% + 최근분기YoY 25% + 실적가속도 10%
+    성장성_점수 = S_OpCAGR * 0.35 + get_rank("매출_CAGR") * 0.30 + S_QOpYoY * 0.25 + S_Accel * 0.10
+    # 안정성 (33%): ROE 40% + F스코어(재무건전성) 35% + FCF수익률 25%
+    안정성_점수 = S_ROE * 0.40 + get_rank("F스코어") * 0.35 + S_FCF * 0.25
+    # 주가 (33%): PER역순 40% + S-RIM괴리율 35% + PBR역순 25%
+    가격_점수   = S_PER_inv * 0.40 + get_rank("괴리율(%)") * 0.35 + S_PBR_inv * 0.25
+
+    df["성장성_점수"] = 성장성_점수
+    df["안정성_점수"] = 안정성_점수
+    df["가격_점수"]   = 가격_점수
+    df["종합점수"]    = (성장성_점수 + 안정성_점수 + 가격_점수) / 3
     return df
 
 def apply_leaders_screen(df):
-    mask = (df["시가총액"]>=200_000_000_000) & (df.get("거래대금_20일평균",0)>=1_000_000_000) & (df["TTM_순이익"]>0)
+    # 시장 주도주: 대형주 + 유동성 + 수익성 + RS 상위 30%
+    mask = (df["시가총액"]>=100_000_000_000) & (df["TTM_순이익"]>0) & (df["주도주_점수"]>0)
+    # 거래대금이 있으면 추가 필터 (없으면 무시)
+    if "거래대금_20일평균" in df.columns:
+        mask = mask & ((df["거래대금_20일평균"].fillna(0)>100_000_000) | (df["거래대금_20일평균"].isna()))
+    # RS_등급이 있을 때만 상위 30% 필터 적용 (데이터 없으면 통과)
+    if "RS_등급" in df.columns and df["RS_등급"].notna().any():
+        mask = mask & ((df["RS_등급"].fillna(0) >= 70) | (df["RS_등급"].isna()))
     return df[mask].sort_values("주도주_점수", ascending=False)
 
 def apply_quality_value_screen(df):
@@ -501,7 +807,16 @@ def apply_cash_div_screen(df):
     return df[mask].sort_values("현금배당_점수", ascending=False)
 
 def apply_turnaround_screen(df):
-    mask = ((df.get("흑자전환")==1) | (df.get("이익률_급개선")==1)) & (df["TTM_순이익"]>0) & (df["시가총액"]>=30_000_000_000)
+    base_mask = ((df.get("흑자전환")==1) | (df.get("이익률_급개선")==1)) & (df["TTM_순이익"]>0) & (df["시가총액"]>=30_000_000_000)
+    # 스마트머니 승률 50%+ OR VCP 신호 보조 조건 (있을 때만 적용)
+    if "스마트머니_승률" in df.columns:
+        smart_mask = (df["스마트머니_승률"].fillna(0) >= 0.5) | (df.get("VCP_신호", 0).fillna(0) == 1)
+        mask = base_mask & smart_mask
+        # 스마트머니 데이터 없는 종목은 기본 조건으로 통과
+        no_data_mask = base_mask & df["스마트머니_승률"].isna()
+        mask = mask | no_data_mask
+    else:
+        mask = base_mask
     return df[mask].sort_values("턴어라운드_점수", ascending=False)
 
 def save_to_excel(df, filepath, sheet_name="Result"):
@@ -514,7 +829,7 @@ def save_to_excel(df, filepath, sheet_name="Result"):
         "주요지표": ["PER", "PBR", "PSR", "PEG", "PER_이상", "ROE(%)", "EPS", "BPS", "부채비율(%)", "영업이익률(%)", "이익수익률(%)", "FCF수익률(%)", "배당수익률(%)", "이익품질_양호"],
         "F스코어": ["F스코어", "F1_수익성", "F2_영업CF", "F3_ROA개선", "F4_이익품질", "F5_레버리지", "F6_유동성", "F7_희석없음", "F8_매출총이익률", "F9_자산회전율"],
         "수급/거래": ["수급강도", "외인순매수_20d", "기관순매수_20d", "거래대금_20일평균", "거래대금_증감(%)"],
-        "점수": ["종합점수", "주도주_점수", "우량가치_점수", "고성장_점수", "현금배당_점수", "턴어라운드_점수"],
+        "점수": ["종합점수", "성장성_점수", "안정성_점수", "가격_점수", "주도주_점수", "우량가치_점수", "고성장_점수", "현금배당_점수", "턴어라운드_점수"],
         "성장추세": ["매출_CAGR", "영업이익_CAGR", "순이익_CAGR", "매출_연속성장", "영업이익_연속성장", "이익률_변동폭", "흑자전환", "순이익_전년음수", "순이익_당기양수"],
         "밸류에이션": ["적정주가_SRIM", "괴리율(%)"],
     }
@@ -549,11 +864,20 @@ def save_to_excel(df, filepath, sheet_name="Result"):
 def run():
     daily, fs, ind = load_table("daily"), load_table("financial_statements"), load_table("indicators")
     shares, hist, inv = load_table("shares"), load_table("price_history"), load_table("investor_trading")
+    index_hist = load_table("index_history")
+    master = load_table("master")
     if daily.empty: return
     ind = preprocess_indicators(ind); mult = detect_unit_multiplier(ind); anal = analyze_all(fs, ind)
     full = calc_valuation(daily, anal, mult, shares)
-    full = calc_technical_indicators(full, hist)
-    full = full.merge(calc_investor_strength(inv, daily), on="종목코드", how="left")
+    full = calc_technical_indicators(
+        full, hist,
+        index_hist=index_hist if not index_hist.empty else None,
+        master=master if not master.empty else None,
+    )
+    full = full.merge(
+        calc_investor_strength(inv, daily, price_hist=hist if not hist.empty else None),
+        on="종목코드", how="left",
+    )
     full = calc_strategy_scores(full)
     save_to_excel(full.sort_values("종합점수", ascending=False), DATA_DIR / "quant_all_stocks.xlsx", "All")
     save_to_excel(apply_leaders_screen(full), DATA_DIR / "quant_leaders.xlsx", "Leaders")

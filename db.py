@@ -92,6 +92,14 @@ _SCHEMA_STATEMENTS = [
     PRIMARY KEY (종목코드, 날짜, collected_date)
 )""",
     "CREATE INDEX IF NOT EXISTS idx_inv_code_date ON investor_trading (종목코드, collected_date)",
+    """CREATE TABLE IF NOT EXISTS index_history (
+    지수코드      TEXT NOT NULL,
+    날짜          TEXT NOT NULL,
+    종가          DOUBLE,
+    collected_date TEXT NOT NULL,
+    PRIMARY KEY (지수코드, 날짜, collected_date)
+)""",
+    "CREATE INDEX IF NOT EXISTS idx_idx_code_date ON index_history (지수코드, collected_date)",
     """CREATE TABLE IF NOT EXISTS analysis_reports (
     종목코드      TEXT NOT NULL,
     종목명        TEXT,
@@ -170,7 +178,25 @@ _SCHEMA_STATEMENTS = [
     순이익_당기양수 INTEGER,
     PER_이상      INTEGER,
     시장구분      TEXT,
-    종목구분      TEXT
+    종목구분      TEXT,
+    RS_60d        DOUBLE,
+    RS_120d       DOUBLE,
+    RS_250d       DOUBLE,
+    Composite_RS  DOUBLE,
+    "RS_등급"     DOUBLE,
+    "스마트머니_승률" DOUBLE,
+    "양매수_비율" DOUBLE,
+    VCP_신호      INTEGER,
+    "영업이익_가속도" DOUBLE,
+    "매출_가속도" DOUBLE,
+    "실적가속_연속" INTEGER,
+    "GPM_최근(%)" DOUBLE,
+    "GPM_전년(%)" DOUBLE,
+    "GPM_변화(pp)" DOUBLE,
+    "ROIC(%)"     DOUBLE,
+    "ROIC_전년(%)" DOUBLE,
+    ROIC_개선     INTEGER,
+    "퀄리티_턴어라운드" INTEGER
 )""",
 ]
 
@@ -393,7 +419,7 @@ def load_stock_financials(code: str) -> pd.DataFrame:
 def get_data_status() -> dict:
     tables = ["master", "daily", "financial_statements",
               "indicators", "shares", "price_history", "investor_trading",
-              "dashboard_result"]
+              "index_history", "dashboard_result"]
     status = {}
 
     with get_conn() as conn:
