@@ -83,18 +83,124 @@
     watchlist:      { title: "⭐ 관심 종목",             criteria: "사용자가 직접 추가한 종목" },
   };
 
+  // ─── 전략별 상세 가이드 콘텐츠 ──────────────────────────────────────────
+  const STRATEGY_GUIDES = {
+    all: `
+      <h6>📌 기본 활용법</h6>
+      <ul>
+        <li><strong>검색 & 필터:</strong> 상단 검색창에 종목명/코드를 입력하거나, 'Advanced ▼' 버튼을 눌러 상세 조건(PER, PBR, 시총 등)으로 필터링하세요.</li>
+        <li><strong>관심종목:</strong> 종목명 옆의 <span class="text-warning">☆</span> 별표를 눌러 관심종목에 추가하면 '관심종목' 탭에서 모아볼 수 있습니다.</li>
+        <li><strong>상세 분석:</strong> 종목 행을 클릭하면 재무 차트, F-Score 상세, AI 분석 리포트 등 세부 정보를 볼 수 있습니다.</li>
+      </ul>
+      <h6>💡 팁</h6>
+      <p>전체 목록에서도 컬럼 헤더를 클릭하여 <strong>PER 낮은 순</strong>, <strong>ROE 높은 순</strong> 등으로 정렬해보세요.</p>
+    `,
+    leaders: `
+      <h6>🔥 시장 주도주 (Leaders) 공략법</h6>
+      <p>시장의 관심(수급)과 실적 성장이 동시에 받쳐주는 주도주를 찾습니다.</p>
+      <ul>
+        <li><strong>핵심 지표:</strong> <span class="badge bg-light text-dark border">수급강도</span>, <span class="badge bg-light text-dark border">거래대금</span>, <span class="badge bg-light text-dark border">영업이익 성장률</span></li>
+        <li><strong>매매 포인트:</strong>
+          <ul>
+            <li><strong>수급강도 양수(+) 유지:</strong> 외국인/기관이 꾸준히 사고 있다는 신호입니다.</li>
+            <li><strong>RSI 70 이하:</strong> 과열권(70 이상)보다는, 상승 추세 중 일시적 조정(눌림목) 구간을 노리세요.</li>
+            <li><strong>이격도 체크:</strong> MA20 이격도가 너무 높지 않은(105% 이하) 종목이 안전합니다.</li>
+          </ul>
+        </li>
+      </ul>
+    `,
+    quality_value: `
+      <h6>💎 우량가치주 (Quality & Value) 발굴</h6>
+      <p>싸면서도 돈을 잘 벌고 재무가 튼튼한 '육각형 미인' 종목을 찾습니다.</p>
+      <ul>
+        <li><strong>핵심 지표:</strong> <span class="badge bg-light text-dark border">PEG</span>, <span class="badge bg-light text-dark border">ROE</span>, <span class="badge bg-light text-dark border">F-Score</span></li>
+        <li><strong>Value Trap 피하기:</strong>
+          <ul>
+            <li>PER/PBR이 낮다고 무조건 좋은 게 아닙니다. <strong>ROE가 10% 이상</strong> 유지되는지 꼭 확인하세요.</li>
+            <li><strong>PEG 0.5 ~ 1.0:</strong> 이익 성장률 대비 저평가된 구간입니다. 0.5 이하면 강력 매수 후보입니다.</li>
+            <li><strong>F-Score 7점 이상:</strong> 재무 건전성이 매우 뛰어난 기업입니다.</li>
+          </ul>
+        </li>
+      </ul>
+    `,
+    growth_mom: `
+      <h6>🚀 고성장 모멘텀주 (Growth) 투자</h6>
+      <p>매출과 이익이 폭발적으로 성장하며 주가 추세가 살아있는 종목입니다.</p>
+      <ul>
+        <li><strong>핵심 지표:</strong> <span class="badge bg-light text-dark border">영업이익 CAGR</span>, <span class="badge bg-light text-dark border">분기 매출 YoY</span>, <span class="badge bg-light text-dark border">MA60 이격도</span></li>
+        <li><strong>체크리스트:</strong>
+          <ul>
+            <li><strong>실적 가속화:</strong> 연간 성장률(CAGR)보다 최근 분기 성장률(YoY)이 더 높은 종목이 좋습니다.</li>
+            <li><strong>정배열 초입:</strong> MA60 이격도가 100% 근처에서 상승 머리를 들고 있는 종목을 주목하세요.</li>
+            <li><strong>부채비율 관리:</strong> 성장을 위해 빚을 너무 많이 쓰진 않았는지(부채비율 200% 이하 권장) 확인하세요.</li>
+          </ul>
+        </li>
+      </ul>
+    `,
+    cash_div: `
+      <h6>💰 현금배당주 (Cash & Dividend) 선별</h6>
+      <p>배당만 많이 주는 게 아니라, 실제 현금 창출 능력이 뛰어난 기업입니다.</p>
+      <ul>
+        <li><strong>핵심 지표:</strong> <span class="badge bg-light text-dark border">FCF수익률</span>, <span class="badge bg-light text-dark border">배당수익률</span>, <span class="badge bg-light text-dark border">배당성장</span></li>
+        <li><strong>진짜 배당주 구별법:</strong>
+          <ul>
+            <li><strong>FCF > 배당금총액:</strong> 잉여현금흐름(FCF)이 배당금보다 많아야 배당 삭감 위험이 적습니다.</li>
+            <li><strong>배당성장(CAGR):</strong> 현재 배당률이 조금 낮아도, 매년 배당을 늘려주는 기업이 장기적으로 유리합니다.</li>
+            <li><strong>배당수익률 > 국채금리:</strong> 최소한 은행 이자보다는 높아야 매력이 있습니다.</li>
+          </ul>
+        </li>
+      </ul>
+    `,
+    turnaround: `
+      <h6>🔄 턴어라운드 (Turnaround) 포착</h6>
+      <p>최악의 상황을 지나 실적이 급격히 개선되는 종목을 바닥권에서 잡습니다.</p>
+      <ul>
+        <li><strong>핵심 지표:</strong> <span class="badge bg-light text-dark border">흑자전환</span>, <span class="badge bg-light text-dark border">이익률 변동폭</span>, <span class="badge bg-light text-dark border">괴리율</span></li>
+        <li><strong>주의사항:</strong>
+          <ul>
+            <li><strong>본업 개선 확인:</strong> 일회성 자산 매각으로 인한 흑자전환은 제외해야 합니다. (영업이익 흑자전환 중요)</li>
+            <li><strong>높은 괴리율:</strong> 실적은 좋아졌는데 주가는 아직 반응하지 않아 괴리율이 높은(저평가된) 종목을 찾으세요.</li>
+            <li><strong>수급 유입:</strong> 기관이나 외국인의 매수세가 들어오기 시작했다면 신뢰도가 높아집니다.</li>
+          </ul>
+        </li>
+      </ul>
+    `,
+    multi_strategy: `
+      <h6>🏆 Multi-Pick (다관왕) 활용</h6>
+      <p>5가지 전략 중 <strong>3개 이상의 기준을 동시에 만족</strong>하는 '슈퍼 종목'입니다.</p>
+      <ul>
+        <li><strong>의미:</strong> 성장성, 안정성, 가치, 배당 등 여러 측면에서 결점이 적다는 뜻입니다.</li>
+        <li><strong>활용법:</strong>
+          <ul>
+            <li>어떤 전략들이 중복되었는지 확인해보세요. (예: 고성장 + 우량가치 + 시장주도주 = 주가 상승 탄력 최고조)</li>
+            <li>종합점수가 최상위권일 확률이 높으므로, 포트폴리오의 핵심 종목으로 고려해볼 만합니다.</li>
+          </ul>
+        </li>
+      </ul>
+    `,
+    watchlist: `
+      <h6>⭐ 관심종목 관리</h6>
+      <p>직접 선별한 종목들의 현황을 한눈에 모니터링합니다.</p>
+      <ul>
+        <li>다른 탭에서 <span class="text-warning">☆</span> 버튼을 눌러 추가한 종목들이 여기에 표시됩니다.</li>
+        <li>정기적으로 리스트를 점검하여 투자 매력이 떨어진 종목은 제외하고, 새로운 유망 종목으로 교체하세요.</li>
+        <li>'비교하기' 기능을 사용하여 관심 종목들 간의 지표 우열을 가려보세요.</li>
+      </ul>
+    `
+  };
+
   // ─── 탭별 기본 컬럼 정의 ─────────────────────────────────────────────
   const COLUMNS = {
     all: [
       { key: "종목코드", label: "Code" }, { key: "종목명", label: "Name" }, { key: "시장구분", label: "Mkt" },
       { key: "종가", label: "Price", fmt: "int" }, { key: "PER", label: "PER", fmt: "f2" },
       { key: "ROE(%)", label: "ROE", fmt: "f2" }, { key: "PBR", label: "PBR", fmt: "f2" },
-      { key: "수급강도", label: "Supply", fmt: "f1" }, { key: "거래대금_20일평균", label: "Vol Avg", fmt: "int" },
+      { key: "수급강도", label: "Supply", fmt: "f1" }, { key: "거래대금_20일평균", label: "Vol Avg", fmt: "eok" },
       { key: "종합점수", label: "Score", fmt: "f1" }
     ],
     leaders: [
       { key: "종목코드", label: "Code" }, { key: "종목명", label: "Name" }, { key: "종가", label: "Price", fmt: "int" },
-      { key: "수급강도", label: "Supply", fmt: "f1" }, { key: "거래대금_20일평균", label: "Vol Avg", fmt: "int" },
+      { key: "수급강도", label: "Supply", fmt: "f1" }, { key: "거래대금_20일평균", label: "Vol Avg", fmt: "eok" },
       { key: "Q_영업이익_YoY(%)", label: "Q OP YoY", fmt: "f1" }, { key: "RSI_14", label: "RSI", fmt: "f1" },
       { key: "주도주_점수", label: "L-Score", fmt: "f1" }
     ],
@@ -133,77 +239,66 @@
     ]
   };
 
-  // ─── 지표 툴팁 ────────────────────────────────────────────────────────
-  const METRIC_TOOLTIPS = {
-    "PER": "주가수익비율. 낮을수록 저평가. 업종 평균 대비 비교 권장.",
-    "PBR": "주가순자산비율. 1 미만이면 장부가 이하.",
-    "PSR": "주가매출비율. 적자기업 평가에 유용.",
-    "PEG": "PEG = PER ÷ 이익성장률. 1 미만이면 성장 대비 저평가.",
-    "ROE(%)": "자기자본이익률. 10% 이상이 일반적 기준.",
-    "EPS": "주당순이익 (원).",
-    "BPS": "주당순자산 (원). PBR 계산의 기준값.",
-    "F스코어": "Piotroski F-Score (0-9). 7↑ 우량, 4↓ 주의.",
-    "부채비율(%)": "부채/자본. 200% 미만이 일반적으로 안전.",
-    "영업이익률(%)": "영업이익/매출. 높을수록 사업 효율적.",
-    "이익수익률(%)": "EPS/주가×100. 채권 수익률과 비교 가능.",
-    "FCF수익률(%)": "잉여현금흐름/시가총액×100. 3%↑ 양호.",
-    "배당수익률(%)": "연간배당금/주가×100.",
-    "이익품질_양호": "영업CF > 순이익 → O. 이익 품질 높음.",
-    "현금전환율(%)": "영업CF/순이익×100. 100%↑ 이상적.",
-    "CAPEX비율(%)": "CAPEX/영업CF. 낮을수록 FCF 여유 많음.",
-    "부채상환능력": "이자보상배율 (영업이익/이자비용). 3↑ 안전.",
-    "52주_최고대비(%)": "현재가의 52주 최고가 대비 위치. 0%이면 신고가.",
-    "52주_최저대비(%)": "현재가가 52주 최저가 대비 상승률.",
-    "MA20_이격도(%)": "현재가 vs 20일 이동평균 이격. ±5% 범위 정상.",
-    "MA60_이격도(%)": "현재가 vs 60일 이동평균 이격.",
-    "RSI_14": "상대강도지수(14일). 30↓ 과매도, 70↑ 과매수.",
-    "거래대금_20일평균": "최근 20일 평균 거래대금 (원). 유동성 지표.",
-    "거래대금_증감(%)": "최근 vs 이전 거래대금 증감률.",
-    "변동성_60일(%)": "60일 연환산 변동성. 낮을수록 안정적.",
-    "수급강도": "외인+기관 순매수 강도. 양수면 매수우위.",
-    "외인순매수_20d": "최근 20일 외국인 순매수 주식 수.",
-    "기관순매수_20d": "최근 20일 기관 순매수 주식 수.",
-    "매출_CAGR": "매출액 연평균 성장률 (%).",
-    "영업이익_CAGR": "영업이익 연평균 성장률 (%).",
-    "순이익_CAGR": "순이익 연평균 성장률 (%).",
-    "영업CF_CAGR": "영업현금흐름 연평균 성장률 (%).",
-    "FCF_CAGR": "잉여현금흐름 연평균 성장률 (%).",
-    "DPS_최근": "최근 주당배당금 (원).",
-    "DPS_CAGR": "주당배당금 연평균 성장률 (%).",
-    "배당_연속증가": "배당금 연속 증가 연수.",
-    "배당_수익동반증가": "배당과 이익이 동반 증가하면 O.",
-    "매출_연속성장": "매출액 연속 성장 연수.",
-    "영업이익_연속성장": "영업이익 연속 성장 연수.",
-    "순이익_연속성장": "순이익 연속 성장 연수.",
-    "영업CF_연속성장": "영업현금흐름 연속 성장 연수.",
-    "이익률_개선": "전년 대비 영업이익률 개선 시 O.",
-    "이익률_급개선": "영업이익률 2%p↑ 개선 시 O.",
-    "흑자전환": "전년 적자 → 금년 흑자 전환 시 O.",
-    "Q_매출_YoY(%)": "분기 매출액 전년동기 대비 증감률.",
-    "Q_영업이익_YoY(%)": "분기 영업이익 전년동기 대비 증감률.",
-    "Q_순이익_YoY(%)": "분기 순이익 전년동기 대비 증감률.",
-    "TTM_매출_YoY(%)": "TTM 매출액 전년 대비 증감률.",
-    "TTM_영업이익_YoY(%)": "TTM 영업이익 전년 대비 증감률.",
-    "TTM_순이익_YoY(%)": "TTM 순이익 전년 대비 증감률.",
-    "적정주가_SRIM": "S-RIM 기반 적정주가 (원).",
-    "괴리율(%)": "현재가 vs 적정주가 괴리율. 양수면 현재가가 저평가.",
-    "종합점수": "5개 전략 가중합산 종합점수 (0-100).",
-    "주도주_점수": "시장 주도주 전략 점수.",
-    "우량가치_점수": "우량가치 전략 점수.",
-    "고성장_점수": "고성장 모멘텀 전략 점수.",
-    "현금배당_점수": "현금배당 전략 점수.",
-    "턴어라운드_점수": "턴어라운드 전략 점수.",
-    "TTM_매출": "최근 12개월 매출액 (원).",
-    "TTM_영업이익": "최근 12개월 영업이익 (원).",
-    "TTM_순이익": "최근 12개월 순이익 (원).",
-    "TTM_영업CF": "최근 12개월 영업현금흐름 (원).",
-    "TTM_CAPEX": "최근 12개월 자본적지출 (원).",
-    "TTM_FCF": "최근 12개월 잉여현금흐름 (원).",
-    "자본": "자기자본 총계 (원).",
-    "부채": "부채 총계 (원).",
-    "자산총계": "자산 총계 (원).",
-    "전략수": "Multi-Pick 선정 전략 수 (3↑이면 Multi-Pick).",
-  };
+    // ─── 지표 툴팁 ────────────────────────────────────────────────────────
+    const METRIC_TOOLTIPS = {
+      // 1. 밸류에이션
+      "PER": "주가수익비율(Price Earning Ratio). 낮을수록 저평가(보통 10 이하). 단, 이익 급감 예상 기업은 주의(Value Trap).",
+      "PBR": "주가순자산비율. 1 미만은 시총이 청산가치보다 낮은 절대 저평가 상태. ROE가 너무 낮으면 만년 저평가일 수 있음.",
+      "PSR": "주가매출비율. 적자 기업이나 초기 성장주 평가에 유용. 1.0 이하 저평가, 3.0 이상 고평가 경향.",
+      "PEG": "PER ÷ 이익성장률. 성장성을 감안한 저평가 지표. 0.5 이하 강력 매수, 1.5 이상 고평가.",
+      "ROE(%)": "자기자본이익률. 워렌 버핏이 중시. 10% 이상 준수, 20% 이상 초우량(경제적 해자 보유 가능성).",
+      "EPS": "주당순이익(원). 주식 1주가 1년간 벌어들인 순이익. 꾸준히 우상향하는지 확인 필요.",
+      "BPS": "주당순자산(원). 기업이 망해도 주주에게 돌아가는 1주당 청산가치.",
+      "적정주가_SRIM": "초과이익모형(S-RIM)으로 산출한 적정 주가. ROE가 요구수익률(8%)보다 낮으면 BPS보다 낮게 평가됨.",
+      "괴리율(%)": "적정주가 대비 현재가 차이. 양수(+)면 상승 여력 있음(저평가), 음수(-)면 고평가 상태.",
+      
+      // 2. 재무 건전성 & 현금흐름
+      "F스코어": "Piotroski F-Score(9점 만점). 재무 건전성 종합 평가. 7점↑ 매우 우량, 3점↓ 부실 징후.",
+      "부채비율(%)": "자본 대비 부채 비율. 100% 이하 우량, 200% 이하 적정. 200% 초과 시 유상증자 등 재무 리스크 주의.",
+      "부채상환능력": "이자보상배율(영업이익/이자비용). 1 미만은 번 돈으로 이자도 못 갚는 잠재적 부실(좀비) 기업.",
+      "이익품질_양호": "영업활동현금흐름 > 당기순이익 여부. O면 현금이 잘 도는 알짜 이익, X면 분식회계나 재고 누적 의심.",
+      "FCF수익률(%)": "잉여현금흐름/시가총액. 3% 이상이면 배당/자사주 매입 여력이 충분한 우량 기업.",
+      "현금전환율(%)": "순이익 대비 실제 현금 유입 비율. 100% 이상이면 이익의 질이 매우 높음.",
+      "CAPEX비율(%)": "영업현금흐름 중 설비투자에 쓴 비율. 낮을수록 주주 환원 여력이 큼.",
+  
+      // 3. 수익성 & 배당
+      "영업이익률(%)": "매출 대비 영업이익 비율. 기업의 마진율이자 경쟁력 척도. 추세적 상승이 중요.",
+      "이익수익률(%)": "PER의 역수(순이익/시총). 주식을 채권으로 봤을 때의 기대 수익률. 국채 금리보다 높아야 매력적.",
+      "배당수익률(%)": "현재 주가 대비 연간 배당금 비율. 은행 금리보다 높으면 배당주 매력 보유.",
+      "DPS_CAGR": "주당배당금 연평균 성장률. 배당을 매년 늘려주는 기업(배당성장주)인지 확인.",
+      "배당_연속증가": "배당금을 줄이지 않고 연속으로 늘려온 연수. 주주 친화 정책의 척도.",
+      "배당_수익동반증가": "순이익 성장과 배당 성장이 함께 이루어지는 가장 이상적인 케이스.",
+  
+      // 4. 성장성
+      "매출_CAGR": "매출액 연평균 성장률. 일시적 호재가 아닌 장기적 외형 성장을 확인. 15% 이상이면 고성장.",
+      "영업이익_CAGR": "영업이익 연평균 성장률. 이익의 구조적 성장 추세 확인.",
+      "순이익_CAGR": "순이익 연평균 성장률.",
+      "Q_매출_YoY(%)": "최근 분기 매출 전년 동기 대비 증감률. 가장 최신의 성장 트렌드.",
+      "Q_영업이익_YoY(%)": "최근 분기 영업이익 전년 동기 대비 증감률. 턴어라운드 포착에 유용.",
+      "TTM_매출_YoY(%)": "최근 12개월 합산 매출 전년 대비 증감률.",
+      "흑자전환": "전년 적자에서 금년(혹은 최근 분기) 흑자로 전환. 주가 상승 탄력이 가장 강한 시그널 중 하나.",
+      "이익률_급개선": "영업이익률이 전년 대비 2%p 이상 급등. 비용 절감이나 판가 인상 성공 신호.",
+  
+      // 5. 기술적 & 수급
+      "52주_최고대비(%)": "52주 신고가 대비 현재 위치. 0%에 가까울수록 신고가 경신 중(모멘텀 강함).",
+      "52주_최저대비(%)": "52주 신저가 대비 상승폭. 바닥에서 얼마나 올라왔는지 확인.",
+      "MA20_이격도(%)": "20일 이동평균선과의 거리. +5% 이상이면 단기 과열, -5% 이하면 과매도.",
+      "MA60_이격도(%)": "60일 이동평균선(수급선)과의 거리. 정배열 초입인지 확인.",
+      "RSI_14": "상대강도지수. 30 이하는 과매도(저점 매수 기회), 70 이상은 과매수(조정 주의).",
+      "거래대금_20일평균": "하루 평균 거래대금. 유동성이 너무 적은 종목(10억 미만)은 매매 시 호가 공백 주의.",
+      "수급강도": "시가총액 대비 메이저(외인+기관) 순매수 강도. 양수(+)면 주포가 매집 중.",
+      "외인순매수_20d": "최근 20거래일 외국인 누적 순매수 수량.",
+      "기관순매수_20d": "최근 20거래일 기관 누적 순매수 수량.",
+  
+      // 6. 점수
+      "종합점수": "5개 전략(성장, 안정, 가치, 배당, 턴어라운드)을 종합한 점수(0~100점). 밸런스가 좋은 종목.",
+      "주도주_점수": "수급과 실적 성장, 추세가 모두 살아있는 시장 주도주 점수.",
+      "우량가치_점수": "싸고(Low PEG/PER) 돈 잘 벌며(High ROE) 튼튼한(High F-Score) 종목.",
+      "고성장_점수": "매출과 이익이 폭발적으로 성장하는 기업 점수.",
+      "현금배당_점수": "현금흐름이 좋고 배당 매력이 높은 종목 점수.",
+      "턴어라운드_점수": "최악을 지나 실적이 급격히 개선되는 종목 점수.",
+      "전략수": "5개 전략 중 3개 이상에 동시 포착된(Multi-Pick) 종목인지 확인.",
+    };
 
   // ─── 세부 모달의 지표 그룹 ────────────────────────────────────────────
   const METRIC_GROUPS = [
@@ -274,7 +369,7 @@
         { key: "MA20_이격도(%)",   label: "MA20%",          fmt: "f1" },
         { key: "MA60_이격도(%)",   label: "MA60%",          fmt: "f1" },
         { key: "RSI_14",           label: "RSI(14)",         fmt: "f1" },
-        { key: "거래대금_20일평균", label: "거래대금(20일평균)", fmt: "int" },
+        { key: "거래대금_20일평균", label: "거래대금(20일평균)", fmt: "eok" },
         { key: "거래대금_증감(%)", label: "거래대금 증감%",  fmt: "f1" },
         { key: "변동성_60일(%)",   label: "변동성(60일)%",  fmt: "f1" },
         { key: "수급강도",         label: "수급강도",        fmt: "f1" },
@@ -1091,6 +1186,15 @@
     });
   }
 
+  function disposeTooltips() {
+    document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
+      if (el._bsTooltip) {
+        el._bsTooltip.dispose();
+        el._bsTooltip = null;
+      }
+    });
+  }
+
   // ─── DOM 참조 ─────────────────────────────────────────────────────────
   const tbody    = document.getElementById("stock-tbody");
   const headerRow = document.getElementById("table-header");
@@ -1158,6 +1262,16 @@
   });
   document.getElementById("btn-pdf").addEventListener("click", () => window.print());
 
+  // 분석 가이드 버튼
+  document.getElementById("btn-strategy-guide").addEventListener("click", () => {
+    const guideHtml = STRATEGY_GUIDES[currentScreen];
+    if (guideHtml) {
+      document.getElementById("guide-content").innerHTML = guideHtml;
+      document.getElementById("guide-title").textContent = `💡 ${STRATEGY_DESCRIPTIONS[currentScreen].title} 분석 가이드`;
+      new bootstrap.Modal(document.getElementById("guide-modal")).show();
+    }
+  });
+
   // 전략 탭
   document.querySelectorAll("#screen-tabs .nav-link").forEach(l =>
     l.addEventListener("click", e => {
@@ -1171,10 +1285,19 @@
       buildHeader();
       loadStocks();
       renderChangeBanner();
+      
       const desc = STRATEGY_DESCRIPTIONS[currentScreen];
       if (desc) {
         document.getElementById("strategy-desc").innerHTML =
           `<strong>${desc.title}</strong>&nbsp;&nbsp;<small class="text-muted">${desc.criteria}</small>`;
+      }
+      
+      // 가이드 버튼 표시 제어
+      const btnGuide = document.getElementById("btn-strategy-guide");
+      if (STRATEGY_GUIDES[currentScreen]) {
+        btnGuide.style.display = "";
+      } else {
+        btnGuide.style.display = "none";
       }
     })
   );

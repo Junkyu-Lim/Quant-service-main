@@ -54,6 +54,11 @@ DISPLAY_COLS = [
     "52주_최고대비(%)", "52주_최저대비(%)", "MA20_이격도(%)", "MA60_이격도(%)",
     "RSI_14", "거래대금_20일평균", "거래대금_증감(%)", "변동성_60일(%)",
     "수급강도", "외인순매수_20d", "기관순매수_20d",
+    "스마트머니_승률", "양매수_비율", "VCP_신호",
+    "RS_60d", "RS_120d", "RS_250d", "Composite_RS", "RS_등급",
+    "영업이익_가속도", "매출_가속도", "실적가속_연속",
+    "GPM_최근(%)", "GPM_전년(%)", "GPM_변화(pp)",
+    "ROIC(%)", "ROIC_전년(%)", "ROIC_개선", "퀄리티_턴어라운드",
     "매출_CAGR", "영업이익_CAGR", "순이익_CAGR", "영업CF_CAGR", "FCF_CAGR",
     "DPS_최근", "DPS_CAGR", "배당_연속증가", "배당_수익동반증가",
     "매출_연속성장", "영업이익_연속성장", "순이익_연속성장", "영업CF_연속성장",
@@ -64,7 +69,7 @@ DISPLAY_COLS = [
     "Q_매출_연속YoY성장", "Q_영업이익_연속YoY성장", "Q_순이익_연속YoY성장",
     "TTM_매출_YoY(%)", "TTM_영업이익_YoY(%)", "TTM_순이익_YoY(%)",
     "적정주가_SRIM", "괴리율(%)",
-    "종합점수",
+    "종합점수", "성장성_점수", "안정성_점수", "가격_점수",
     "주도주_점수", "우량가치_점수", "고성장_점수", "현금배당_점수", "턴어라운드_점수",
     "TTM_매출", "TTM_영업이익", "TTM_순이익", "TTM_영업CF", "TTM_CAPEX", "TTM_FCF",
     "자본", "부채", "자산총계",
@@ -314,10 +319,15 @@ def api_stock_analysis(code: str):
 def _apply_screen_filter(df: pd.DataFrame, name: str) -> pd.DataFrame:
     if name == "leaders":
         mask = (
-            (df["시가총액"].fillna(0) >= 200_000_000_000)
-            & (df["거래대금_20일평균"].fillna(0) >= 1_000_000_000)
+            (df["시가총액"].fillna(0) >= 100_000_000_000)
             & (df["TTM_순이익"].fillna(0) > 0)
         )
+        # 거래대금이 있으면 추가 필터 (없으면 무시)
+        if "거래대금_20일평균" in df.columns and df["거래대금_20일평균"].notna().any():
+            mask = mask & ((df["거래대금_20일평균"].fillna(0) > 100_000_000) | (df["거래대금_20일평균"].isna()))
+        # RS_등급 상위 30% 필터 (데이터 있을 때만 적용, NaN 종목은 통과)
+        if "RS_등급" in df.columns and df["RS_등급"].notna().any():
+            mask = mask & ((df["RS_등급"].fillna(0) >= 70) | (df["RS_등급"].isna()))
         return df[mask]
     elif name == "quality_value":
         mask = (
@@ -345,11 +355,21 @@ def _apply_screen_filter(df: pd.DataFrame, name: str) -> pd.DataFrame:
         )
         return df[mask]
     elif name == "turnaround":
-        mask = (
+        base_mask = (
             ((df["흑자전환"].fillna(0) == 1) | (df["이익률_급개선"].fillna(0) == 1))
             & (df["TTM_순이익"].fillna(0) > 0)
             & (df["시가총액"].fillna(0) >= 30_000_000_000)
         )
+        # 스마트머니 승률 50%+ OR VCP 신호 보조 (데이터 있을 때만, NaN 종목은 통과)
+        if "스마트머니_승률" in df.columns:
+            smart_mask = (
+                (df["스마트머니_승률"].fillna(0) >= 0.5)
+                | (df.get("VCP_신호", pd.Series(0, index=df.index)).fillna(0) == 1)
+            )
+            no_data_mask = df["스마트머니_승률"].isna()
+            mask = base_mask & (smart_mask | no_data_mask)
+        else:
+            mask = base_mask
         return df[mask]
     elif name == "multi_strategy":
         strats = ["leaders", "quality_value", "growth_mom", "cash_div", "turnaround"]

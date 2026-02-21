@@ -55,11 +55,10 @@ def run_pipeline(skip_collect: bool = False, test_mode: bool = False, skip_price
         _progress("데이터 수집 준비 중", 5)
         if test_mode:
             log.info("Running collector in TEST mode (3 stocks)...")
-            collector_run(test_mode=True, skip_price_history=skip_price_history)
+            collector_run(test_mode=True, skip_price_history=skip_price_history, progress_callback=_progress)
         else:
             log.info("Running full collector...")
-            collector_run(skip_price_history=skip_price_history)
-        _progress("데이터 수집 완료", 48)
+            collector_run(skip_price_history=skip_price_history, progress_callback=_progress)
     else:
         log.info("Skipping collection (--skip-collect)")
         _progress("수집 단계 건너뜀", 48)
@@ -74,6 +73,7 @@ def run_pipeline(skip_collect: bool = False, test_mode: bool = False, skip_price
     shares = load_table("shares")
     price_hist = load_table("price_history")
     inv = load_table("investor_trading")
+    index_hist = load_table("index_history")
 
     if daily.empty:
         log.error("daily data not found in DB – cannot run screener")
@@ -82,17 +82,24 @@ def run_pipeline(skip_collect: bool = False, test_mode: bool = False, skip_price
     _progress("지표 전처리 중", 62)
     ind = preprocess_indicators(ind)
     multiplier = detect_unit_multiplier(ind)
-    anal_df = analyze_all(fs, ind)
+    anal_df = analyze_all(fs, ind, progress_callback=_progress)
 
     _progress("밸류에이션 계산 중", 70)
     full_df = calc_valuation(daily, anal_df, multiplier, shares)
 
     # 기술적 지표 (주가 히스토리 기반)
     _progress("기술적 지표 계산 중", 78)
-    full_df = calc_technical_indicators(full_df, price_hist)
+    full_df = calc_technical_indicators(
+        full_df, price_hist,
+        index_hist=index_hist if not index_hist.empty else None,
+        master=master if not master.empty else None,
+    )
 
     # 수급 강도 (투자자별 매매동향 기반)
-    full_df = full_df.merge(calc_investor_strength(inv, daily), on="종목코드", how="left")
+    full_df = full_df.merge(
+        calc_investor_strength(inv, daily, price_hist=price_hist if not price_hist.empty else None),
+        on="종목코드", how="left",
+    )
 
     # Merge market/sector info from master
     if not master.empty and "시장구분" in master.columns:

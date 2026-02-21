@@ -363,6 +363,45 @@ def collect_price_history(tickers: list[str], days: int = 260) -> pd.DataFrame:
 
 
 # ═════════════════════════════════════════════
+# 2-a2. KOSPI / KOSDAQ 지수 히스토리 (RS Rating용)
+# ═════════════════════════════════════════════
+
+def collect_index_history(days: int = 365) -> pd.DataFrame:
+    """FinanceDataReader로 KOSPI/KOSDAQ 지수 히스토리 수집.
+
+    RS_250d 계산에 250거래일이 필요하므로 365 캘린더일 기준으로 수집.
+
+    Returns:
+        DataFrame with 지수코드, 날짜, 종가
+    """
+    end_date = date.today()
+    start_date = end_date - timedelta(days=days)
+    start_str = start_date.strftime("%Y-%m-%d")
+    end_str = end_date.strftime("%Y-%m-%d")
+
+    log.info(f"📊 지수 히스토리 수집 ({start_str} ~ {end_str}, KOSPI/KOSDAQ)...")
+
+    indices = {"KOSPI": "KS11", "KOSDAQ": "KQ11"}
+    all_rows = []
+    for idx_name, fdr_code in indices.items():
+        try:
+            df = fdr.DataReader(fdr_code, start_str, end_str)
+            if df is None or df.empty:
+                log.warning(f"  → {idx_name} 데이터 없음")
+                continue
+            for dt, r in df.iterrows():
+                dt_str = dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt)[:10]
+                close_val = safe_float(r.get("Close") if "Close" in r.index else r.iloc[3])
+                if close_val is not None:
+                    all_rows.append({"지수코드": idx_name, "날짜": dt_str, "종가": close_val})
+            log.info(f"  → {idx_name}: {sum(1 for r in all_rows if r['지수코드'] == idx_name)}건")
+        except Exception as e:
+            log.warning(f"  → {idx_name} 수집 실패: {type(e).__name__}: {e}")
+
+    return pd.DataFrame(all_rows) if all_rows else pd.DataFrame()
+
+
+# ═════════════════════════════════════════════
 # 2-b. 외국인/기관 투자자 매매 동향
 # ═════════════════════════════════════════════
 
@@ -804,13 +843,19 @@ def test_crawling():
 # 메인 파이프라인
 # ═════════════════════════════════════════════
 
-def run_full(test_mode: bool = False, skip_price_history: bool = False):
+def run_full(test_mode: bool = False, skip_price_history: bool = False, progress_callback=None):
     """전체 데이터 수집 (SQLite DB 저장 + 이어하기)
 
     Args:
         test_mode: True이면 TEST_TICKERS(3개)만 수집
         skip_price_history: True이면 주가 히스토리 수집 건너뜀 (기술적 지표 계산 불가)
+        progress_callback: Optional callable(stage: str, pct: int) for progress tracking
     """
+    def _progress(stage: str, pct: int):
+        """Call progress callback if provided."""
+        if progress_callback:
+            progress_callback(stage, pct)
+
     import db as _db
     _db.init_db()
 
@@ -820,6 +865,7 @@ def run_full(test_mode: bool = False, skip_price_history: bool = False):
     if test_mode:
         log.info(f"🧪 테스트 모드: {len(TEST_TICKERS)}개 종목만 수집")
 
+    _progress("마스터/일별시세 수집 중", 5)
     # ── 1) 마스터 ──
     if _db.table_has_data("master", biz_day):
         log.info("📂 master 데이터가 DB에 있어 로드합니다.")
@@ -859,6 +905,7 @@ def run_full(test_mode: bool = False, skip_price_history: bool = False):
         log.info(f"🎯 FnGuide 크롤링 대상: {len(targets)}개 보통주")
 
     # ── 3) 재무제표 ──
+    _progress("재무제표 수집 중", 10)
     if _db.table_has_data("financial_statements", biz_day):
         log.info("⏭️  financial_statements 이미 존재하여 수집 건너뜀")
     else:
@@ -869,6 +916,7 @@ def run_full(test_mode: bool = False, skip_price_history: bool = False):
             log.warning("⚠️ 재무제표 데이터 없음")
 
     # ── 4) 핵심 지표 ──
+    _progress("핵심지표 수집 중", 20)
     if _db.table_has_data("indicators", biz_day):
         log.info("⏭️  indicators 이미 존재하여 수집 건너뜀")
     else:
@@ -879,6 +927,7 @@ def run_full(test_mode: bool = False, skip_price_history: bool = False):
             log.warning("⚠️ 핵심지표 데이터 없음")
 
     # ── 5) 주식수 ──
+    _progress("주식수 수집 중", 30)
     if _db.table_has_data("shares", biz_day):
         log.info("⏭️  shares 이미 존재하여 수집 건너뜀")
     else:
@@ -889,6 +938,7 @@ def run_full(test_mode: bool = False, skip_price_history: bool = False):
             log.warning("⚠️ 주식수 데이터 없음")
 
     # ── 6) 주가 히스토리 (52주 기술적 지표용) ──
+    _progress("주가히스토리 수집 중", 40)
     if skip_price_history:
         log.info("⏭️  주가 히스토리 수집 건너뜀 (--skip-price-history)")
     elif _db.table_has_data("price_history", biz_day):
@@ -900,7 +950,19 @@ def run_full(test_mode: bool = False, skip_price_history: bool = False):
         else:
             log.warning("⚠️ 주가 히스토리 데이터 없음")
 
-    # ── 7) 투자자 매매동향 (외국인/기관/개인 순매수) ──
+    # ── 7) 지수 히스토리 (KOSPI/KOSDAQ, RS Rating용) ──
+    _progress("지수히스토리 수집 중", 43)
+    if not skip_price_history and _db.table_has_data("index_history", biz_day):
+        log.info("⏭️  index_history 이미 존재하여 수집 건너뜀")
+    elif not skip_price_history:
+        idx_df = collect_index_history()
+        if not idx_df.empty:
+            _db.save_df(idx_df, "index_history", biz_day)
+        else:
+            log.warning("⚠️ 지수 히스토리 데이터 없음")
+
+    # ── 8) 투자자 매매동향 (외국인/기관/개인 순매수) ──
+    _progress("투자자매매동향 수집 중", 45)
     if _db.table_has_data("investor_trading", biz_day):
         log.info("⏭️  investor_trading 이미 존재하여 수집 건너뜀")
     else:
@@ -909,6 +971,8 @@ def run_full(test_mode: bool = False, skip_price_history: bool = False):
             _db.save_df(inv_df, "investor_trading", biz_day)
         else:
             log.warning("⚠️ 투자자 매매동향 데이터 없음")
+
+    _progress("데이터 수집 완료", 48)
 
     elapsed = datetime.now() - start
     log.info(f"🎉 전체 수집 완료 (소요: {elapsed})")
