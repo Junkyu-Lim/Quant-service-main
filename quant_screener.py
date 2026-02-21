@@ -40,7 +40,8 @@ EXACT_ACCOUNTS = {
     "매출액": ["매출액", "영업수익", "이자수익", "보험료수익", "순영업수익"],
     "영업이익": ["영업이익"],
     "순이익": ["지배주주순이익", "당기순이익"],
-    "자본": ["자본", "자본총계", "지배주주지분", "지배기업주주지분"],
+    # 지배주주지분 최우선: 우선주·비지배지분 왜곡 방지
+    "자본": ["지배주주지분", "지배기업주주지분", "자본", "자본총계"],
     "부채": ["부채", "부채총계"],
     "배당금": ["주당배당금"],
     "영업CF": [
@@ -60,6 +61,11 @@ EXACT_ACCOUNTS = {
     "유동자산": ["유동자산"],
     "유동부채": ["유동부채"],
     "매출총이익": ["매출총이익"],
+    # 이자보상배율 산출용
+    "이자비용": ["이자비용", "이자비용(금융비용)", "금융비용", "이자및할인비용"],
+    # ROIC 초과현금 차감용
+    "현금및현금성자산": ["현금및현금성자산", "현금및예치금", "현금및예금"],
+    "단기금융상품": ["단기금융상품", "단기투자자산", "단기금융자산"],
 }
 
 EXCLUDE_KEYWORDS = ["증가율", "(-1Y)", "(평균)", "률(", "비율", "배율", "(-1A", "(-1Q", "/ 수정평균"]
@@ -113,6 +119,11 @@ def find_account_value(df, target_key, date_filter=None):
         matched = work[work["계정"].apply(_startswith_any)]
 
     if matched.empty: return {}
+    # 우선순위: EXACT_ACCOUNTS 리스트 순서대로 정렬 후 dedup → 지배주주순이익 등 우선 선택
+    priority_map = {_normalize_account(t): i for i, t in enumerate(targets)}
+    matched = matched.copy()
+    matched["_priority"] = matched["계정"].apply(lambda n: priority_map.get(_normalize_account(n), 999))
+    matched = matched.sort_values(["종목코드", "기준일", "_priority"])
     matched = matched.drop_duplicates(["종목코드", "기준일"], keep="first")
     return {str(r["기준일"]): (float(r["값"]) if pd.notna(r["값"]) else None) for _, r in matched.iterrows()}
 
@@ -252,6 +263,9 @@ def analyze_one_stock(ticker, ind_grp, fs_grp):
         current_assets_s = find_account_value(y_data, "유동자산")
         current_liab_s = find_account_value(y_data, "유동부채")
         gross_profit_s = find_account_value(y_data, "매출총이익")
+        cash_s = find_account_value(y_data, "현금및현금성자산")
+        stfi_s = find_account_value(y_data, "단기금융상품")
+        interest_s = find_account_value(y_data, "이자비용")
         res["자산총계"] = total_assets_s[max(total_assets_s.keys())] if total_assets_s else np.nan
         res["자본"] = equity_s[max(equity_s.keys())] if equity_s else np.nan
         res["부채"] = debt_s[max(debt_s.keys())] if debt_s else np.nan
@@ -343,8 +357,21 @@ def analyze_one_stock(ticker, ind_grp, fs_grp):
                 cr_prev = current_assets_s[ca_dates[-2]] / current_liab_s[cl_dates[-2]] if (current_liab_s[cl_dates[-2]] and current_assets_s[ca_dates[-2]] is not None) else 0
                 f6 = 1 if cr_cur > cr_prev else 0
 
-        # F7: 희석 없음 (placeholder — calc_valuation에서 shares 기반 업데이트)
-        f7 = 0
+        # F7: 희석 없음 — shares 데이터 없을 시 자본/순이익 proxy로 판별
+        # 기본값 1 (희석 없음 가정): 대부분 기업은 희석 안 함, 데이터 부재 시 패널티 금지
+        f7 = 1
+        if len(equity_s) >= 2 and len(ni_s) >= 2:
+            eq_dates = sorted(equity_s.keys())
+            eq_prev = equity_s[eq_dates[-2]]
+            eq_cur = equity_s[eq_dates[-1]]
+            ni_cur = ni_s.get(sorted(ni_s.keys())[-1])
+            # 자본증가분이 순이익의 1.5배를 크게 초과하면 유증 의심 → F7=0
+            if (eq_prev is not None and eq_cur is not None and
+                    ni_cur is not None and eq_prev > 0):
+                eq_growth = eq_cur - eq_prev
+                if eq_growth > abs(ni_cur) * 1.5 + abs(eq_prev) * 0.05:
+                    f7 = 0  # proxy: 유상증자 의심
+        # calc_valuation에서 shares_df 실제 데이터로 재정의 가능
 
         # F8: 매출총이익률 개선
         f8 = 0
@@ -392,21 +419,27 @@ def analyze_one_stock(ticker, ind_grp, fs_grp):
         rev_consec = res.pop("_rev_consec_accel", False)
         is_q4 = res.pop("_is_q4", False)
         gpm_ok = pd.notna(gpm_delta) and gpm_delta >= 0  # GPM 훼손 없음
-        if op_consec:
+        # OPM 교차검증: 연간 데이터 있을 때만 체크, 없으면 pass (분기가속 우선 신뢰)
+        has_opm_data = pd.notna(res.get("영업이익률_최근")) and pd.notna(res.get("영업이익률_전년"))
+        opm_ok = (not has_opm_data) or (res.get("이익률_개선", 0) == 1)
+        if op_consec and opm_ok:
             res["실적가속_연속"] = 1
         elif is_q4 and rev_consec and gpm_ok:
             res["실적가속_연속"] = 1  # 4Q fallback: 매출 가속 + GPM 유지
         else:
             res["실적가속_연속"] = 0
 
-        # ROIC 계산 (간이: NOPAT / Invested Capital)
-        # Invested Capital = 자산총계 - 유동부채 (유동부채 NaN 시 자산총계 그대로)
+        # ROIC 계산 (NOPAT / Invested Capital, 초과현금 차감 적용)
+        # IC = 자산총계 - 유동부채 - 초과현금 (초과현금 = 현금성자산 + 단기금융상품 - 매출의 2.5%)
         roic_cur = np.nan
         roic_prev = np.nan
         if op_s and total_assets_s:
             op_dates_y = sorted(op_s.keys())
             ta_dates_y = sorted(total_assets_s.keys())
             cl_dates = sorted(current_liab_s.keys()) if current_liab_s else []
+            rv_dates_y2 = sorted(rev_s.keys()) if rev_s else []
+            cash_dates = sorted(cash_s.keys()) if cash_s else []
+            stfi_dates = sorted(stfi_s.keys()) if stfi_s else []
             for i, (op_key, ta_key) in enumerate([
                 (op_dates_y[-1], ta_dates_y[-1]) if len(op_dates_y) >= 1 and len(ta_dates_y) >= 1 else (None, None),
                 (op_dates_y[-2], ta_dates_y[-2]) if len(op_dates_y) >= 2 and len(ta_dates_y) >= 2 else (None, None),
@@ -419,8 +452,17 @@ def analyze_one_stock(ticker, ind_grp, fs_grp):
                     continue
                 cl_val = current_liab_s.get(cl_dates[-1 - i]) if cl_dates and len(cl_dates) > i else None
                 ic = (ta_val - cl_val) if cl_val is not None else ta_val
+                # 초과현금 차감: 현금성자산 + 단기금융상품 - 매출의 2.5% (운영필요현금)
+                cash_val = cash_s.get(cash_dates[-1 - i]) if cash_dates and len(cash_dates) > i else None
+                stfi_val = stfi_s.get(stfi_dates[-1 - i]) if stfi_dates and len(stfi_dates) > i else None
+                rev_val = rev_s.get(rv_dates_y2[-1 - i]) if rv_dates_y2 and len(rv_dates_y2) > i else None
+                if cash_val is not None or stfi_val is not None:
+                    total_cash = (cash_val or 0) + (stfi_val or 0)
+                    op_cash_need = (rev_val * 0.025) if rev_val is not None and rev_val > 0 else 0
+                    excess_cash = max(0, total_cash - op_cash_need)
+                    ic = ic - excess_cash
                 if ic <= 0:
-                    ic = ta_val
+                    ic = ta_val  # floor: 초과차감으로 음수 방지
                 nopat = op_val * (1 - 0.22)
                 roic_val = nopat / ic * 100
                 if i == 0:
@@ -437,6 +479,17 @@ def analyze_one_stock(ticker, ind_grp, fs_grp):
         ocf_positive = pd.notna(ttm_ocf_val) and ttm_ocf_val > 0
         gpm_surge = pd.notna(gpm_delta) and gpm_delta >= 2.0
         res["퀄리티_턴어라운드"] = 1 if (gpm_surge and ocf_positive and res["ROIC_개선"] == 1) else 0
+
+        # ── 이자보상배율 (TTM 영업이익 / 이자비용) ──
+        ttm_interest = interest_s[max(interest_s.keys())] if interest_s else np.nan
+        ttm_op_for_icr = res.get("TTM_영업이익")
+        if pd.isna(ttm_op_for_icr):
+            ttm_op_for_icr = op_s[max(op_s.keys())] if op_s else np.nan
+        if pd.notna(ttm_op_for_icr) and pd.notna(ttm_interest) and ttm_interest != 0:
+            res["이자보상배율"] = ttm_op_for_icr / abs(ttm_interest)
+        else:
+            # 이자비용 0 = 무차입, 이자보상 필요 없음 → 99로 표시
+            res["이자보상배율"] = 99.0 if (pd.notna(ttm_interest) and ttm_interest == 0) else np.nan
 
         dps_s = find_account_value(ind_grp[ind_grp["지표구분"]=="DPS"], "배당금")
         res["DPS_최근"] = dps_s[max(dps_s.keys())] if dps_s else np.nan
@@ -487,7 +540,9 @@ def calc_valuation(daily, anal_df, multiplier, shares_df):
     df["부채비율(%)"] = np.where((df["자본"] > 0), (df["부채"] / df["자본"]) * 100, np.nan)
     df["영업이익률(%)"] = df["영업이익률_최근"]
     df["배당수익률(%)"] = np.where((df["종가"] > 0) & (df["DPS_최근"] > 0), (df["DPS_최근"] / df["종가"]) * 100, 0)
-    df["PEG"] = np.where((df["PER"] > 0) & (df["순이익_CAGR"] > 0), df["PER"] / df["순이익_CAGR"], np.nan)
+    # PEG: 일회성 이익 급증 방지를 위해 CAGR 상한 100% 적용
+    cagr_capped = np.minimum(df["순이익_CAGR"], 100)
+    df["PEG"] = np.where((df["PER"] > 0) & (cagr_capped > 0), df["PER"] / cagr_capped, np.nan)
     df["FCF수익률(%)"] = np.where((df["시가총액"] > 0) & (df["TTM_FCF"] != 0), (df["TTM_FCF"] * M / df["시가총액"]) * 100, np.nan)
     df["이익수익률(%)"] = np.where((df["시가총액"] > 0) & (df["TTM_순이익"] > 0), (df["TTM_순이익"] * M / df["시가총액"]) * 100, np.nan)
     df["현금전환율(%)"] = np.where(pd.notna(df["TTM_영업CF"]) & (df["TTM_순이익"] > 0), (df["TTM_영업CF"] / df["TTM_순이익"]) * 100, np.nan)
@@ -497,14 +552,29 @@ def calc_valuation(daily, anal_df, multiplier, shares_df):
 
     shares = df["상장주식수"].replace(0, np.nan)
     df["BPS"], df["EPS"] = (df["자본"] * M) / shares, (df["TTM_순이익"] * M) / shares
-    Ke = 8.0
-    df["적정주가_SRIM"] = np.where((df["ROE(%)"] > Ke) & (df["BPS"] > 0), df["BPS"] + df["BPS"] * (df["ROE(%)"] - Ke) / Ke, df["BPS"] * 0.9)
+    # S-RIM 동적 할인율: config 설정값 사용 (환경변수로 재정의 가능)
+    # Ke = 무위험수익률(국고채 3Y) + 시장위험프리미엄
+    Ke = config.RISK_FREE_RATE + config.EQUITY_RISK_PREMIUM  # default: 3.5 + 5.5 = 9.0%
+    # 지속계수 ω=0.9: 초과이익의 점진적 소멸 반영 (영구 지속 가정 방지)
+    # 공식: BPS + BPS * (ROE - Ke) * ω / (1 + Ke/100 - ω)
+    omega = 0.9
+    Ke_dec = Ke / 100.0
+    srim_denom = max(1 + Ke_dec - omega, 1e-6)  # 0 나누기 방지
+    df["적정주가_SRIM"] = np.where(
+        (df["ROE(%)"] > Ke) & (df["BPS"] > 0),
+        df["BPS"] + df["BPS"] * (df["ROE(%)"] / 100.0 - Ke_dec) * omega / srim_denom,
+        df["BPS"],  # ROE ≤ Ke: 초과이익 없음 → BPS 그대로 (할인 없음, 과대평가 방지)
+    )
     df["괴리율(%)"] = ((df["적정주가_SRIM"] - df["종가"]) / df["종가"]) * 100
 
     # PER 이상치 플래그
     df["PER_이상"] = np.where(
         pd.notna(df["PER"]) & ((df["PER"] < 0.5) | (df["PER"] > 500)), 1, 0
     ).astype(int)
+
+    # 이자보상배율: analyze_one_stock에서 산출된 값 그대로 사용 (열 없으면 NaN으로 초기화)
+    if "이자보상배율" not in df.columns:
+        df["이자보상배율"] = np.nan
 
     # F7 업데이트: 발행주식수 미증가 (shares_df 기반)
     if shares_df is not None and not shares_df.empty:
@@ -545,6 +615,25 @@ def calc_technical_indicators(df, price_hist, index_hist=None, master=None):
             sub["날짜"] = pd.to_datetime(sub["날짜"])
             sub = sub.sort_values("날짜").set_index("날짜")["종가"]
             idx_map[idx_code] = sub
+
+    # FDR Fallback: DB에 지수 데이터 없으면 FinanceDataReader로 즉시 다운로드
+    if not idx_map:
+        try:
+            import FinanceDataReader as fdr
+            from datetime import datetime, timedelta
+            _start = (datetime.today() - timedelta(days=730)).strftime("%Y-%m-%d")
+            for idx_code, fdr_code in [("KOSPI", "KS11"), ("KOSDAQ", "KQ11")]:
+                try:
+                    _data = fdr.DataReader(fdr_code, start=_start)
+                    if _data is not None and not _data.empty:
+                        _data.index = pd.to_datetime(_data.index)
+                        idx_map[idx_code] = _data["Close"].sort_index()
+                except Exception:
+                    pass
+            if idx_map:
+                log.info("지수 데이터 FDR fallback 적용 (KOSPI/KOSDAQ)")
+        except ImportError:
+            pass
 
     # 종목 → 시장구분 매핑
     market_map = {}
@@ -608,8 +697,8 @@ def calc_technical_indicators(df, price_hist, index_hist=None, master=None):
         v5 = (ph[v_col].tail(5).mean() if v_col else (ph["종가"]*ph["거래량"]).tail(5).mean())
         vol60 = ph["종가"].pct_change().tail(60).std() * np.sqrt(252) * 100 if len(ph)>=60 else np.nan
 
-        # ── Composite RS ──
-        rs_60d = rs_120d = rs_250d = composite_rs = np.nan
+        # ── Raw RS (기간별 초과수익률) — composite는 루프 후 선랭킹 방식으로 계산 ──
+        rs_60d = rs_120d = rs_250d = np.nan
         if idx_map:
             market = market_map.get(str(code), "KOSPI")
             if market not in idx_map:
@@ -632,24 +721,40 @@ def calc_technical_indicators(df, price_hist, index_hist=None, master=None):
             if pd.notna(stock_ret_250) and pd.notna(idx_ret_250):
                 rs_250d = stock_ret_250 - idx_ret_250
 
-            # 가중 복합 RS (사용 가능한 기간 기준으로 조합)
-            parts, weights = [], []
-            if pd.notna(rs_60d): parts.append(rs_60d * 0.4); weights.append(0.4)
-            if pd.notna(rs_120d): parts.append(rs_120d * 0.3); weights.append(0.3)
-            if pd.notna(rs_250d): parts.append(rs_250d * 0.3); weights.append(0.3)
-            if parts:
-                composite_rs = sum(parts) / sum(weights)  # 가중 평균으로 정규화
-
         techs.append({
             "종목코드": code, "RSI_14": rsi, "MA20_이격도(%)": (close/ma20-1)*100 if pd.notna(ma20) else np.nan,
             "MA60_이격도(%)": (close/ma60-1)*100 if pd.notna(ma60) else np.nan,
             "52주_최고대비(%)": (close/h52-1)*100, "52주_최저대비(%)": (close/l52-1)*100,
             "거래대금_20일평균": v20, "거래대금_증감(%)": (v5/v20-1)*100 if pd.notna(v20) and v20 > 0 else np.nan,
             "변동성_60일(%)": vol60,
-            "RS_60d": rs_60d, "RS_120d": rs_120d, "RS_250d": rs_250d, "Composite_RS": composite_rs,
+            "RS_60d": rs_60d, "RS_120d": rs_120d, "RS_250d": rs_250d,
         })
 
     tech_df = pd.DataFrame(techs)
+
+    # ── Composite RS: 기간별 선랭킹 후 가중합산 (O'Neil 방식) ──
+    # 각 기간의 raw RS를 전 종목 대비 percentile rank(0~100)로 먼저 변환 →
+    # 이후 가중평균: 수익률 크기 편향 제거, 기간별 균등 기여 보장
+    _rs_weights = [("RS_60d", 0.4), ("RS_120d", 0.3), ("RS_250d", 0.3)]
+    for rs_col, _ in _rs_weights:
+        if rs_col in tech_df.columns and tech_df[rs_col].notna().any():
+            tech_df[f"_rank_{rs_col}"] = tech_df[rs_col].rank(pct=True, na_option="keep") * 100
+        else:
+            tech_df[f"_rank_{rs_col}"] = np.nan
+
+    def _weighted_composite(row):
+        total_val, total_w = 0.0, 0.0
+        for rs_col, w in _rs_weights:
+            v = row.get(f"_rank_{rs_col}", np.nan)
+            if pd.notna(v):
+                total_val += v * w
+                total_w += w
+        return total_val / total_w if total_w > 0 else np.nan
+
+    tech_df["Composite_RS"] = tech_df.apply(_weighted_composite, axis=1)
+    # 임시 랭킹 컬럼 제거
+    tech_df = tech_df.drop(columns=[f"_rank_{c}" for c, _ in _rs_weights if f"_rank_{c}" in tech_df.columns])
+
     result = df.merge(tech_df, on="종목코드", how="left")
 
     # RS_등급: Composite_RS의 전체 종목 백분위 (0~100)
@@ -744,16 +849,32 @@ def calc_strategy_scores(df):
             series = series.fillna(series.median() if not series.isna().all() else 0)
             return series.rank(pct=True) * 100 if asc else (1 - series.rank(pct=True)) * 100
 
-    S_PER_inv, S_PBR_inv, S_PEG_inv = get_rank("PER", False), get_rank("PBR", False), get_rank("PEG", False)
-    S_ROE, S_OpCAGR, S_QOpYoY = get_rank("ROE(%)"), get_rank("영업이익_CAGR"), get_rank("Q_영업이익_YoY(%)")
-    S_FCF, S_Div, S_Supply, S_Vol = get_rank("FCF수익률(%)"), get_rank("배당수익률(%)"), get_rank("수급강도"), get_rank("거래대금_20일평균")
+    # ── 턴어라운드 프리미엄: 흑자전환 종목의 NaN CAGR을 75th percentile로 대체 ──
+    # 적자→흑자 전환 시 CAGR이 NaN(음수 기저)이 되어 0점 처리되는 문제 완화
+    # 75th percentile = 보수적 상위 25% 인정 (과대평가 방지)
+    if "순이익_CAGR" in df.columns and "흑자전환" in df.columns:
+        _cagr_p75 = df["순이익_CAGR"].quantile(0.75) if df["순이익_CAGR"].notna().any() else 0
+        _turnaround_mask = (df["흑자전환"] == 1) & df["순이익_CAGR"].isna()
+        df["_순이익_CAGR_adj"] = df["순이익_CAGR"].copy()
+        df.loc[_turnaround_mask, "_순이익_CAGR_adj"] = _cagr_p75
+    else:
+        df["_순이익_CAGR_adj"] = df.get("순이익_CAGR", pd.Series(np.nan, index=df.index))
+
+    # NaN=0점: PER/PBR/PEG (낮을수록 좋은 지표, NaN=적자/음자본 → 최하위)
+    # NaN=0점: ROE, FCF수익률 (데이터 없으면 점수 불허)
+    S_PER_inv = get_rank("PER", False, zero_if_nan=True)
+    S_PBR_inv = get_rank("PBR", False, zero_if_nan=True)
+    S_PEG_inv = get_rank("PEG", False, zero_if_nan=True)
+    S_ROE = get_rank("ROE(%)", asc=True, zero_if_nan=True)
+    S_FCF = get_rank("FCF수익률(%)", asc=True, zero_if_nan=True)
+    S_OpCAGR, S_QOpYoY = get_rank("영업이익_CAGR"), get_rank("Q_영업이익_YoY(%)")
+    S_Div, S_Supply, S_Vol = get_rank("배당수익률(%)"), get_rank("수급강도"), get_rank("거래대금_20일평균")
 
     # 핵심 모멘텀/퀄리티 지표 — NaN은 0점 처리 (증명 안 된 종목에 점수 불허)
     S_RS = get_rank("RS_등급", asc=True, zero_if_nan=True)
     S_Accel = get_rank("실적가속_연속", asc=True, zero_if_nan=True)
     S_SmartMoney = get_rank("스마트머니_승률", asc=True, zero_if_nan=True)
     S_GPM_delta = get_rank("GPM_변화(pp)", asc=True, zero_if_nan=True)
-
     # 주도주: RS_등급(25%) + 수급강도(20%) + 거래대금(10%) + 영업이익CAGR(15%) + Q_YoY(15%) + 실적가속(10%) + RSI(5%)
     df["주도주_점수"] = (S_RS*0.25 + S_Supply*0.20 + S_Vol*0.10 + S_OpCAGR*0.15 + S_QOpYoY*0.15 + S_Accel*0.10 + get_rank("RSI_14")*0.05)
     df["우량가치_점수"] = (S_PEG_inv*0.3 + S_PER_inv*0.1 + S_ROE*0.3 + get_rank("F스코어")*0.2 + get_rank("부채비율(%)", False)*0.1)
@@ -781,21 +902,25 @@ def calc_strategy_scores(df):
     df["안정성_점수"] = 안정성_점수
     df["가격_점수"]   = 가격_점수
     df["종합점수"]    = (성장성_점수 + 안정성_점수 + 가격_점수) / 3
+
+    # 임시 컬럼 정리
+    if "_순이익_CAGR_adj" in df.columns:
+        df = df.drop(columns=["_순이익_CAGR_adj"])
     return df
 
 def apply_leaders_screen(df):
     # 시장 주도주: 대형주 + 유동성 + 수익성 + RS 상위 30%
     mask = (df["시가총액"]>=100_000_000_000) & (df["TTM_순이익"]>0) & (df["주도주_점수"]>0)
-    # 거래대금이 있으면 추가 필터 (없으면 무시)
+    # 거래대금이 있으면 추가 필터 (없으면 무시 — NaN = 데이터 없음 → 통과)
     if "거래대금_20일평균" in df.columns:
-        mask = mask & ((df["거래대금_20일평균"].fillna(0)>100_000_000) | (df["거래대금_20일평균"].isna()))
+        mask = mask & ((df["거래대금_20일평균"] > 100_000_000) | df["거래대금_20일평균"].isna())
     # RS_등급이 있을 때만 상위 30% 필터 적용 (데이터 없으면 통과)
     if "RS_등급" in df.columns and df["RS_등급"].notna().any():
         mask = mask & ((df["RS_등급"].fillna(0) >= 70) | (df["RS_등급"].isna()))
     return df[mask].sort_values("주도주_점수", ascending=False)
 
 def apply_quality_value_screen(df):
-    mask = (df["ROE(%)"]>=10) & (df.get("PEG",99)<1.5) & (df["PER"].between(1, 40)) & (df["F스코어"]>=4) & (df["시가총액"]>=50_000_000_000)
+    mask = (df["ROE(%)"]>=10) & (df["PEG"].fillna(99)<1.5) & (df["PER"].between(1, 40)) & (df["F스코어"]>=4) & (df["시가총액"]>=50_000_000_000)
     return df[mask].sort_values("우량가치_점수", ascending=False)
 
 def apply_growth_mom_screen(df):
@@ -822,17 +947,25 @@ def apply_turnaround_screen(df):
 def save_to_excel(df, filepath, sheet_name="Result"):
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.styles.numbers import FORMAT_NUMBER_00
     from openpyxl.utils import get_column_letter
     wb = Workbook(); ws = wb.active; ws.title = sheet_name
     col_groups = {
         "기본정보": ["종목코드", "종목명", "종가", "시가총액", "상장주식수", "데이터_연수"],
-        "주요지표": ["PER", "PBR", "PSR", "PEG", "PER_이상", "ROE(%)", "EPS", "BPS", "부채비율(%)", "영업이익률(%)", "이익수익률(%)", "FCF수익률(%)", "배당수익률(%)", "이익품질_양호"],
+        "주요지표": ["PER", "PBR", "PSR", "PEG", "PER_이상", "ROE(%)", "EPS", "BPS",
+                   "부채비율(%)", "영업이익률(%)", "이익수익률(%)", "FCF수익률(%)",
+                   "배당수익률(%)", "이익품질_양호", "이자보상배율", "현금전환율(%)", "CAPEX비율(%)"],
         "F스코어": ["F스코어", "F1_수익성", "F2_영업CF", "F3_ROA개선", "F4_이익품질", "F5_레버리지", "F6_유동성", "F7_희석없음", "F8_매출총이익률", "F9_자산회전율"],
         "수급/거래": ["수급강도", "외인순매수_20d", "기관순매수_20d", "거래대금_20일평균", "거래대금_증감(%)"],
         "점수": ["종합점수", "성장성_점수", "안정성_점수", "가격_점수", "주도주_점수", "우량가치_점수", "고성장_점수", "현금배당_점수", "턴어라운드_점수"],
         "성장추세": ["매출_CAGR", "영업이익_CAGR", "순이익_CAGR", "매출_연속성장", "영업이익_연속성장", "이익률_변동폭", "흑자전환", "순이익_전년음수", "순이익_당기양수"],
         "밸류에이션": ["적정주가_SRIM", "괴리율(%)"],
     }
+    # NaN을 None(빈칸)으로 유지하되 숫자형 셀에 별도 포맷 적용
+    # — 수식이 성립하지 않는 지표(현금전환율, CAPEX비율 등)는 셀을 비워두고
+    #   조건부 서식으로 빈 셀에 "-" 표시 (데이터 타입 보존)
+    _nan_fmt_cols = {"현금전환율(%)", "CAPEX비율(%)", "부채상환능력", "이자보상배율",
+                     "PEG", "PER", "PBR", "PSR", "FCF수익률(%)", "이익수익률(%)"}
     ordered_cols = []
     for g in col_groups.values():
         for c in g:
@@ -852,12 +985,27 @@ def save_to_excel(df, filepath, sheet_name="Result"):
         cell.alignment = Alignment(horizontal='center')
         for grp, cols in col_groups.items():
             if col_name in cols: cell.fill = fills[grp]; break
+    # 헤더에서 NaN 포맷 대상 컬럼의 인덱스 미리 파악
+    _nan_col_indices = {
+        col_idx for col_idx, col_name in enumerate(ordered_cols, 1)
+        if col_name in _nan_fmt_cols
+    }
     for row_idx, (_, row_data) in enumerate(export_df.iterrows(), 2):
         for col_idx, col_name in enumerate(ordered_cols, 1):
             val = row_data[col_name]
-            if pd.isna(val): val = None
-            elif isinstance(val, (float, np.floating)): val = round(float(val), 2)
-            ws.cell(row=row_idx, column=col_idx, value=val)
+            cell = ws.cell(row=row_idx, column=col_idx)
+            if pd.isna(val):
+                # NaN 포맷 대상 컬럼: "-" 문자열로 표시 (정렬은 우측)
+                if col_idx in _nan_col_indices:
+                    cell.value = "-"
+                    cell.alignment = Alignment(horizontal='right')
+                else:
+                    cell.value = None
+            else:
+                if isinstance(val, (float, np.floating)):
+                    cell.value = round(float(val), 2)
+                else:
+                    cell.value = val
     ws.freeze_panes = "C2"
     wb.save(filepath); log.info(f"Saved: {filepath}")
 

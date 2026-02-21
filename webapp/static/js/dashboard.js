@@ -25,12 +25,12 @@
   // ─── 탭 기본 정렬 ─────────────────────────────────────────────────────
   const TAB_DEFAULT_SORT = {
     all:            "종합점수",
-    leaders:        "주도주_점수",
-    quality_value:  "우량가치_점수",
-    growth_mom:     "고성장_점수",
-    cash_div:       "현금배당_점수",
-    turnaround:     "턴어라운드_점수",
-    multi_strategy: "전략수",
+    leaders:        "종합점수",
+    quality_value:  "종합점수",
+    growth_mom:     "종합점수",
+    cash_div:       "종합점수",
+    turnaround:     "종합점수",
+    multi_strategy: "종합점수",
     watchlist:      "종합점수",
   };
 
@@ -601,6 +601,7 @@
 
   // ─── 종목 목록 로드 ───────────────────────────────────────────────────
   async function loadStocks() {
+    disposeTooltips(); // 로드 시작 시 툴팁 제거
     // 로딩 스피너
     const loadingCols = (COLUMNS[currentScreen] || COLUMNS.all).length + 2;
     tbody.innerHTML = `<tr><td colspan="${loadingCols}" class="text-center py-4 text-muted">
@@ -709,14 +710,26 @@
         const arrow = sortCol === c.key ? (sortOrder === "desc" ? " ↓" : " ↑") : "";
         const tip = METRIC_TOOLTIPS[c.key]
           ? ` data-bs-toggle="tooltip" data-bs-placement="bottom" title="${METRIC_TOOLTIPS[c.key]}"` : "";
-        return `<th data-col="${c.key}" style="cursor:pointer"${tip}>${c.label}<span class="sort-arrow">${arrow}</span></th>`;
+        return `<th data-col="${c.key}" style="cursor:pointer; user-select:none;"${tip}>${c.label}<span class="sort-arrow text-muted small">${arrow}</span></th>`;
       }).join("");
 
     headerRow.querySelectorAll("th[data-col]").forEach(th => {
       th.addEventListener("click", () => {
         const col = th.dataset.col;
-        if (sortCol === col) sortOrder = sortOrder === "asc" ? "desc" : "asc";
-        else { sortCol = col; sortOrder = "desc"; }
+        if (sortCol === col) {
+          // 3-state: Desc -> Asc -> Reset (Default)
+          if (sortOrder === "desc") {
+            sortOrder = "asc";
+          } else {
+            // Reset to default sort for this tab
+            sortCol   = TAB_DEFAULT_SORT[currentScreen] || "종합점수";
+            sortOrder = "desc";
+          }
+        } else {
+          // New column clicked -> Start with Desc
+          sortCol   = col;
+          sortOrder = "desc";
+        }
         currentPage = 1;
         buildHeader();
         loadStocks();
@@ -1191,8 +1204,12 @@
       if (el._bsTooltip) {
         el._bsTooltip.dispose();
         el._bsTooltip = null;
+      } else {
+        const instance = bootstrap.Tooltip.getInstance(el);
+        if (instance) instance.dispose();
       }
     });
+    document.querySelectorAll('.tooltip').forEach(e => e.remove());
   }
 
   // ─── DOM 참조 ─────────────────────────────────────────────────────────
