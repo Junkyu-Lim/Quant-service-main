@@ -191,56 +191,90 @@
 
   // ─── 탭별 기본 컬럼 정의 ─────────────────────────────────────────────
   const COLUMNS = {
+    // 1. 전체 종목 - 균형잡힌 기본 정보 (14개)
     all: [
       { key: "종목코드", label: "Code" }, { key: "종목명", label: "Name" }, { key: "시장구분", label: "Mkt" },
-      { key: "종가", label: "Price", fmt: "int" }, { key: "PER", label: "PER", fmt: "f2" },
-      { key: "ROE(%)", label: "ROE", fmt: "f2" }, { key: "PBR", label: "PBR", fmt: "f2" },
+      { key: "종가", label: "Price", fmt: "int" }, { key: "시가총액", label: "Mcap", fmt: "eok" },
+      { key: "PER", label: "PER", fmt: "f2" }, { key: "PBR", label: "PBR", fmt: "f2" },
+      { key: "PEG", label: "PEG", fmt: "f2" }, { key: "ROE(%)", label: "ROE", fmt: "f2" },
+      { key: "영업이익_CAGR", label: "OP CAGR", fmt: "f1" }, { key: "부채비율(%)", label: "Debt%", fmt: "f1" },
       { key: "수급강도", label: "Supply", fmt: "f1" }, { key: "거래대금_20일평균", label: "Vol Avg", fmt: "eok" },
       { key: "종합점수", label: "Score", fmt: "f1" }
     ],
+    // 2. 시장 주도주 - 수급+모멘텀+실적 (12개)
     leaders: [
-      { key: "종목코드", label: "Code" }, { key: "종목명", label: "Name" }, { key: "종가", label: "Price", fmt: "int" },
-      { key: "수급강도", label: "Supply", fmt: "f1" }, { key: "거래대금_20일평균", label: "Vol Avg", fmt: "eok" },
-      { key: "Q_영업이익_YoY(%)", label: "Q OP YoY", fmt: "f1" }, { key: "RSI_14", label: "RSI", fmt: "f1" },
+      { key: "종목코드", label: "Code" }, { key: "종목명", label: "Name" }, { key: "시가총액", label: "Mcap", fmt: "eok" },
+      { key: "종가", label: "Price", fmt: "int" }, { key: "시장구분", label: "Mkt" },
+      { key: "수급강도", label: "Supply", fmt: "f1" }, { key: "RS_등급", label: "RS등급", fmt: "f1" },
+      { key: "스마트머니_승률", label: "SmartMoney", fmt: "f1" }, { key: "거래대금_증감(%)", label: "Vol Change", fmt: "f1" },
+      { key: "Q_영업이익_YoY(%)", label: "Q OP YoY", fmt: "f1" }, { key: "52주_최고대비(%)", label: "52W High", fmt: "f1" },
       { key: "주도주_점수", label: "L-Score", fmt: "f1" }
     ],
+    // 3. 우량가치 - ROE, F-Score, PEG, ROIC (12개)
     quality_value: [
       { key: "종목코드", label: "Code" }, { key: "종목명", label: "Name" }, { key: "종가", label: "Price", fmt: "int" },
-      { key: "ROE(%)", label: "ROE", fmt: "f2" }, { key: "PEG", label: "PEG", fmt: "f2" },
-      { key: "PER", label: "PER", fmt: "f2" }, { key: "F스코어", label: "F-Score", fmt: "int" },
-      { key: "우량가치_점수", label: "QV-Score", fmt: "f1" }
+      { key: "시가총액", label: "Mcap", fmt: "eok" }, { key: "PER", label: "PER", fmt: "f2" },
+      { key: "PEG", label: "PEG", fmt: "f2" }, { key: "PBR", label: "PBR", fmt: "f2" },
+      { key: "ROE(%)", label: "ROE", fmt: "f2" }, { key: "ROIC(%)", label: "ROIC", fmt: "f1" },
+      { key: "F스코어", label: "F-Score", fmt: "int" }, { key: "부채비율(%)", label: "Debt%", fmt: "f1" },
+      { key: "영업이익률(%)", label: "OPM%", fmt: "f1" }, { key: "우량가치_점수", label: "QV-Score", fmt: "f1" }
     ],
+    // 4. 고성장 모멘텀 - CAGR, YoY, 추세, 가속도 (13개)
     growth_mom: [
       { key: "종목코드", label: "Code" }, { key: "종목명", label: "Name" }, { key: "종가", label: "Price", fmt: "int" },
-      { key: "영업이익_CAGR", label: "OP CAGR", fmt: "f1" }, { key: "Q_영업이익_YoY(%)", label: "Q OP YoY", fmt: "f1" },
-      { key: "MA20_이격도(%)", label: "MA20%", fmt: "f1" }, { key: "52주_최고대비(%)", label: "52W High", fmt: "f1" },
+      { key: "매출_CAGR", label: "Rev CAGR", fmt: "f1" }, { key: "영업이익_CAGR", label: "OP CAGR", fmt: "f1" },
+      { key: "순이익_CAGR", label: "NP CAGR", fmt: "f1" }, { key: "Q_영업이익_YoY(%)", label: "Q OP YoY", fmt: "f1" },
+      { key: "실적가속_연속", label: "AccelSeq", fmt: "flag" }, { key: "영업이익_가속도", label: "OP Accel", fmt: "f1" },
+      { key: "MA20_이격도(%)", label: "MA20%", fmt: "f1" }, { key: "MA60_이격도(%)", label: "MA60%", fmt: "f1" },
+      { key: "52주_최고대비(%)", label: "52W High", fmt: "f1" }, { key: "FCF_CAGR", label: "FCF CAGR", fmt: "f1" },
       { key: "고성장_점수", label: "G-Score", fmt: "f1" }
     ],
+    // 5. 현금배당 - FCF, 배당, 현금흐름 (12개)
     cash_div: [
       { key: "종목코드", label: "Code" }, { key: "종목명", label: "Name" }, { key: "종가", label: "Price", fmt: "int" },
       { key: "FCF수익률(%)", label: "FCF%", fmt: "f2" }, { key: "배당수익률(%)", label: "Div%", fmt: "f2" },
-      { key: "부채비율(%)", label: "Debt%", fmt: "f1" }, { key: "DPS_CAGR", label: "DPS CAGR", fmt: "f1" },
-      { key: "현금배당_점수", label: "CD-Score", fmt: "f1" }
+      { key: "DPS_CAGR", label: "DPS CAGR", fmt: "f1" }, { key: "배당_연속증가", label: "DivSeq", fmt: "int" },
+      { key: "ROE(%)", label: "ROE", fmt: "f2" }, { key: "영업CF_CAGR", label: "CF CAGR", fmt: "f1" },
+      { key: "이익품질_양호", label: "Q.Good", fmt: "flag" }, { key: "부채비율(%)", label: "Debt%", fmt: "f1" },
+      { key: "배당_수익동반증가", label: "Growth-Div", fmt: "flag" }, { key: "현금배당_점수", label: "CD-Score", fmt: "f1" }
     ],
+    // 6. 턴어라운드 - 전환신호, 이익률, 수급 (12개)
     turnaround: [
       { key: "종목코드", label: "Code" }, { key: "종목명", label: "Name" }, { key: "종가", label: "Price", fmt: "int" },
-      { key: "흑자전환", label: "Turn", fmt: "flag" }, { key: "이익률_급개선", label: "OPM Jump", fmt: "flag" },
-      { key: "이익률_변동폭", label: "OPM Delta", fmt: "f1" }, { key: "RSI_14", label: "RSI", fmt: "f1" },
+      { key: "흑자전환", label: "Turn", fmt: "flag" }, { key: "이익률_급개선", label: "OPM↑", fmt: "flag" },
+      { key: "이익률_변동폭", label: "OPM Δ", fmt: "f1" }, { key: "GPM_변화(pp)", label: "GPM Δ", fmt: "f1" },
+      { key: "스마트머니_승률", label: "SmartMoney", fmt: "f1" }, { key: "VCP_신호", label: "VCP", fmt: "flag" },
+      { key: "ROIC_개선", label: "ROIC↑", fmt: "flag" }, { key: "TTM_순이익", label: "TTM NI", fmt: "int" },
+      { key: "실적가속_연속", label: "AccelSeq", fmt: "flag" }, { key: "RSI_14", label: "RSI", fmt: "f1" },
       { key: "턴어라운드_점수", label: "T-Score", fmt: "f1" }
     ],
+    // 7. Multi-Strategy (3관왕) - 5개 전략 점수 (10개)
     multi_strategy: [
       { key: "종목코드", label: "Code" }, { key: "종목명", label: "Name" }, { key: "종가", label: "Price", fmt: "int" },
-      { key: "전략수", label: "Count", fmt: "int" }, { key: "종합점수", label: "Total Score", fmt: "f1" }
+      { key: "전략수", label: "Count", fmt: "int" }, { key: "종합점수", label: "Composite", fmt: "f1" },
+      { key: "성장성_점수", label: "Growth", fmt: "f1" }, { key: "안정성_점수", label: "Stability", fmt: "f1" },
+      { key: "가격_점수", label: "Valuation", fmt: "f1" }, { key: "주도주_점수", label: "Leaders", fmt: "f1" },
+      { key: "우량가치_점수", label: "Quality", fmt: "f1" }
     ],
+    // 8. 관심종목 - 종합 모니터링 (10개)
     watchlist: [
       { key: "종목코드", label: "Code" }, { key: "종목명", label: "Name" }, { key: "종가", label: "Price", fmt: "int" },
-      { key: "PER", label: "PER", fmt: "f2" }, { key: "ROE(%)", label: "ROE", fmt: "f2" },
+      { key: "시가총액", label: "Mcap", fmt: "eok" }, { key: "PER", label: "PER", fmt: "f2" },
+      { key: "PBR", label: "PBR", fmt: "f2" }, { key: "ROE(%)", label: "ROE", fmt: "f2" },
+      { key: "부채비율(%)", label: "Debt%", fmt: "f1" }, { key: "배당수익률(%)", label: "Div%", fmt: "f2" },
       { key: "종합점수", label: "Score", fmt: "f1" }
     ]
   };
 
     // ─── 지표 툴팁 ────────────────────────────────────────────────────────
     const METRIC_TOOLTIPS = {
+      // 0. 기본 정보
+      "종가": "현재 주가(원). 거래 종료 시점의 마지막 매매 가격.",
+      "시가총액": "총 시가(원). 현재 주가 × 상장주식수. 기업 규모의 지표.",
+      "자본": "자기자본(원). 자산에서 부채를 뺀 주주 자산.",
+      "부채": "총 부채(원). 유동부채 + 장기부채 합계.",
+      "자산총계": "총자산(원). 유동자산 + 비유동자산 합계.",
+
       // 1. 밸류에이션
       "PER": "주가수익비율(Price Earning Ratio). 낮을수록 저평가(보통 10 이하). 단, 이익 급감 예상 기업은 주의(Value Trap).",
       "PBR": "주가순자산비율. 1 미만은 시총이 청산가치보다 낮은 절대 저평가 상태. ROE가 너무 낮으면 만년 저평가일 수 있음.",
@@ -251,47 +285,102 @@
       "BPS": "주당순자산(원). 기업이 망해도 주주에게 돌아가는 1주당 청산가치.",
       "적정주가_SRIM": "초과이익모형(S-RIM)으로 산출한 적정 주가. ROE가 요구수익률(8%)보다 낮으면 BPS보다 낮게 평가됨.",
       "괴리율(%)": "적정주가 대비 현재가 차이. 양수(+)면 상승 여력 있음(저평가), 음수(-)면 고평가 상태.",
-      
+
       // 2. 재무 건전성 & 현금흐름
       "F스코어": "Piotroski F-Score(9점 만점). 재무 건전성 종합 평가. 7점↑ 매우 우량, 3점↓ 부실 징후.",
+      "F1_수익성": "F-Score 요소. 당기순이익 > 0이면 1점. 수익성 기본.",
+      "F2_영업CF": "F-Score 요소. 영업활동현금흐름 > 0이면 1점. 현금 창출 능력.",
+      "F3_ROA개선": "F-Score 요소. 최근 ROA > 전년 ROA이면 1점. 자산 효율성 개선.",
+      "F4_이익품질": "F-Score 요소. 영업CF > 순이익이면 1점. 이익의 질이 우수함.",
+      "F5_레버리지": "F-Score 요소. 부채비율 감소하면 1점. 재무 구조 개선.",
+      "F6_유동성": "F-Score 요소. 유동비율 상승하면 1점. 단기 상환 능력 개선.",
+      "F7_희석없음": "F-Score 요소. 발행주식수 미증가하면 1점. 기존주주 이익 보호.",
+      "F8_매출총이익률": "F-Score 요소. 매출총이익률 상승하면 1점. 원가 경쟁력 개선.",
+      "F9_자산회전율": "F-Score 요소. 자산회전율 상승하면 1점. 자산 활용도 개선.",
       "부채비율(%)": "자본 대비 부채 비율. 100% 이하 우량, 200% 이하 적정. 200% 초과 시 유상증자 등 재무 리스크 주의.",
       "부채상환능력": "이자보상배율(영업이익/이자비용). 1 미만은 번 돈으로 이자도 못 갚는 잠재적 부실(좀비) 기업.",
       "이익품질_양호": "영업활동현금흐름 > 당기순이익 여부. O면 현금이 잘 도는 알짜 이익, X면 분식회계나 재고 누적 의심.",
       "FCF수익률(%)": "잉여현금흐름/시가총액. 3% 이상이면 배당/자사주 매입 여력이 충분한 우량 기업.",
       "현금전환율(%)": "순이익 대비 실제 현금 유입 비율. 100% 이상이면 이익의 질이 매우 높음.",
       "CAPEX비율(%)": "영업현금흐름 중 설비투자에 쓴 비율. 낮을수록 주주 환원 여력이 큼.",
-  
+
       // 3. 수익성 & 배당
       "영업이익률(%)": "매출 대비 영업이익 비율. 기업의 마진율이자 경쟁력 척도. 추세적 상승이 중요.",
       "이익수익률(%)": "PER의 역수(순이익/시총). 주식을 채권으로 봤을 때의 기대 수익률. 국채 금리보다 높아야 매력적.",
       "배당수익률(%)": "현재 주가 대비 연간 배당금 비율. 은행 금리보다 높으면 배당주 매력 보유.",
+      "DPS_최근": "최근 배당금. 연간 현금배당 수익 예상에 사용.",
       "DPS_CAGR": "주당배당금 연평균 성장률. 배당을 매년 늘려주는 기업(배당성장주)인지 확인.",
       "배당_연속증가": "배당금을 줄이지 않고 연속으로 늘려온 연수. 주주 친화 정책의 척도.",
       "배당_수익동반증가": "순이익 성장과 배당 성장이 함께 이루어지는 가장 이상적인 케이스.",
-  
+
       // 4. 성장성
       "매출_CAGR": "매출액 연평균 성장률. 일시적 호재가 아닌 장기적 외형 성장을 확인. 15% 이상이면 고성장.",
       "영업이익_CAGR": "영업이익 연평균 성장률. 이익의 구조적 성장 추세 확인.",
       "순이익_CAGR": "순이익 연평균 성장률.",
+      "FCF_CAGR": "잉여현금흐름 연평균 성장률. 장기적 현금창출 능력 평가.",
       "Q_매출_YoY(%)": "최근 분기 매출 전년 동기 대비 증감률. 가장 최신의 성장 트렌드.",
       "Q_영업이익_YoY(%)": "최근 분기 영업이익 전년 동기 대비 증감률. 턴어라운드 포착에 유용.",
+      "Q_순이익_YoY(%)": "최근 분기 순이익 전년 동기 대비 증감률.",
       "TTM_매출_YoY(%)": "최근 12개월 합산 매출 전년 대비 증감률.",
+      "TTM_영업이익_YoY(%)": "최근 12개월 영업이익 전년 대비 증감률.",
+      "TTM_순이익_YoY(%)": "최근 12개월 순이익 전년 대비 증감률.",
       "흑자전환": "전년 적자에서 금년(혹은 최근 분기) 흑자로 전환. 주가 상승 탄력이 가장 강한 시그널 중 하나.",
+      "이익률_개선": "영업이익률이 전년 대비 상승. 기본적인 이익 구조 개선.",
       "이익률_급개선": "영업이익률이 전년 대비 2%p 이상 급등. 비용 절감이나 판가 인상 성공 신호.",
-  
-      // 5. 기술적 & 수급
+      "이익률_변동폭": "최근 영업이익률과 전년 영업이익률의 차이(pp). 변화폭이 클수록 개선 강도가 크다.",
+
+      // 5. 성장 가속도
+      "영업이익_가속도": "최근 분기 영업이익 YoY의 변화도. 양수면 가속, 음수면 감속.",
+      "매출_가속도": "최근 분기 매출 YoY의 변화도. 양수면 가속, 음수면 감속.",
+      "실적가속_연속": "2분기 연속 가속 신호. Growth 전략의 핵심 지표.",
+      "매출_연속성장": "최근 몇 년간 매출이 연속으로 성장한 연수.",
+      "영업이익_연속성장": "최근 몇 년간 영업이익이 연속으로 성장한 연수.",
+      "순이익_연속성장": "최근 몇 년간 순이익이 연속으로 성장한 연수.",
+      "영업CF_연속성장": "최근 몇 년간 영업현금흐름이 연속으로 성장한 연수.",
+
+      // 6. 효율성 & 마진
+      "ROIC(%)": "투자자본수익률(NOPAT/IC). 10% 이상이면 자본 효율성 우수. 경제적 해자의 척도.",
+      "ROIC_전년(%)": "전년도 투자자본수익률. ROIC 개선 여부 판단에 사용.",
+      "ROIC_개선": "ROIC가 전년 대비 상승했는지 여부. 경영 효율성 개선의 신호.",
+      "GPM_최근(%)": "매출총이익률. 원가 경쟁력과 가격 책정력의 척도.",
+      "GPM_전년(%)": "전년 매출총이익률. GPM 변화 추이 확인.",
+      "GPM_변화(pp)": "매출총이익률 변화폭(pp). 양수면 마진 개선, 음수면 악화.",
+      "퀄리티_턴어라운드": "GPM 개선(2%p↑) + 영업CF(+) + ROIC 개선의 복합 신호. 턴어라운드 고신뢰도.",
+
+      // 7. 기술적 & 수급
       "52주_최고대비(%)": "52주 신고가 대비 현재 위치. 0%에 가까울수록 신고가 경신 중(모멘텀 강함).",
       "52주_최저대비(%)": "52주 신저가 대비 상승폭. 바닥에서 얼마나 올라왔는지 확인.",
       "MA20_이격도(%)": "20일 이동평균선과의 거리. +5% 이상이면 단기 과열, -5% 이하면 과매도.",
       "MA60_이격도(%)": "60일 이동평균선(수급선)과의 거리. 정배열 초입인지 확인.",
       "RSI_14": "상대강도지수. 30 이하는 과매도(저점 매수 기회), 70 이상은 과매수(조정 주의).",
       "거래대금_20일평균": "하루 평균 거래대금. 유동성이 너무 적은 종목(10억 미만)은 매매 시 호가 공백 주의.",
+      "거래대금_증감(%)": "최근 5일 거래대금 vs 20일 평균 거래대금 비교. 시장 관심도 변화.",
+      "변동성_60일(%)": "60일 변동성(연환산). 높을수록 변동성 큼. 리스크 관리에 필요.",
       "수급강도": "시가총액 대비 메이저(외인+기관) 순매수 강도. 양수(+)면 주포가 매집 중.",
       "외인순매수_20d": "최근 20거래일 외국인 누적 순매수 수량.",
       "기관순매수_20d": "최근 20거래일 기관 누적 순매수 수량.",
-  
-      // 6. 점수
+      "RS_60d": "60일 상대강도(종목수익률 - 지수수익률). 양수면 지수 대비 강세.",
+      "RS_120d": "120일 상대강도(종목수익률 - 지수수익률). 중기 모멘텀 평가.",
+      "RS_250d": "250일 상대강도(종목수익률 - 지수수익률). 장기 추세 평가.",
+      "Composite_RS": "기간별 RS를 가중합산(60일 40% + 120일 30% + 250일 30%). 종합 모멘텀 지표.",
+      "RS_등급": "Composite RS의 전체 종목 대비 백분위 순위(0~100). Leaders 전략 필수 지표.",
+      "스마트머니_승률": "외인과 기관이 함께 또는 개별적으로 순매수한 날의 비율. 높을수록 매집세 강함.",
+      "양매수_비율": "외인과 기관이 동시에 순매수한 날의 비율. 높을수록 주포의 일관성 강함.",
+      "VCP_신호": "가격+거래량 동시 축소 + 스마트머니 60%↑. 주가 반등 신호.",
+
+      // 8. TTM 실적 (최근 12개월 집계)
+      "TTM_매출": "최근 12개월 매출액 합계(원). 연간 실적의 최신 집계치.",
+      "TTM_영업이익": "최근 12개월 영업이익 합계(원). 본업의 이익력 확인.",
+      "TTM_순이익": "최근 12개월 순이익 합계(원). 실제 수익성을 나타내는 최종 이익.",
+      "TTM_영업CF": "최근 12개월 영업활동현금흐름 합계(원). 실제 현금 창출 능력.",
+      "TTM_CAPEX": "최근 12개월 설비투자액 합계(원). 자본 지출 규모.",
+      "TTM_FCF": "TTM_영업CF - TTM_CAPEX. 주주에게 귀속 가능한 잉여현금흐름.",
+
+      // 9. 점수
       "종합점수": "5개 전략(성장, 안정, 가치, 배당, 턴어라운드)을 종합한 점수(0~100점). 밸런스가 좋은 종목.",
+      "성장성_점수": "영업이익 CAGR(35%) + 매출 CAGR(30%) + Q YoY(25%) + 실적가속(10%)의 종합 점수.",
+      "안정성_점수": "ROE(40%) + F-Score(35%) + FCF수익률(25%)의 종합 점수.",
+      "가격_점수": "PER역순(40%) + 괴리율(35%) + PBR역순(25%)의 종합 점수.",
       "주도주_점수": "수급과 실적 성장, 추세가 모두 살아있는 시장 주도주 점수.",
       "우량가치_점수": "싸고(Low PEG/PER) 돈 잘 벌며(High ROE) 튼튼한(High F-Score) 종목.",
       "고성장_점수": "매출과 이익이 폭발적으로 성장하는 기업 점수.",
@@ -347,6 +436,15 @@
       title: "재무건전성",
       metrics: [
         { key: "F스코어",      label: "F-Score",    fmt: "int" },
+        { key: "F1_수익성",    label: "F1 수익성",  fmt: "flag" },
+        { key: "F2_영업CF",    label: "F2 영업CF",  fmt: "flag" },
+        { key: "F3_ROA개선",   label: "F3 ROA개선", fmt: "flag" },
+        { key: "F4_이익품질",  label: "F4 이익품질", fmt: "flag" },
+        { key: "F5_레버리지", label: "F5 레버리지", fmt: "flag" },
+        { key: "F6_유동성",    label: "F6 유동성",  fmt: "flag" },
+        { key: "F7_희석없음",  label: "F7 희석없음", fmt: "flag" },
+        { key: "F8_매출총이익률", label: "F8 매출총이익률", fmt: "flag" },
+        { key: "F9_자산회전율", label: "F9 자산회전율", fmt: "flag" },
         { key: "부채비율(%)",  label: "부채비율%",  fmt: "f1" },
         { key: "부채상환능력", label: "이자보상배율", fmt: "f2" },
       ]
@@ -372,9 +470,27 @@
         { key: "거래대금_20일평균", label: "거래대금(20일평균)", fmt: "eok" },
         { key: "거래대금_증감(%)", label: "거래대금 증감%",  fmt: "f1" },
         { key: "변동성_60일(%)",   label: "변동성(60일)%",  fmt: "f1" },
-        { key: "수급강도",         label: "수급강도",        fmt: "f1" },
-        { key: "외인순매수_20d",   label: "외인순매수(20d)", fmt: "int" },
-        { key: "기관순매수_20d",   label: "기관순매수(20d)", fmt: "int" },
+      ]
+    },
+    {
+      title: "모멘텀 & 상대강도",
+      metrics: [
+        { key: "RS_60d",        label: "RS(60d)",         fmt: "f1" },
+        { key: "RS_120d",       label: "RS(120d)",        fmt: "f1" },
+        { key: "RS_250d",       label: "RS(250d)",        fmt: "f1" },
+        { key: "Composite_RS",  label: "Composite RS",    fmt: "f1" },
+        { key: "RS_등급",       label: "RS 등급",         fmt: "f1" },
+      ]
+    },
+    {
+      title: "수급 & 매집",
+      metrics: [
+        { key: "수급강도",       label: "수급강도",         fmt: "f1" },
+        { key: "외인순매수_20d", label: "외인순매수(20d)",  fmt: "int" },
+        { key: "기관순매수_20d", label: "기관순매수(20d)",  fmt: "int" },
+        { key: "스마트머니_승률", label: "스마트머니 승률",  fmt: "f1" },
+        { key: "양매수_비율",    label: "양매수 비율",      fmt: "f1" },
+        { key: "VCP_신호",       label: "VCP 신호",        fmt: "flag" },
       ]
     },
     {
@@ -395,6 +511,9 @@
       title: "전략 점수",
       metrics: [
         { key: "종합점수",      label: "종합점수",      fmt: "f1" },
+        { key: "성장성_점수",   label: "성장성 점수",   fmt: "f1" },
+        { key: "안정성_점수",   label: "안정성 점수",   fmt: "f1" },
+        { key: "가격_점수",     label: "가격 점수",     fmt: "f1" },
         { key: "주도주_점수",   label: "주도주 점수",   fmt: "f1" },
         { key: "우량가치_점수", label: "우량가치 점수", fmt: "f1" },
         { key: "고성장_점수",   label: "고성장 점수",   fmt: "f1" },
@@ -414,6 +533,21 @@
         { key: "이익률_개선",      label: "이익률 개선",    fmt: "flag" },
         { key: "이익률_급개선",    label: "이익률 급개선",  fmt: "flag" },
         { key: "이익률_변동폭",    label: "이익률 변동폭",  fmt: "f1" },
+        { key: "영업이익_가속도",  label: "OP 가속도",      fmt: "f1" },
+        { key: "매출_가속도",      label: "매출 가속도",    fmt: "f1" },
+        { key: "실적가속_연속",    label: "실적 가속 연속", fmt: "flag" },
+      ]
+    },
+    {
+      title: "효율성 & 마진",
+      metrics: [
+        { key: "ROIC(%)",          label: "ROIC%",          fmt: "f1" },
+        { key: "ROIC_전년(%)",     label: "ROIC 전년%",     fmt: "f1" },
+        { key: "ROIC_개선",        label: "ROIC 개선",      fmt: "flag" },
+        { key: "GPM_최근(%)",      label: "GPM 최근%",      fmt: "f1" },
+        { key: "GPM_전년(%)",      label: "GPM 전년%",      fmt: "f1" },
+        { key: "GPM_변화(pp)",     label: "GPM 변화(pp)",   fmt: "f1" },
+        { key: "퀄리티_턴어라운드", label: "퀄리티 턴어라운드", fmt: "flag" },
       ]
     },
   ];
