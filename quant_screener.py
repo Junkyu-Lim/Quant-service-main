@@ -349,6 +349,7 @@ def analyze_one_stock(ticker, ind_grp, fs_grp):
 
         # F6: 유동성 개선 (유동비율 최근 > 전년)
         f6 = 0
+        _cr_cur_ratio = np.nan  # 유동비율(%) 저장용
         if len(current_assets_s) >= 2 and len(current_liab_s) >= 2:
             ca_dates = sorted(current_assets_s.keys())
             cl_dates = sorted(current_liab_s.keys())
@@ -356,6 +357,8 @@ def analyze_one_stock(ticker, ind_grp, fs_grp):
                 cr_cur = current_assets_s[ca_dates[-1]] / current_liab_s[cl_dates[-1]] if (current_liab_s[cl_dates[-1]] and current_assets_s[ca_dates[-1]] is not None) else 0
                 cr_prev = current_assets_s[ca_dates[-2]] / current_liab_s[cl_dates[-2]] if (current_liab_s[cl_dates[-2]] and current_assets_s[ca_dates[-2]] is not None) else 0
                 f6 = 1 if cr_cur > cr_prev else 0
+                if cr_cur > 0:
+                    _cr_cur_ratio = cr_cur * 100  # 유동비율(%)
 
         # F7: 희석 없음 — shares 데이터 없을 시 자본/순이익 proxy로 판별
         # 기본값 1 (희석 없음 가정): 대부분 기업은 희석 안 함, 데이터 부재 시 패널티 금지
@@ -397,6 +400,7 @@ def analyze_one_stock(ticker, ind_grp, fs_grp):
         res["F1_수익성"], res["F2_영업CF"], res["F3_ROA개선"], res["F4_이익품질"] = f1, f2, f3, f4
         res["F5_레버리지"], res["F6_유동성"], res["F7_희석없음"] = f5, f6, f7
         res["F8_매출총이익률"], res["F9_자산회전율"] = f8, f9
+        res["유동비율(%)"] = _cr_cur_ratio
 
         # ── GPM 연속값 & ROIC ──
         gpm_cur_val = np.nan
@@ -871,14 +875,17 @@ def calc_strategy_scores(df):
     S_Div, S_Supply, S_Vol = get_rank("배당수익률(%)"), get_rank("수급강도"), get_rank("거래대금_20일평균")
 
     # 핵심 모멘텀/퀄리티 지표 — NaN은 0점 처리 (증명 안 된 종목에 점수 불허)
+    S_ROIC = get_rank("ROIC(%)", asc=True, zero_if_nan=True)
     S_RS = get_rank("RS_등급", asc=True, zero_if_nan=True)
     S_Accel = get_rank("실적가속_연속", asc=True, zero_if_nan=True)
     S_SmartMoney = get_rank("스마트머니_승률", asc=True, zero_if_nan=True)
     S_GPM_delta = get_rank("GPM_변화(pp)", asc=True, zero_if_nan=True)
     # 주도주: RS_등급(25%) + 수급강도(20%) + 거래대금(10%) + 영업이익CAGR(15%) + Q_YoY(15%) + 실적가속(10%) + RSI(5%)
     df["주도주_점수"] = (S_RS*0.25 + S_Supply*0.20 + S_Vol*0.10 + S_OpCAGR*0.15 + S_QOpYoY*0.15 + S_Accel*0.10 + get_rank("RSI_14")*0.05)
-    df["우량가치_점수"] = (S_PEG_inv*0.3 + S_PER_inv*0.1 + S_ROE*0.3 + get_rank("F스코어")*0.2 + get_rank("부채비율(%)", False)*0.1)
-    df["고성장_점수"] = (get_rank("매출_CAGR")*0.2 + S_OpCAGR*0.3 + S_QOpYoY*0.3 + get_rank("MA20_이격도(%)")*0.1 + get_rank("52주_최고대비(%)")*0.1)
+    # FCF수익률(25%=Value) + ROIC(25%=Quality) + F스코어(20%=Health) + 괴리율(20%=MoS) + PEG역순(10%=Growth-Value)
+    df["우량가치_점수"] = (S_FCF*0.25 + S_ROIC*0.25 + get_rank("F스코어")*0.20 + get_rank("괴리율(%)")*0.20 + S_PEG_inv*0.10)
+    # Q_영업이익_YoY(20%) + 실적가속_연속(20%) + 영업이익_CAGR(15%) + RS_등급(25%) + PEG역순(20%)
+    df["고성장_점수"] = (S_QOpYoY*0.20 + S_Accel*0.20 + S_OpCAGR*0.15 + S_RS*0.25 + S_PEG_inv*0.20)
     df["현금배당_점수"] = (S_FCF*0.3 + S_Div*0.3 + get_rank("DPS_CAGR")*0.2 + get_rank("F스코어")*0.1 + get_rank("부채비율(%)", False)*0.1)
     # 턴어라운드: 이익률변동폭(20%) + 흑자전환(20%) + 스마트머니승률(20%) + GPM변화(15%) + F스코어(15%) + 괴리율(10%)
     df["턴어라운드_점수"] = (
@@ -909,22 +916,65 @@ def calc_strategy_scores(df):
     return df
 
 def apply_leaders_screen(df):
-    # 시장 주도주: 대형주 + 유동성 + 수익성 + RS 상위 30%
+    # 시장 주도주: 대형주 + 유동성 + 수익성 + RS 상위 20% + 수급강도 양수
     mask = (df["시가총액"]>=100_000_000_000) & (df["TTM_순이익"]>0) & (df["주도주_점수"]>0)
-    # 거래대금이 있으면 추가 필터 (없으면 무시 — NaN = 데이터 없음 → 통과)
-    if "거래대금_20일평균" in df.columns:
-        mask = mask & ((df["거래대금_20일평균"] > 100_000_000) | df["거래대금_20일평균"].isna())
-    # RS_등급이 있을 때만 상위 30% 필터 적용 (데이터 없으면 통과)
+    # RS_등급 상위 20% (기존 70 → 80)
     if "RS_등급" in df.columns and df["RS_등급"].notna().any():
-        mask = mask & ((df["RS_등급"].fillna(0) >= 70) | (df["RS_등급"].isna()))
-    return df[mask].sort_values("주도주_점수", ascending=False)
+        mask = mask & ((df["RS_등급"].fillna(0) >= 80) | (df["RS_등급"].isna()))
+    # 거래대금 5억 이상 (기존 1억 → 5억)
+    if "거래대금_20일평균" in df.columns:
+        mask = mask & ((df["거래대금_20일평균"] > 500_000_000) | df["거래대금_20일평균"].isna())
+    # 수급강도 양수 (외국인+기관 순매수)
+    if "수급강도" in df.columns:
+        mask = mask & (df["수급강도"].fillna(0) > 0)
+    # 최대 100종목으로 제한
+    return df[mask].sort_values("주도주_점수", ascending=False).head(100)
 
 def apply_quality_value_screen(df):
-    mask = (df["ROE(%)"]>=10) & (df["PEG"].fillna(99)<1.5) & (df["PER"].between(1, 40)) & (df["F스코어"]>=4) & (df["시가총액"]>=50_000_000_000)
-    return df[mask].sort_values("우량가치_점수", ascending=False)
+    # 금융주/지주사 판별: 종목명 키워드 OR 유동비율 데이터 없음(금융업 구조적 특성)
+    is_finance = (
+        df["종목명"].str.contains("지주|금융|은행|증권|생명|화재", na=False)
+        | df["유동비율(%)"].isna()
+        | (df["유동비율(%)"].fillna(0) == 0)
+    )
+    # Track A: 일반 기업 (제조/서비스) — 육각형 우량 룰
+    mask_general = (
+        (~is_finance)
+        & (df["ROIC(%)"].fillna(0) >= 10)                   # 그린블라트: ROIC 10%+ 허들 (12→10 완화)
+        & (df["F스코어"].fillna(0) >= 5)                    # 피오트로스키: 9점 중 5점 이상 (F3/F4가 현금흐름 검증 포함)
+        & (df["PEG"].fillna(99) < 1.2)                     # 피터 린치: 성장 대비 저평가 (NaN은 검증불가로 제외)
+        & (df["부채비율(%)"].fillna(999) < 120)             # 레버리지 제한
+        & (df["유동비율(%)"].fillna(0) > 120)               # 단기 파산 리스크 차단
+        & (df["순이익_당기양수"].fillna(0) == 1)            # 당기 흑자
+        & (df["순이익_전년음수"].fillna(0) == 0)            # 전년도 흑자 (연속 흑자)
+        & (df["시가총액"].fillna(0) >= 100_000_000_000)     # 1000억 이상
+    )
+    # Track B: 금융주/지주사 전용 (버핏의 은행주 선별 잣대)
+    mask_finance = (
+        is_finance
+        & (df["ROE(%)"].fillna(0) >= 8)                    # 금융주: ROIC 대신 ROE 방어력
+        & (df["PBR"].fillna(99) < 1.5)                     # 한국 금융주 현실 감안 (1.0→1.5 완화)
+        & (df["배당수익률(%)"].fillna(0) >= 2.0)            # 주주환원: 현금배당 최소 2% (한국 금융주 현실)
+        & (df["F스코어"].fillna(0) >= 4)                   # 유동성 왜곡 감안 4점으로 완화
+        & (df["순이익_당기양수"].fillna(0) == 1)            # 연속 흑자 필수
+        & (df["순이익_전년음수"].fillna(0) == 0)
+        & (df["시가총액"].fillna(0) >= 300_000_000_000)     # 3000억 이상 (금융 소형주 제거)
+    )
+    return df[mask_general | mask_finance].sort_values("우량가치_점수", ascending=False)
 
 def apply_growth_mom_screen(df):
-    mask = ((df.get("매출_CAGR",0)>=15) | (df.get("영업이익_CAGR",0)>=15)) & (df.get("Q_영업이익_YoY(%)",0)>0) & (df["MA20_이격도(%)"]>= -5) & (df["시가총액"]>=50_000_000_000)
+    mask = (
+        # 1. 외형과 내실의 동반 성장 (AND 유지, 기준 10%로 현실화)
+        (df["매출_CAGR"].fillna(0) >= 10)
+        & (df["영업이익_CAGR"].fillna(0) >= 10)
+        # 2. 최근 분기 실적 성장 (역성장 제외)
+        & (df["Q_영업이익_YoY(%)"].fillna(0) > 0)
+        # 3. 시장 주도 모멘텀 (70 -> 50: 시장 평균 이상이면 후보군 포함)
+        & (df["RS_등급"].fillna(0) >= 50)
+        # 4. 리스크 방어 (흑자도산 방지)
+        & (df["TTM_영업CF"].fillna(-1) > 0)
+        & (df["시가총액"].fillna(0) >= 50_000_000_000)
+    )
     return df[mask].sort_values("고성장_점수", ascending=False)
 
 def apply_cash_div_screen(df):
@@ -953,7 +1003,7 @@ def save_to_excel(df, filepath, sheet_name="Result"):
     col_groups = {
         "기본정보": ["종목코드", "종목명", "종가", "시가총액", "상장주식수", "데이터_연수"],
         "주요지표": ["PER", "PBR", "PSR", "PEG", "PER_이상", "ROE(%)", "EPS", "BPS",
-                   "부채비율(%)", "영업이익률(%)", "이익수익률(%)", "FCF수익률(%)",
+                   "부채비율(%)", "유동비율(%)", "영업이익률(%)", "이익수익률(%)", "FCF수익률(%)",
                    "배당수익률(%)", "이익품질_양호", "이자보상배율", "현금전환율(%)", "CAPEX비율(%)"],
         "F스코어": ["F스코어", "F1_수익성", "F2_영업CF", "F3_ROA개선", "F4_이익품질", "F5_레버리지", "F6_유동성", "F7_희석없음", "F8_매출총이익률", "F9_자산회전율"],
         "수급/거래": ["수급강도", "외인순매수_20d", "기관순매수_20d", "거래대금_20일평균", "거래대금_증감(%)"],
