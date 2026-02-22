@@ -7,7 +7,12 @@
       "WebFetch(domain:pypi.org)",
       "Bash(find:*)",
       "Bash(grep:*)",
-      "Bash(Remove-Item \"c:\\\\Users\\\\limjk\\\\Quant-service-main\\\\=1.0\" -ErrorAction SilentlyContinue)"
+      "Bash(Remove-Item \"c:\\\\Users\\\\limjk\\\\Quant-service-main\\\\=1.0\" -ErrorAction SilentlyContinue)",
+      "Bash(PYTHONIOENCODING=utf-8 python -X utf8:*)",
+      "Bash(PYTHONIOENCODING=utf-8 python:*)",
+      "Read(//c/Users/limjk/AppData/Local/Temp/claude/c--Users-limjk-Quant-service-main/tasks/**)",
+      "Bash(iconv:*)",
+      "Read(//c/Users/limjk/.claude/plans/**)"
     ]
   }
 }

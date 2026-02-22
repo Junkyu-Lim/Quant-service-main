@@ -45,7 +45,7 @@ _pipeline: dict = {
 DISPLAY_COLS = [
     "종목코드", "종목명", "시장구분", "종가", "시가총액",
     "PER", "PBR", "PSR", "PEG", "ROE(%)", "EPS", "BPS",
-    "부채비율(%)", "영업이익률(%)", "이익수익률(%)", "FCF수익률(%)",
+    "부채비율(%)", "유동비율(%)", "영업이익률(%)", "이익수익률(%)", "FCF수익률(%)",
     "배당수익률(%)", "이익품질_양호", "이자보상배율", "현금전환율(%)", "CAPEX비율(%)",
     "부채상환능력", "F스코어",
     "F1_수익성", "F2_영업CF", "F3_ROA개선", "F4_이익품질",
@@ -322,27 +322,57 @@ def _apply_screen_filter(df: pd.DataFrame, name: str) -> pd.DataFrame:
             (df["시가총액"].fillna(0) >= 100_000_000_000)
             & (df["TTM_순이익"].fillna(0) > 0)
         )
-        # 거래대금이 있으면 추가 필터 (없으면 무시)
-        if "거래대금_20일평균" in df.columns and df["거래대금_20일평균"].notna().any():
-            mask = mask & ((df["거래대금_20일평균"].fillna(0) > 100_000_000) | (df["거래대금_20일평균"].isna()))
-        # RS_등급 상위 30% 필터 (데이터 있을 때만 적용, NaN 종목은 통과)
+        # RS_등급 상위 20% (기존 70 → 80)
         if "RS_등급" in df.columns and df["RS_등급"].notna().any():
-            mask = mask & ((df["RS_등급"].fillna(0) >= 70) | (df["RS_등급"].isna()))
-        return df[mask]
+            mask = mask & ((df["RS_등급"].fillna(0) >= 80) | (df["RS_등급"].isna()))
+        # 거래대금 5억 이상 (기존 1억 → 5억)
+        if "거래대금_20일평균" in df.columns and df["거래대금_20일평균"].notna().any():
+            mask = mask & ((df["거래대금_20일평균"].fillna(0) > 500_000_000) | (df["거래대금_20일평균"].isna()))
+        # 수급강도 양수 (외국인+기관 순매수)
+        if "수급강도" in df.columns:
+            mask = mask & (df["수급강도"].fillna(0) > 0)
+        # 최대 100종목으로 제한
+        return df[mask].sort_values("주도주_점수", ascending=False).head(100)
     elif name == "quality_value":
-        mask = (
-            (df["ROE(%)"].fillna(0) >= 10)
-            & (df["PEG"].fillna(99) < 1.5)
-            & (df["PER"].fillna(0).between(1, 40))
-            & (df["F스코어"].fillna(0) >= 4)
-            & (df["시가총액"].fillna(0) >= 50_000_000_000)
+        is_finance = (
+            df["종목명"].str.contains("지주|금융|은행|증권|생명|화재", na=False)
+            | df["유동비율(%)"].isna()
+            | (df["유동비율(%)"].fillna(0) == 0)
         )
-        return df[mask]
+        mask_general = (
+            (~is_finance)
+            & (df["ROIC(%)"].fillna(0) >= 10)
+            & (df["F스코어"].fillna(0) >= 5)
+            & (df["PEG"].fillna(99) < 1.2)
+            & (df["부채비율(%)"].fillna(999) < 120)
+            & (df["유동비율(%)"].fillna(0) > 120)
+            & (df["순이익_당기양수"].fillna(0) == 1)
+            & (df["순이익_전년음수"].fillna(0) == 0)
+            & (df["시가총액"].fillna(0) >= 100_000_000_000)
+        )
+        mask_finance = (
+            is_finance
+            & (df["ROE(%)"].fillna(0) >= 8)
+            & (df["PBR"].fillna(99) < 1.5)
+            & (df["배당수익률(%)"].fillna(0) >= 2.0)
+            & (df["F스코어"].fillna(0) >= 4)
+            & (df["순이익_당기양수"].fillna(0) == 1)
+            & (df["순이익_전년음수"].fillna(0) == 0)
+            & (df["시가총액"].fillna(0) >= 300_000_000_000)
+        )
+        return df[mask_general | mask_finance]
     elif name == "growth_mom":
         mask = (
-            ((df["매출_CAGR"].fillna(0) >= 15) | (df["영업이익_CAGR"].fillna(0) >= 15))
-            & (df["Q_영업이익_YoY(%)"].fillna(0) > 0)
-            & (df["MA20_이격도(%)"].fillna(-999) >= -5)
+            (df["매출_CAGR"].fillna(0) >= 10)
+            & (df["영업이익_CAGR"].fillna(0) >= 15)
+            & (df["Q_영업이익_YoY(%)"].fillna(0) >= 15)
+            & (df["RS_등급"].fillna(0) >= 70)
+            & (df["ROE(%)"].fillna(0) >= 10)
+            & (df["PEG"].fillna(99) < 2.0)
+            & (df["TTM_영업CF"].fillna(-1) > 0)
+            & (df["F7_희석없음"].fillna(1) == 1)
+            & (df["GPM_변화(pp)"].fillna(0) >= -3.0)
+            & (df["PSR"].fillna(99) < 10.0)
             & (df["시가총액"].fillna(0) >= 50_000_000_000)
         )
         return df[mask]
