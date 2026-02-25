@@ -24,14 +24,15 @@
 
   // ─── 탭 기본 정렬 ─────────────────────────────────────────────────────
   const TAB_DEFAULT_SORT = {
-    all:            "종합점수",
-    leaders:        "종합점수",
-    quality_value:  "종합점수",
-    growth_mom:     "종합점수",
-    cash_div:       "종합점수",
-    turnaround:     "종합점수",
-    multi_strategy: "종합점수",
-    watchlist:      "종합점수",
+    all:              "종합점수",
+    leaders:          "종합점수",
+    quality_value:    "종합점수",
+    growth_mom:       "종합점수",
+    cash_div:         "종합점수",
+    turnaround:       "종합점수",
+    multi_strategy:   "종합점수",
+    forward_covered:  "Fwd_모멘텀_점수",
+    watchlist:        "종합점수",
   };
 
   // ─── 관심종목 ──────────────────────────────────────────────────────────
@@ -79,8 +80,9 @@
     growth_mom:     { title: "🚀 고성장 모멘텀 (Growth)", criteria: "매출/이익 동반성장(10%↑) · RS 50↑ · 흑자도산 방지" },
     cash_div:       { title: "💰 현금배당 (Cash & Div)",  criteria: "FCF수익률 3%↑ · 배당수익률 1%↑ · 부채비율 < 150%" },
     turnaround:     { title: "🔄 턴어라운드 (Turnaround)", criteria: "흑자전환 OR 이익률 급개선 · TTM 순이익 흑자" },
-    multi_strategy: { title: "🏆 Multi-Pick (3관왕 이상)", criteria: "5개 전략 중 3개 이상 동시 선정 종목" },
-    watchlist:      { title: "⭐ 관심 종목",             criteria: "사용자가 직접 추가한 종목" },
+    multi_strategy:  { title: "🏆 Multi-Pick (3관왕 이상)", criteria: "5개 전략 중 3개 이상 동시 선정 종목" },
+    forward_covered: { title: "🔭 Forward Est. (컨센서스 추정치)", criteria: "애널리스트 커버 ~535종목 내 Forward 모멘텀 점수 순위" },
+    watchlist:       { title: "⭐ 관심 종목",             criteria: "사용자가 직접 추가한 종목" },
   };
 
   // ─── 전략별 상세 가이드 콘텐츠 ──────────────────────────────────────────
@@ -178,6 +180,24 @@
         </li>
       </ul>
     `,
+    forward_covered: `
+      <h6>🔭 Forward 컨센서스 추정치 활용법</h6>
+      <p>애널리스트 컨센서스 추정치가 있는 <strong>~535개 커버리지 종목</strong>에 한해 내년도 실적 전망 기준으로 순위를 매깁니다.</p>
+      <ul>
+        <li><strong>⚠️ 커버리지 편향 주의:</strong> 이 탭은 대형·중형주 위주의 애널리스트 커버 종목만 표시됩니다. 소형주·성장 초기 기업은 포함되지 않으며, 기존 5개 전략 탭과 직접 비교하지 마세요.</li>
+        <li><strong>Fwd_모멘텀_점수 구성:</strong>
+          <ul>
+            <li><span class="badge bg-light text-dark border">Fwd_OP성장률</span> × 35% — 영업이익 성장 모멘텀</li>
+            <li><span class="badge bg-light text-dark border">Fwd_ROE%</span> × 25% — 내년 자본수익률</li>
+            <li><span class="badge bg-light text-dark border">Fwd_PER (역순)</span> × 20% — 성장 대비 저평가</li>
+            <li><span class="badge bg-light text-dark border">Fwd_OPM%</span> × 10% — 수익성</li>
+            <li><span class="badge bg-light text-dark border">Fwd_2yr_OP성장</span> × 10% — 2년 성장 지속성</li>
+          </ul>
+        </li>
+        <li><strong>추정치 신뢰도:</strong> 애널리스트 수가 많을수록, 최근 발표일에 가까울수록 신뢰도가 높습니다. 단일 애널리스트 추정치는 변동성이 클 수 있습니다.</li>
+        <li><strong>활용법:</strong> 기존 탭에서 발굴한 종목의 Forward 지표를 확인하여 실적 개선 기대감이 주가에 이미 반영되었는지(Fwd_PER 과도한 할증) 교차 검증하세요.</li>
+      </ul>
+    `,
     watchlist: `
       <h6>⭐ 관심종목 관리</h6>
       <p>직접 선별한 종목들의 현황을 한눈에 모니터링합니다.</p>
@@ -256,7 +276,18 @@
       { key: "가격_점수", label: "가격점수", fmt: "f1" }, { key: "주도주_점수", label: "주도점수", fmt: "f1" },
       { key: "우량가치_점수", label: "우량점수", fmt: "f1" }
     ],
-    // 8. 관심종목 - 종합 모니터링 (10개)
+    // 8. Forward 추정치 - 커버리지 종목 내 모멘텀 (12개)
+    forward_covered: [
+      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" },
+      { key: "종가", label: "현재가", fmt: "int" }, { key: "시가총액", label: "시총", fmt: "eok" },
+      { key: "Fwd_PER", label: "Fwd PER", fmt: "f2" }, { key: "Fwd_PBR", label: "Fwd PBR", fmt: "f2" },
+      { key: "Fwd_ROE(%)", label: "Fwd ROE%", fmt: "f1" }, { key: "Fwd_OPM(%)", label: "Fwd OPM%", fmt: "f1" },
+      { key: "Fwd_영업이익_성장률(%)", label: "Fwd OP성장%", fmt: "f1" },
+      { key: "Fwd_매출_성장률(%)", label: "Fwd 매출성장%", fmt: "f1" },
+      { key: "Fwd_2yr_영업이익_성장(%)", label: "2yr OP성장%", fmt: "f1" },
+      { key: "Fwd_모멘텀_점수", label: "Fwd점수", fmt: "f1" }
+    ],
+    // 9. 관심종목 - 종합 모니터링 (10개)
     watchlist: [
       { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "종가", label: "현재가", fmt: "int" },
       { key: "시가총액", label: "시총", fmt: "eok" }, { key: "PER", label: "PER", fmt: "f2" },
@@ -324,6 +355,17 @@
       "RS_250d":          [v => v > 0, v => v < 0],
       "Composite_RS":     [v => v >= 70, v => v <= 30],
       "RS_등급":          [v => v >= 70, v => v <= 30],
+
+      // Forward 추정치 (커버리지 종목만 유효)
+      "Fwd_PER":                    [v => v > 0 && v <= 12, v => v < 0 || v >= 30],
+      "Fwd_PBR":                    [v => v > 0 && v <= 1.2, v => v >= 3.0],
+      "Fwd_ROE(%)":                 [v => v >= 15, v => v <= 5],
+      "Fwd_OPM(%)":                 [v => v >= 10, v => v <= 0],
+      "Fwd_영업이익_성장률(%)":     [v => v >= 15, v => v <= 0],
+      "Fwd_매출_성장률(%)":         [v => v >= 10, v => v <= 0],
+      "Fwd_순이익_성장률(%)":       [v => v >= 15, v => v <= 0],
+      "Fwd_2yr_영업이익_성장(%)":   [v => v >= 10, v => v <= 0],
+      "Fwd_모멘텀_점수":            [v => v >= 80, v => v <= 40],
 
       // Scores
       "종합점수":      [v => v >= 80, v => v <= 50],
@@ -478,6 +520,19 @@
       "TTM_CAPEX": "최근 4분기 합산 CAPEX.",
       "TTM_FCF": "최근 4분기 합산 FCF.",
 
+      // 10. Forward 컨센서스 추정치 (⚠️ 커버리지 종목만 유효)
+      "컨센서스_커버리지": "애널리스트 컨센서스 추정치 존재 여부 (1=커버, 0=미커버). 커버 종목은 대형·중형주 위주 ~535종목.",
+      "Fwd_PER": "Forward PER. 내년 예상 EPS 기준 주가수익비율. (Good: ≤ 12, Bad: ≥ 30) ⚠️ 커버리지 종목만 유효.",
+      "Fwd_PBR": "Forward PBR. 내년 예상 BPS 기준 주가순자산비율. (Good: ≤ 1.2, Bad: ≥ 3.0) ⚠️ 커버리지 종목만 유효.",
+      "Fwd_EPS": "Forward EPS. 내년 예상 주당순이익(원). ⚠️ 커버리지 종목만 유효.",
+      "Fwd_ROE(%)": "Forward ROE. 내년 예상 자기자본이익률. (Good: ≥ 15%, Bad: ≤ 5%) ⚠️ 커버리지 종목만 유효.",
+      "Fwd_OPM(%)": "Forward 영업이익률. 내년 예상 수익성. (Good: ≥ 10%, Bad: ≤ 0%) ⚠️ 커버리지 종목만 유효.",
+      "Fwd_영업이익_성장률(%)": "TTM 대비 내년 예상 영업이익 성장률. (Good: ≥ 15%, Bad: ≤ 0%) ⚠️ 커버리지 종목만 유효.",
+      "Fwd_매출_성장률(%)": "TTM 대비 내년 예상 매출 성장률. (Good: ≥ 10%, Bad: ≤ 0%) ⚠️ 커버리지 종목만 유효.",
+      "Fwd_순이익_성장률(%)": "TTM 대비 내년 예상 순이익(지배주주) 성장률. (Good: ≥ 15%, Bad: ≤ 0%) ⚠️ 커버리지 종목만 유효.",
+      "Fwd_2yr_영업이익_성장(%)": "내년 대비 내후년 예상 영업이익 성장률(2년 지속 성장 확인). (Good: ≥ 10%, Bad: ≤ 0%) ⚠️ 커버리지 종목만 유효.",
+      "Fwd_모멘텀_점수": "Forward 모멘텀 종합 점수. 커버리지 ~535종목 내 백분위 랭킹. (Good: ≥ 80, Bad: ≤ 40) ⚠️ forward_covered 탭에서만 계산됨.",
+
       // 9. 점수 (Good: ≥ 80, Bad: ≤ 50)
       "종합점수": "전체 전략 종합 점수.",
       "성장성_점수": "성장성 부문 점수.",
@@ -597,17 +652,17 @@
       ]
     },
     {
-      title: "TTM 실적",
+      title: "TTM 실적 (억원)",
       metrics: [
-        { key: "TTM_매출",    label: "TTM 매출",    fmt: "int" },
-        { key: "TTM_영업이익", label: "TTM 영업이익", fmt: "int" },
-        { key: "TTM_순이익",  label: "TTM 순이익",  fmt: "int" },
-        { key: "TTM_영업CF",  label: "TTM 영업CF",  fmt: "int" },
-        { key: "TTM_CAPEX",   label: "TTM CAPEX",   fmt: "int" },
-        { key: "TTM_FCF",     label: "TTM FCF",     fmt: "int" },
-        { key: "자본",        label: "자본",        fmt: "int" },
-        { key: "부채",        label: "부채",        fmt: "int" },
-        { key: "자산총계",    label: "자산총계",    fmt: "int" },
+        { key: "TTM_매출",    label: "TTM 매출 (억)",    fmt: "int" },
+        { key: "TTM_영업이익", label: "TTM 영업이익 (억)", fmt: "int" },
+        { key: "TTM_순이익",  label: "TTM 순이익 (억)",  fmt: "int" },
+        { key: "TTM_영업CF",  label: "TTM 영업CF (억)",  fmt: "int" },
+        { key: "TTM_CAPEX",   label: "TTM CAPEX (억)",   fmt: "int" },
+        { key: "TTM_FCF",     label: "TTM FCF (억)",     fmt: "int" },
+        { key: "자본",        label: "자본 (억)",        fmt: "int" },
+        { key: "부채",        label: "부채 (억)",        fmt: "int" },
+        { key: "자산총계",    label: "자산총계 (억)",    fmt: "int" },
       ]
     },
     {
@@ -651,6 +706,21 @@
         { key: "GPM_전년(%)",      label: "GPM 전년%",      fmt: "f1" },
         { key: "GPM_변화(pp)",     label: "GPM 변화(pp)",   fmt: "f1" },
         { key: "퀄리티_턴어라운드", label: "퀄리티 턴어라운드", fmt: "flag" },
+      ]
+    },
+    {
+      title: "Forward 컨센서스 추정치 ⚠️",
+      metrics: [
+        { key: "컨센서스_커버리지",          label: "커버리지",       fmt: "flag" },
+        { key: "Fwd_PER",                    label: "Fwd PER",        fmt: "f2" },
+        { key: "Fwd_PBR",                    label: "Fwd PBR",        fmt: "f2" },
+        { key: "Fwd_EPS",                    label: "Fwd EPS",        fmt: "int" },
+        { key: "Fwd_ROE(%)",                 label: "Fwd ROE%",       fmt: "f1" },
+        { key: "Fwd_OPM(%)",                 label: "Fwd OPM%",       fmt: "f1" },
+        { key: "Fwd_영업이익_성장률(%)",     label: "Fwd OP성장%",    fmt: "f1" },
+        { key: "Fwd_매출_성장률(%)",         label: "Fwd 매출성장%",  fmt: "f1" },
+        { key: "Fwd_순이익_성장률(%)",       label: "Fwd NP성장%",    fmt: "f1" },
+        { key: "Fwd_2yr_영업이익_성장(%)",   label: "2yr OP성장%",    fmt: "f1" },
       ]
     },
   ];
@@ -718,6 +788,17 @@
       fields: [
         { col: "시가총액", label: "시가총액(억)", unit: 1e8 },
         { col: "종합점수", label: "종합점수" },
+      ]
+    },
+    {
+      key: "forward", label: "Forward 추정치 ⚠️",
+      fields: [
+        { col: "Fwd_PER",                label: "Fwd PER" },
+        { col: "Fwd_PBR",                label: "Fwd PBR" },
+        { col: "Fwd_ROE(%)",             label: "Fwd ROE%" },
+        { col: "Fwd_OPM(%)",             label: "Fwd OPM%" },
+        { col: "Fwd_영업이익_성장률(%)", label: "Fwd OP성장%" },
+        { col: "Fwd_매출_성장률(%)",     label: "Fwd 매출성장%" },
       ]
     },
   ];
@@ -942,13 +1023,13 @@
   function buildHeader() {
     const cols = COLUMNS[currentScreen] || COLUMNS.all;
     headerRow.innerHTML =
-      `<th width="20"></th><th width="30">★</th>` +
+      `<tr><th width="20"></th><th width="30">★</th>` +
       cols.map(c => {
         const arrow = sortCol === c.key ? (sortOrder === "desc" ? " ↓" : " ↑") : "";
         const tip = METRIC_TOOLTIPS[c.key]
           ? ` data-bs-toggle="tooltip" data-bs-placement="bottom" title="${METRIC_TOOLTIPS[c.key]}"` : "";
         return `<th data-col="${c.key}" style="cursor:pointer; user-select:none;"${tip}>${c.label}<span class="sort-arrow text-muted small">${arrow}</span></th>`;
-      }).join("");
+      }).join("") + `</tr>`;
 
     headerRow.querySelectorAll("th[data-col]").forEach(th => {
       th.addEventListener("click", () => {
