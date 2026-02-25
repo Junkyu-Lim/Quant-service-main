@@ -9,7 +9,7 @@
     .val-pos { color: #d63384; font-weight: 600; }
     .val-neg { color: #0d6efd; font-weight: 600; }
     .nav-tabs .nav-link.active { font-weight: bold; border-bottom: 3px solid #0d6efd; }
-    th { font-size: 0.85rem; background-color: #f8f9fa; position: sticky; top: 0; z-index: 2; }
+    th { font-size: 0.85rem; }
     td { font-size: 0.9rem; vertical-align: middle; }
     .metric-pill { display: inline-block; padding: 4px 8px; margin: 2px; border-radius: 12px; background: #f1f3f5; font-size: 0.8rem; text-align: center; min-width: 80px; cursor: help; }
     .metric-pill .lbl { color: #6c757d; font-size: 0.7rem; }
@@ -44,6 +44,7 @@
         <li class="nav-item"><a class="nav-link" href="#" data-screen="cash_div">현금배당</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-screen="turnaround">턴어라운드</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-screen="multi_strategy">Multi-Pick</a></li>
+        <li class="nav-item"><a class="nav-link" href="#" data-screen="forward_covered">🔭 Forward Est.</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-screen="watchlist">관심종목 <span id="cnt-watchlist" class="badge bg-warning text-dark rounded-pill">0</span></a></li>
       </ul>
       <div class="mt-2 p-2 bg-light rounded small d-flex justify-content-between align-items-center">
@@ -101,9 +102,9 @@
       <button class="btn btn-sm btn-outline-secondary ms-1" id="btn-compare-clear">선택 해제</button>
     </div>
 
-    <div class="card-body p-0 table-responsive">
+    <div class="card-body p-0" style="overflow: auto; max-height: calc(100vh - 280px);">
       <table class="table table-hover table-striped mb-0 text-center" id="stock-table" style="min-width: 1000px;">
-        <thead id="table-header"></thead>
+        <thead id="table-header" style="position: sticky; top: 0; z-index: 10;"></thead>
         <tbody id="stock-tbody"></tbody>
       </table>
     </div>

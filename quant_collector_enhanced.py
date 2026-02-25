@@ -550,20 +550,29 @@ def fetch_fs(ticker: str) -> list[dict]:
 # ═════════════════════════════════════════════
 
 def _extract_indicator_rows(
-    df: pd.DataFrame, ticker: str, source: str
+    df: pd.DataFrame, ticker: str, source: str, freq: str = "y"
 ) -> list[dict]:
     """지표 테이블 → dict 리스트"""
     if df is None or df.empty or df.shape[1] < 2:
         return []
 
-    # [수정] MultiIndex 컬럼(두 줄 이상의 헤더) 처리
-    # 헤더가 여러 줄일 경우, 가장 마지막 줄(날짜가 있는 줄)만 남기고 평탄화
+    # MultiIndex 컬럼 평탄화 (충돌 방지: 동일 inner 컬럼명은 outer level로 구분)
     if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(-1)
+        new_cols, seen = [], {}
+        for col_tuple in df.columns:
+            inner = str(col_tuple[-1])
+            if inner not in seen:
+                seen[inner] = 0
+                new_cols.append(inner)
+            else:
+                outer = str(col_tuple[0]) if len(col_tuple) > 1 else ""
+                new_cols.append(f"{outer}_{inner}" if outer else f"{inner}_{seen[inner]}")
+                seen[inner] += 1
+        df.columns = new_cols
 
     # 첫 번째 컬럼을 '계정'으로 이름 변경
     df = df.rename(columns={df.columns[0]: "계정"})
-    
+
     # '계정' 컬럼이 문자열인지 확인 및 공백 제거
     df["계정"] = df["계정"].astype(str).str.strip()
 
@@ -581,10 +590,17 @@ def _extract_indicator_rows(
         if not account or account.lower() in ("nan", "none"):
             continue
         val = safe_float(r["값"])
+        # 추정치 행: HIGHLIGHT → FORWARD_Y / FORWARD_Q, 그 외 → {source}_E
+        if is_est and "HIGHLIGHT" in source:
+            ind_type = f"FORWARD_{freq.upper()}"
+        elif is_est:
+            ind_type = f"{source}_E"
+        else:
+            ind_type = source
         rows.append({
             "종목코드": ticker,
             "기준일": biz_date,
-            "지표구분": f"{source}_E" if is_est else source,
+            "지표구분": ind_type,
             "계정": account,
             "값": val,
         })
@@ -602,11 +618,11 @@ def fetch_indicators(ticker: str) -> list[dict]:
     )
     main_tables = load_tables(url_main)
 
+    highlight_annual, highlight_quarterly = False, False
     for t in main_tables:
         if not isinstance(t, pd.DataFrame) or t.shape[0] < 2 or t.shape[1] < 2:
             continue
-        
-        # [수정] 안전하게 문자열로 변환 (float/NaN 오류 방지)
+
         col1_list = [str(x) for x in t.iloc[:, 0].values]
         col1_text = " ".join(col1_list)
 
@@ -614,9 +630,26 @@ def fetch_indicators(ticker: str) -> list[dict]:
         has_rev = "매출액" in col1_text or "영업수익" in col1_text
         has_roe = "ROE" in col1_text
         has_op = "영업이익" in col1_text
-        if has_rev or has_roe or has_op:
-            rows += _extract_indicator_rows(t, ticker, "HIGHLIGHT")
-            break  # 첫 번째 매칭만
+        if not (has_rev or has_roe or has_op):
+            continue
+
+        # 컬럼 헤더 월(month) 패턴으로 연간 vs 분기 구분
+        cols = t.columns
+        col_strs = [str(c[-1]) for c in cols] if isinstance(cols, pd.MultiIndex) else [str(c) for c in cols]
+        months = [int(m.group(1)) for cs in col_strs if (m := re.search(r'\d{4}[./](\d{2})', cs))]
+
+        is_annual = bool(months) and all(mo == 12 for mo in months)
+        is_quarterly = bool(months) and any(mo in (3, 6, 9) for mo in months)
+
+        if is_annual and not highlight_annual:
+            rows += _extract_indicator_rows(t, ticker, "HIGHLIGHT", freq="y")
+            highlight_annual = True
+        elif is_quarterly and not highlight_quarterly:
+            rows += _extract_indicator_rows(t, ticker, "HIGHLIGHT", freq="q")
+            highlight_quarterly = True
+
+        if highlight_annual and highlight_quarterly:
+            break
 
     # DPS (배당금) — Highlight 테이블에서 별도 추출
     for t in main_tables:

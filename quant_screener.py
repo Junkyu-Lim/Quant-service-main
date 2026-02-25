@@ -68,7 +68,9 @@ EXACT_ACCOUNTS = {
     "단기금융상품": ["단기금융상품", "단기투자자산", "단기금융자산"],
 }
 
-EXCLUDE_KEYWORDS = ["증가율", "(-1Y)", "(평균)", "률(", "비율", "배율", "(-1A", "(-1Q", "/ 수정평균"]
+EXCLUDE_KEYWORDS = ["증가율", "(-1Y)", "(평균)", "률(", "비율", "배율", "(-1A", "(-1Q", "/ 수정평균", "잉여금", "조정",
+                    "연율화", "자본금"]
+_UNIT_SUFFIX_RE = re.compile(r'\((?:억원|백만원|원|천억원|조원)\)$')
 
 # ═════════════════════════════════════════════
 # 유틸리티 (v8 원본 로직)
@@ -98,7 +100,7 @@ def load_table(prefix: str) -> pd.DataFrame:
 def _normalize_account(name: str) -> str:
     name = str(name).strip()
     name = re.sub(r'^\([+\-±]\)\s*', '', name)
-    name = name.replace(' ', '')
+    name = name.replace(' ', '').replace('\n', '').replace('\t', '')
     return name
 
 def find_account_value(df, target_key, date_filter=None):
@@ -107,25 +109,48 @@ def find_account_value(df, target_key, date_filter=None):
     norm_targets = {_normalize_account(t) for t in targets}
     work = df.copy()
     if date_filter is not None: work = work[work["기준일"].isin(date_filter)]
-    
-    mask = work["계정"].isin(targets)
-    matched = work[mask]
-    if matched.empty:
-        matched = work[work["계정"].apply(lambda n: _normalize_account(n) in norm_targets)]
-    if matched.empty:
-        def _startswith_any(name):
-            norm = _normalize_account(str(name))
-            return any(norm.startswith(t) for t in norm_targets)
-        matched = work[work["계정"].apply(_startswith_any)]
-
-    if matched.empty: return {}
     # 우선순위: EXACT_ACCOUNTS 리스트 순서대로 정렬 후 dedup → 지배주주순이익 등 우선 선택
     priority_map = {_normalize_account(t): i for i, t in enumerate(targets)}
-    matched = matched.copy()
-    matched["_priority"] = matched["계정"].apply(lambda n: priority_map.get(_normalize_account(n), 999))
-    matched = matched.sort_values(["종목코드", "기준일", "_priority"])
-    matched = matched.drop_duplicates(["종목코드", "기준일"], keep="first")
-    return {str(r["기준일"]): (float(r["값"]) if pd.notna(r["값"]) else None) for _, r in matched.iterrows()}
+
+    def _finalize(m, key_fn=None):
+        m = m.copy()
+        if key_fn:
+            m["_priority"] = m["계정"].apply(lambda n: priority_map.get(key_fn(n), 999))
+        else:
+            m["_priority"] = m["계정"].apply(lambda n: priority_map.get(_normalize_account(n), 999))
+        m = m.sort_values(["종목코드", "기준일", "_priority"])
+        m = m.drop_duplicates(["종목코드", "기준일"], keep="first")
+        return {str(r["기준일"]): (float(r["값"]) if pd.notna(r["값"]) else None) for _, r in m.iterrows()}
+
+    # Step 1: exact match
+    matched = work[work["계정"].isin(targets)]
+    if not matched.empty:
+        return _finalize(matched)
+
+    # Step 2: normalized match (공백/개행 제거 후)
+    matched = work[work["계정"].apply(lambda n: _normalize_account(n) in norm_targets)]
+    if not matched.empty:
+        return _finalize(matched)
+
+    # Step 2.5: 단위접미사 제거 후 재매칭 — "자본(억원)"→"자본", "당기순이익(억원)"→"당기순이익"
+    # startswith보다 먼저 시도하여 "자본잉여금", "자본조정" 오매칭 방지
+    def _strip_unit(n):
+        return _UNIT_SUFFIX_RE.sub('', _normalize_account(str(n)))
+    matched = work[work["계정"].apply(lambda n: _strip_unit(n) in norm_targets)]
+    if not matched.empty:
+        return _finalize(matched, key_fn=_strip_unit)
+
+    # Step 3: startswith fallback (EXCLUDE_KEYWORDS 적용으로 증가율/잉여금/조정 등 제외)
+    def _startswith_any(name):
+        raw = str(name)
+        if any(kw in raw for kw in EXCLUDE_KEYWORDS):
+            return False
+        norm = _normalize_account(raw)
+        return any(norm.startswith(t) for t in norm_targets)
+    matched = work[work["계정"].apply(_startswith_any)]
+    if matched.empty:
+        return {}
+    return _finalize(matched)
 
 def preprocess_indicators(ind_df):
     if ind_df.empty: return ind_df
@@ -160,6 +185,10 @@ def calc_cagr(series_dict, min_years=2):
 def count_consecutive_growth(series_dict):
     if not series_dict or len(series_dict) < 2: return 0
     vals = [series_dict[d] for d in sorted(series_dict.keys())]
+    # 최신 미보고 기간(None)은 연속성장 카운트에서 제외
+    while vals and vals[-1] is None:
+        vals.pop()
+    if len(vals) < 2: return 0
     count = 0
     for i in range(len(vals) - 1, 0, -1):
         if vals[i] is None or vals[i - 1] is None: break
@@ -186,9 +215,10 @@ def calc_quarterly_yoy(q_data, key):
 def calc_ttm_yoy(q_data, key):
     res = {"ttm_current": np.nan, "ttm_prev": np.nan, "ttm_yoy": np.nan}
     vals = find_account_value(q_data, key)
-    if len(vals) < 8: return res
+    if len(vals) < 4: return res
     dates = sorted(vals.keys())
-    last4, prev4 = dates[-4:], dates[-8:-4]
+    last4 = dates[-4:]
+    prev4 = dates[-8:-4] if len(dates) >= 8 else []
     last4_valid = [d for d in last4 if d in vals and vals[d] is not None]
     prev4_valid = [d for d in prev4 if d in vals and vals[d] is not None]
     ttm_curr = sum(vals[d] for d in last4_valid)
@@ -210,16 +240,33 @@ def analyze_one_stock(ticker, ind_grp, fs_grp):
     if has_ind:
         q_data = ind_grp[ind_grp["지표구분"] == "RATIO_Q"]
         y_data = ind_grp[ind_grp["지표구분"] == "RATIO_Y"]
-        
+        hl_data = ind_grp[ind_grp["지표구분"].isin(["HIGHLIGHT", "HIGHLIGHT_E", "FORWARD_Y", "FORWARD_Q"])]
+
+        _fs_y = fs_grp[fs_grp["주기"] == "y"] if has_fs and "주기" in fs_grp.columns else pd.DataFrame()
+
+        def _yr(key):
+            v = find_account_value(y_data, key)
+            if not v:
+                v = find_account_value(hl_data, key)
+            if not v and not _fs_y.empty:
+                v = find_account_value(_fs_y, key)
+            return v
+
+        _fs_q = fs_grp[fs_grp["주기"] == "q"] if has_fs and "주기" in fs_grp.columns else pd.DataFrame()
+
         for label, key in [("매출", "매출액"), ("영업이익", "영업이익"), ("순이익", "순이익")]:
             qyoy = calc_quarterly_yoy(q_data, key)
+            if not qyoy["yoy_series"] and not _fs_q.empty:
+                qyoy = calc_quarterly_yoy(_fs_q, key)
             res[f"Q_{label}_YoY(%)"] = qyoy["latest_yoy"]
             res[f"Q_{label}_연속YoY성장"] = qyoy["consecutive_yoy_growth"]
             ttmy = calc_ttm_yoy(q_data, key)
+            if pd.isna(ttmy["ttm_current"]) and not _fs_q.empty:
+                ttmy = calc_ttm_yoy(_fs_q, key)
             res[f"TTM_{label}_YoY(%)"] = ttmy["ttm_yoy"]
             val = ttmy["ttm_current"]
             if pd.isna(val):
-                y_vals = find_account_value(y_data, key)
+                y_vals = _yr(key)
                 if y_vals: val = y_vals[max(y_vals.keys())]
             res[f"TTM_{label}"] = val
         res["최근분기"] = sorted(q_data["기준일"].unique())[-1] if not q_data.empty else ""
@@ -240,7 +287,11 @@ def analyze_one_stock(ticker, ind_grp, fs_grp):
             return delta_latest, consecutive
 
         op_qyoy = calc_quarterly_yoy(q_data, "영업이익")
+        if not op_qyoy["yoy_series"] and not _fs_q.empty:
+            op_qyoy = calc_quarterly_yoy(_fs_q, "영업이익")
         rev_qyoy = calc_quarterly_yoy(q_data, "매출액")
+        if not rev_qyoy["yoy_series"] and not _fs_q.empty:
+            rev_qyoy = calc_quarterly_yoy(_fs_q, "매출액")
         op_accel, op_consec = _calc_acceleration(op_qyoy)
         rev_accel, rev_consec = _calc_acceleration(rev_qyoy)
         res["영업이익_가속도"] = op_accel
@@ -257,22 +308,22 @@ def analyze_one_stock(ticker, ind_grp, fs_grp):
         res["_rev_consec_accel"] = rev_consec
         res["_is_q4"] = is_q4
 
-        total_assets_s = find_account_value(y_data, "자산총계")
-        equity_s = find_account_value(y_data, "자본")
-        debt_s = find_account_value(y_data, "부채")
-        current_assets_s = find_account_value(y_data, "유동자산")
-        current_liab_s = find_account_value(y_data, "유동부채")
-        gross_profit_s = find_account_value(y_data, "매출총이익")
-        cash_s = find_account_value(y_data, "현금및현금성자산")
-        stfi_s = find_account_value(y_data, "단기금융상품")
-        interest_s = find_account_value(y_data, "이자비용")
+        total_assets_s = _yr("자산총계")
+        equity_s = _yr("자본")
+        debt_s = _yr("부채")
+        current_assets_s = _yr("유동자산")
+        current_liab_s = _yr("유동부채")
+        gross_profit_s = _yr("매출총이익")
+        cash_s = _yr("현금및현금성자산")
+        stfi_s = _yr("단기금융상품")
+        interest_s = _yr("이자비용")
         res["자산총계"] = total_assets_s[max(total_assets_s.keys())] if total_assets_s else np.nan
         res["자본"] = equity_s[max(equity_s.keys())] if equity_s else np.nan
         res["부채"] = debt_s[max(debt_s.keys())] if debt_s else np.nan
 
-        rev_s = find_account_value(y_data, "매출액")
-        op_s = find_account_value(y_data, "영업이익")
-        ni_s = find_account_value(y_data, "순이익")
+        rev_s = _yr("매출액")
+        op_s = _yr("영업이익")
+        ni_s = _yr("순이익")
         res.update({
             "매출_CAGR": calc_cagr(rev_s), "영업이익_CAGR": calc_cagr(op_s), "순이익_CAGR": calc_cagr(ni_s),
             "매출_연속성장": count_consecutive_growth(rev_s), "영업이익_연속성장": count_consecutive_growth(op_s), "순이익_연속성장": count_consecutive_growth(ni_s),
@@ -305,7 +356,7 @@ def analyze_one_stock(ticker, ind_grp, fs_grp):
             res["순이익_전년음수"] = 0
 
         ocf_s = find_account_value(y_data, "영업CF")
-        if not ocf_s: ocf_s = find_account_value(ind_grp[ind_grp["지표구분"].isin(["HIGHLIGHT", "HIGHLIGHT_E"])], "영업CF")
+        if not ocf_s: ocf_s = find_account_value(ind_grp[ind_grp["지표구분"].isin(["HIGHLIGHT", "HIGHLIGHT_E", "FORWARD_Y", "FORWARD_Q"])], "영업CF")
         if not ocf_s and has_fs: ocf_s = find_account_value(fs_grp[fs_grp["주기"]=="y"], "영업CF")
         capex_s = find_account_value(y_data, "CAPEX")
         if not capex_s and has_fs: capex_s = find_account_value(fs_grp[fs_grp["주기"]=="y"], "CAPEX")
@@ -499,6 +550,64 @@ def analyze_one_stock(ticker, ind_grp, fs_grp):
         res["DPS_최근"] = dps_s[max(dps_s.keys())] if dps_s else np.nan
         res["DPS_CAGR"], res["배당_연속증가"] = calc_cagr(dps_s), count_consecutive_growth(dps_s)
         res["배당_수익동반증가"] = 1 if res["순이익_연속성장"] >= 2 and res["배당_연속증가"] >= 1 else 0
+
+        # ── Forward 컨센서스 추정치 ──────────────────────────────────────────
+        fwd_y_data = ind_grp[ind_grp["지표구분"] == "FORWARD_Y"]
+        # 동적 Forward 연도 선택: RATIO_Y 최신 기준일 이후 연도만
+        latest_ratio_date = ind_grp[ind_grp["지표구분"] == "RATIO_Y"]["기준일"].max() if not ind_grp[ind_grp["지표구분"] == "RATIO_Y"].empty else ""
+        if not fwd_y_data.empty and latest_ratio_date:
+            fwd_dates = sorted([d for d in fwd_y_data["기준일"].unique() if str(d) > str(latest_ratio_date)])
+        elif not fwd_y_data.empty:
+            fwd_dates = sorted(fwd_y_data["기준일"].unique())
+        else:
+            fwd_dates = []
+        fwd_1yr = fwd_dates[0] if fwd_dates else None
+        fwd_2yr = fwd_dates[1] if len(fwd_dates) >= 2 else None
+
+        def _fwd_val(date, account_keyword):
+            """FORWARD_Y 데이터에서 계정명 키워드로 값 추출"""
+            if date is None or fwd_y_data.empty:
+                return np.nan
+            rows = fwd_y_data[fwd_y_data["기준일"] == date]
+            if rows.empty:
+                return np.nan
+            # 계정명에 keyword가 포함된 행 찾기
+            matched = rows[rows["계정"].str.contains(account_keyword, na=False, regex=False)]
+            if matched.empty:
+                return np.nan
+            return matched.iloc[0]["값"]
+
+        if fwd_1yr is not None:
+            res["Fwd_PER"] = _fwd_val(fwd_1yr, "PER")
+            res["Fwd_PBR"] = _fwd_val(fwd_1yr, "PBR")
+            res["Fwd_EPS"] = _fwd_val(fwd_1yr, "EPS")
+            res["Fwd_ROE(%)"] = _fwd_val(fwd_1yr, "ROE")
+            res["Fwd_OPM(%)"] = _fwd_val(fwd_1yr, "영업이익률")
+            # 실제 유효한 값이 하나라도 있어야 커버리지=1 (행만 존재하고 모두 NaN인 종목 제외)
+            res["컨센서스_커버리지"] = 1 if pd.notna(res["Fwd_PER"]) or pd.notna(res["Fwd_ROE(%)"]) or pd.notna(res["Fwd_EPS"]) else 0
+            # 성장률 계산 (TTM 대비)
+            fwd_op = _fwd_val(fwd_1yr, "영업이익")
+            fwd_rev = _fwd_val(fwd_1yr, "매출액")
+            fwd_ni = _fwd_val(fwd_1yr, "지배주주순이익")
+            if pd.isna(fwd_ni):
+                fwd_ni = _fwd_val(fwd_1yr, "당기순이익")
+            ttm_op = res.get("TTM_영업이익", np.nan)
+            ttm_rev = res.get("TTM_매출", np.nan)
+            ttm_ni = res.get("TTM_순이익", np.nan)
+            res["Fwd_영업이익_성장률(%)"] = (fwd_op / ttm_op - 1) * 100 if pd.notna(fwd_op) and pd.notna(ttm_op) and ttm_op != 0 else np.nan
+            res["Fwd_매출_성장률(%)"] = (fwd_rev / ttm_rev - 1) * 100 if pd.notna(fwd_rev) and pd.notna(ttm_rev) and ttm_rev != 0 else np.nan
+            res["Fwd_순이익_성장률(%)"] = (fwd_ni / ttm_ni - 1) * 100 if pd.notna(fwd_ni) and pd.notna(ttm_ni) and ttm_ni != 0 else np.nan
+            # 2년 Forward 성장
+            if fwd_2yr is not None:
+                fwd_op_2yr = _fwd_val(fwd_2yr, "영업이익")
+                res["Fwd_2yr_영업이익_성장(%)"] = (fwd_op_2yr / fwd_op - 1) * 100 if pd.notna(fwd_op_2yr) and pd.notna(fwd_op) and fwd_op != 0 else np.nan
+            else:
+                res["Fwd_2yr_영업이익_성장(%)"] = np.nan
+        else:
+            res["컨센서스_커버리지"] = 0
+            for col in ["Fwd_PER", "Fwd_PBR", "Fwd_EPS", "Fwd_ROE(%)", "Fwd_OPM(%)",
+                        "Fwd_영업이익_성장률(%)", "Fwd_매출_성장률(%)", "Fwd_순이익_성장률(%)", "Fwd_2yr_영업이익_성장(%)"]:
+                res[col] = np.nan
 
     return res
 
@@ -1010,6 +1119,8 @@ def save_to_excel(df, filepath, sheet_name="Result"):
         "점수": ["종합점수", "성장성_점수", "안정성_점수", "가격_점수", "주도주_점수", "우량가치_점수", "고성장_점수", "현금배당_점수", "턴어라운드_점수"],
         "성장추세": ["매출_CAGR", "영업이익_CAGR", "순이익_CAGR", "매출_연속성장", "영업이익_연속성장", "이익률_변동폭", "흑자전환", "순이익_전년음수", "순이익_당기양수"],
         "밸류에이션": ["적정주가_SRIM", "괴리율(%)"],
+        "Forward추정치": ["컨센서스_커버리지", "Fwd_PER", "Fwd_PBR", "Fwd_EPS", "Fwd_ROE(%)", "Fwd_OPM(%)",
+                         "Fwd_영업이익_성장률(%)", "Fwd_매출_성장률(%)", "Fwd_순이익_성장률(%)", "Fwd_2yr_영업이익_성장(%)"],
     }
     # NaN을 None(빈칸)으로 유지하되 숫자형 셀에 별도 포맷 적용
     # — 수식이 성립하지 않는 지표(현금전환율, CAPEX비율 등)는 셀을 비워두고
@@ -1027,7 +1138,7 @@ def save_to_excel(df, filepath, sheet_name="Result"):
         "기본정보": PatternFill("solid", fgColor="D6E4F0"), "주요지표": PatternFill("solid", fgColor="E2EFDA"),
         "F스코어": PatternFill("solid", fgColor="FCE4D6"), "수급/거래": PatternFill("solid", fgColor="FDE9D9"),
         "점수": PatternFill("solid", fgColor="C6EFCE"), "성장추세": PatternFill("solid", fgColor="FFF2CC"),
-        "밸류에이션": PatternFill("solid", fgColor="DAEEF3")
+        "밸류에이션": PatternFill("solid", fgColor="DAEEF3"), "Forward추정치": PatternFill("solid", fgColor="E8D5F5")
     }
     for col_idx, col_name in enumerate(ordered_cols, 1):
         cell = ws.cell(row=1, column=col_idx, value=col_name)

@@ -12,7 +12,12 @@
       "Bash(PYTHONIOENCODING=utf-8 python:*)",
       "Read(//c/Users/limjk/AppData/Local/Temp/claude/c--Users-limjk-Quant-service-main/tasks/**)",
       "Bash(iconv:*)",
-      "Read(//c/Users/limjk/.claude/plans/**)"
+      "Read(//c/Users/limjk/.claude/plans/**)",
+      "Bash(python3:*)",
+      "WebFetch(domain:finance.naver.com)",
+      "WebFetch(domain:www.valueline.co.kr)",
+      "WebFetch(domain:comp.fnguide.com)",
+      "WebFetch(domain:alphasquare.co.kr)"
     ]
   }
 }

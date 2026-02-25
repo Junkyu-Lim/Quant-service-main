@@ -74,6 +74,11 @@ DISPLAY_COLS = [
     "TTM_매출", "TTM_영업이익", "TTM_순이익", "TTM_영업CF", "TTM_CAPEX", "TTM_FCF",
     "자본", "부채", "자산총계",
     "전략수",
+    # Forward 컨센서스 추정치 (애널리스트 커버 종목만 유효)
+    "컨센서스_커버리지",
+    "Fwd_PER", "Fwd_PBR", "Fwd_EPS", "Fwd_ROE(%)", "Fwd_OPM(%)",
+    "Fwd_영업이익_성장률(%)", "Fwd_매출_성장률(%)", "Fwd_순이익_성장률(%)", "Fwd_2yr_영업이익_성장(%)",
+    "Fwd_모멘텀_점수",  # ephemeral: forward_covered 탭에서만 동적 계산됨
 ]
 
 def _load_data() -> pd.DataFrame:
@@ -136,10 +141,11 @@ def api_stocks():
     _default_sort = {
         "leaders": "주도주_점수", "quality_value": "우량가치_점수", "growth_mom": "고성장_점수",
         "cash_div": "현금배당_점수", "turnaround": "턴어라운드_점수", "multi_strategy": "전략수",
+        "forward_covered": "Fwd_모멘텀_점수",
     }
     sort_col = request.args.get("sort", _default_sort.get(screen, "종합점수"))
     filtered = df.copy()
-    if screen in ["leaders", "quality_value", "growth_mom", "cash_div", "turnaround", "multi_strategy"]:
+    if screen in ["leaders", "quality_value", "growth_mom", "cash_div", "turnaround", "multi_strategy", "forward_covered"]:
         filtered = _apply_screen_filter(filtered, screen)
     codes_param = request.args.get("codes", "")
     if codes_param:
@@ -256,7 +262,7 @@ COMPARE_METRICS_META = {
 @app.route("/api/stocks/tab_counts")
 def api_stocks_tab_counts():
     df = _load_data()
-    screens = ["all", "leaders", "quality_value", "growth_mom", "cash_div", "turnaround", "multi_strategy"]
+    screens = ["all", "leaders", "quality_value", "growth_mom", "cash_div", "turnaround", "multi_strategy", "forward_covered"]
     if df.empty:
         return jsonify({s: 0 for s in screens})
     result = {"all": len(df)}
@@ -364,15 +370,10 @@ def _apply_screen_filter(df: pd.DataFrame, name: str) -> pd.DataFrame:
     elif name == "growth_mom":
         mask = (
             (df["매출_CAGR"].fillna(0) >= 10)
-            & (df["영업이익_CAGR"].fillna(0) >= 15)
-            & (df["Q_영업이익_YoY(%)"].fillna(0) >= 15)
-            & (df["RS_등급"].fillna(0) >= 70)
-            & (df["ROE(%)"].fillna(0) >= 10)
-            & (df["PEG"].fillna(99) < 2.0)
+            & (df["영업이익_CAGR"].fillna(0) >= 10)
+            & (df["Q_영업이익_YoY(%)"].fillna(0) > 0)
+            & (df["RS_등급"].fillna(0) >= 50)
             & (df["TTM_영업CF"].fillna(-1) > 0)
-            & (df["F7_희석없음"].fillna(1) == 1)
-            & (df["GPM_변화(pp)"].fillna(0) >= -3.0)
-            & (df["PSR"].fillna(99) < 10.0)
             & (df["시가총액"].fillna(0) >= 50_000_000_000)
         )
         return df[mask]
@@ -410,6 +411,34 @@ def _apply_screen_filter(df: pd.DataFrame, name: str) -> pd.DataFrame:
         res = df[counts >= 3].copy()
         res["전략수"] = counts[counts >= 3]
         return res
+    elif name == "forward_covered":
+        # PER 또는 ROE 값이 실제로 존재하는 종목만 (행만 있고 모두 NaN인 종목 제외)
+        fwd_key = "Fwd_PER" if "Fwd_PER" in df.columns else None
+        fwd_key2 = "Fwd_ROE(%)" if "Fwd_ROE(%)" in df.columns else None
+        if fwd_key is None and fwd_key2 is None:
+            return df.iloc[0:0]
+        mask = pd.Series(False, index=df.index)
+        if fwd_key:
+            mask |= df[fwd_key].notna()
+        if fwd_key2:
+            mask |= df[fwd_key2].notna()
+        covered = df[mask].copy()
+        if covered.empty:
+            return covered
+        def _rank_w(col, asc=True):
+            if col not in covered.columns or covered[col].isna().all():
+                return pd.Series(50.0, index=covered.index)
+            s = covered[col]
+            filled = s.fillna(s.min() - 1 if asc else s.max() + 1)
+            return filled.rank(pct=True) * 100 if asc else (1 - filled.rank(pct=True)) * 100
+        covered["Fwd_모멘텀_점수"] = (
+            _rank_w("Fwd_영업이익_성장률(%)", True) * 0.35
+            + _rank_w("Fwd_ROE(%)",              True) * 0.25
+            + _rank_w("Fwd_PER",                False) * 0.20
+            + _rank_w("Fwd_OPM(%)",              True) * 0.10
+            + _rank_w("Fwd_2yr_영업이익_성장(%)", True) * 0.10
+        )
+        return covered
     return df
 
 if __name__ == "__main__":
