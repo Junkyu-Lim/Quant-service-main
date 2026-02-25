@@ -432,11 +432,19 @@ def _apply_screen_filter(df: pd.DataFrame, name: str) -> pd.DataFrame:
             filled = s.fillna(s.min() - 1 if asc else s.max() + 1)
             return filled.rank(pct=True) * 100 if asc else (1 - filled.rank(pct=True)) * 100
         covered["Fwd_모멘텀_점수"] = (
-            _rank_w("Fwd_영업이익_성장률(%)", True) * 0.35
-            + _rank_w("Fwd_ROE(%)",              True) * 0.25
-            + _rank_w("Fwd_PER",                False) * 0.20
-            + _rank_w("Fwd_OPM(%)",              True) * 0.10
-            + _rank_w("Fwd_2yr_영업이익_성장(%)", True) * 0.10
+            # Forward 성장성/수익성/밸류에이션 (60%)
+            _rank_w("Fwd_영업이익_성장률(%)", True) * 0.25
+            + _rank_w("Fwd_ROE(%)",              True) * 0.15
+            + _rank_w("Fwd_PER",                False) * 0.10
+            + _rank_w("Fwd_OPM(%)",              True) * 0.05
+            + _rank_w("Fwd_2yr_영업이익_성장(%)", True) * 0.05
+            # 안정성 (25%)
+            + _rank_w("이자보상배율",             True) * 0.10
+            + _rank_w("부채비율(%)",              False) * 0.10
+            + _rank_w("F스코어",                 True) * 0.05
+            # 배당성 (15%)
+            + _rank_w("배당수익률(%)",            True) * 0.10
+            + _rank_w("DPS_CAGR",               True) * 0.05
         )
         return covered
     return df
