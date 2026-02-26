@@ -61,6 +61,7 @@ DISPLAY_COLS = [
     "ROIC(%)", "ROIC_전년(%)", "ROIC_개선", "퀄리티_턴어라운드",
     "매출_CAGR", "영업이익_CAGR", "순이익_CAGR", "영업CF_CAGR", "FCF_CAGR",
     "DPS_최근", "DPS_CAGR", "배당_연속증가", "배당_수익동반증가",
+    "배당성향(%)", "배당_경고신호",
     "매출_연속성장", "영업이익_연속성장", "순이익_연속성장", "영업CF_연속성장",
     "이익률_개선", "이익률_급개선", "이익률_변동폭",
     "흑자전환", "영업이익률_최근", "영업이익률_전년",
@@ -337,8 +338,7 @@ def _apply_screen_filter(df: pd.DataFrame, name: str) -> pd.DataFrame:
         # 수급강도 양수 (외국인+기관 순매수)
         if "수급강도" in df.columns:
             mask = mask & (df["수급강도"].fillna(0) > 0)
-        # 최대 100종목으로 제한
-        return df[mask].sort_values("주도주_점수", ascending=False).head(100)
+        return df[mask].sort_values("주도주_점수", ascending=False)
     elif name == "quality_value":
         is_finance = (
             df["종목명"].str.contains("지주|금융|은행|증권|생명|화재", na=False)
@@ -381,15 +381,20 @@ def _apply_screen_filter(df: pd.DataFrame, name: str) -> pd.DataFrame:
         mask = (
             (df["FCF수익률(%)"].fillna(0) >= 3)
             & (df["배당수익률(%)"].fillna(0) >= 1)
-            & (df["부채비율(%)"].fillna(999) < 150)
+            & (df["부채비율(%)"].fillna(999) < 120)        # 150 → 120
             & (df["시가총액"].fillna(0) >= 50_000_000_000)
+            & (df["배당성향(%)"].fillna(999) < 80)          # 신규: Payout Trap 차단
+            & (df["현금전환율(%)"].fillna(0) >= 70)         # 신규: 이익→현금 품질
         )
         return df[mask]
     elif name == "turnaround":
         base_mask = (
             ((df["흑자전환"].fillna(0) == 1) | (df["이익률_급개선"].fillna(0) == 1))
             & (df["TTM_순이익"].fillna(0) > 0)
+            & (df["TTM_영업CF"].fillna(-1) > 0)        # [신규] 실제 현금 창출 검증
+            & (df["Q_매출_YoY(%)"].fillna(0) > -15)    # [신규] 매출 급감(-15%↓) 방지
             & (df["시가총액"].fillna(0) >= 30_000_000_000)
+            & (df["이자보상배율"].fillna(0) > 1.5)      # [신규] 이자 상환 능력
         )
         # 스마트머니 승률 50%+ OR VCP 신호 보조 (데이터 있을 때만, NaN 종목은 통과)
         if "스마트머니_승률" in df.columns:

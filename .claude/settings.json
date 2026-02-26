@@ -17,7 +17,8 @@
       "WebFetch(domain:finance.naver.com)",
       "WebFetch(domain:www.valueline.co.kr)",
       "WebFetch(domain:comp.fnguide.com)",
-      "WebFetch(domain:alphasquare.co.kr)"
+      "WebFetch(domain:alphasquare.co.kr)",
+      "Read(//c/Users/limjk/.claude/projects/c--Users-limjk-Quant-service-main/memory/**)"
     ]
   }
 }

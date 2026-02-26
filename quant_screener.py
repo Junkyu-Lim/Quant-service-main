@@ -665,6 +665,21 @@ def calc_valuation(daily, anal_df, multiplier, shares_df):
 
     shares = df["상장주식수"].replace(0, np.nan)
     df["BPS"], df["EPS"] = (df["자본"] * M) / shares, (df["TTM_순이익"] * M) / shares
+
+    # 배당성향(%) — EPS > 0 인 경우만 계산 (EPS 음수/0이면 의미 없음)
+    df["배당성향(%)"] = np.where(
+        (df["EPS"] > 0) & (df["DPS_최근"] > 0),
+        (df["DPS_최근"] / df["EPS"]) * 100,
+        np.nan,
+    )
+    # 배당_경고신호 — Value Trap(주가폭락 착시) 또는 Payout Trap(이익훼손 배당) 감지
+    df["배당_경고신호"] = np.where(
+        (df["배당성향(%)"].fillna(0) > 80)
+        | ((df["배당수익률(%)"] > 10) & (df["RS_등급"].fillna(50) < 30))
+        | (df["현금전환율(%)"].fillna(100) < 70),
+        1,
+        0,
+    ).astype(int)
     # S-RIM 동적 할인율: config 설정값 사용 (환경변수로 재정의 가능)
     # Ke = 무위험수익률(국고채 3Y) + 시장위험프리미엄
     Ke = config.RISK_FREE_RATE + config.EQUITY_RISK_PREMIUM  # default: 3.5 + 5.5 = 9.0%
@@ -995,16 +1010,38 @@ def calc_strategy_scores(df):
     df["우량가치_점수"] = (S_FCF*0.25 + S_ROIC*0.25 + get_rank("F스코어")*0.20 + get_rank("괴리율(%)")*0.20 + S_PEG_inv*0.10)
     # Q_영업이익_YoY(20%) + 실적가속_연속(20%) + 영업이익_CAGR(15%) + RS_등급(25%) + PEG역순(20%)
     df["고성장_점수"] = (S_QOpYoY*0.20 + S_Accel*0.20 + S_OpCAGR*0.15 + S_RS*0.25 + S_PEG_inv*0.20)
-    df["현금배당_점수"] = (S_FCF*0.3 + S_Div*0.3 + get_rank("DPS_CAGR")*0.2 + get_rank("F스코어")*0.1 + get_rank("부채비율(%)", False)*0.1)
-    # 턴어라운드: 이익률변동폭(20%) + 흑자전환(20%) + 스마트머니승률(20%) + GPM변화(15%) + F스코어(15%) + 괴리율(10%)
-    df["턴어라운드_점수"] = (
-        get_rank("이익률_변동폭") * 0.20
-        + get_rank("흑자전환") * 0.20
-        + S_SmartMoney * 0.20
-        + S_GPM_delta * 0.15
-        + get_rank("F스코어") * 0.15
-        + get_rank("괴리율(%)") * 0.10
+    # 현금배당: FCF(25%) + 배당수익률(20%) + DPS성장(15%) + ROIC해자(15%) + 배당성향역순(10%) + F스코어(10%) + 부채비율(5%)
+    # + 배당_수익동반증가 보너스(최대+5) × 경고신호 페널티 승수(×0.7)
+    S_PayoutInv = get_rank("배당성향(%)", asc=False, zero_if_nan=False)  # 낮을수록 good
+    _raw_div = (
+        S_FCF * 0.25
+        + S_Div * 0.20
+        + get_rank("DPS_CAGR") * 0.15
+        + S_ROIC * 0.15
+        + S_PayoutInv * 0.10
+        + get_rank("F스코어") * 0.10
+        + get_rank("부채비율(%)", False) * 0.05
     )
+    _div_bonus = df.get("배당_수익동반증가", pd.Series(0, index=df.index)).fillna(0) * 5
+    _div_penalty = np.where(df["배당_경고신호"] == 1, 0.7, 1.0)
+    df["현금배당_점수"] = (_raw_div + _div_bonus) * _div_penalty
+    # 턴어라운드 (Grand Master 개편): 이익률변동폭(10%) + 흑자전환(15%) + 스마트머니(15%)
+    #   + GPM변화(10%) + Q_매출_YoY(15%) + 이자보상배율(10%) + 퀄리티_턴어라운드(15%) + 괴리율(10%)
+    # [기각] F스코어 제거 — 퀄리티_턴어라운드(GPM+OCF+ROIC)가 핵심 구성요소 대체
+    # [기각] Q_매출_YoY >0 하드필터 — 구조조정형 매출 일시 감소 허용 위해 점수만 반영
+    S_Sales_YoY    = get_rank("Q_매출_YoY(%)",     asc=True, zero_if_nan=True)
+    S_Interest_Cov = get_rank("이자보상배율",       asc=True, zero_if_nan=True)
+    S_Qual_Turn    = get_rank("퀄리티_턴어라운드",  asc=True, zero_if_nan=True)
+    df["턴어라운드_점수"] = (
+        get_rank("이익률_변동폭") * 0.10   # 이익률 개선 폭
+        + get_rank("흑자전환")   * 0.15    # 흑자전환 상징성
+        + S_SmartMoney           * 0.15    # 수급 선취매
+        + S_GPM_delta            * 0.10    # 원가 경쟁력
+        + S_Sales_YoY            * 0.15    # [신규] 탑라인(매출) 회복 검증
+        + S_Interest_Cov         * 0.10    # [신규] 파산 리스크 통제
+        + S_Qual_Turn            * 0.15    # [신규] GPM+OCF+ROIC 복합 품질 신호
+        + get_rank("괴리율(%)")  * 0.10    # S-RIM 안전마진
+    )  # 합계: 10+15+15+10+15+10+15+10 = 100%
 
     # ── 종합점수: 성장성 / 안정성 / 주가 세 축 균형 (각 0-100, 합산 평균 → 0-100) ──
     # 성장성 (33%): 영업이익CAGR 35% + 매출CAGR 30% + 최근분기YoY 25% + 실적가속도 10%
@@ -1036,8 +1073,7 @@ def apply_leaders_screen(df):
     # 수급강도 양수 (외국인+기관 순매수)
     if "수급강도" in df.columns:
         mask = mask & (df["수급강도"].fillna(0) > 0)
-    # 최대 100종목으로 제한
-    return df[mask].sort_values("주도주_점수", ascending=False).head(100)
+    return df[mask].sort_values("주도주_점수", ascending=False)
 
 def apply_quality_value_screen(df):
     # 금융주/지주사 판별: 종목명 키워드 OR 유동비율 데이터 없음(금융업 구조적 특성)
@@ -1087,11 +1123,25 @@ def apply_growth_mom_screen(df):
     return df[mask].sort_values("고성장_점수", ascending=False)
 
 def apply_cash_div_screen(df):
-    mask = (df.get("FCF수익률(%)",0)>=3) & (df["배당수익률(%)"]>=1) & (df["부채비율(%)"] < 150) & (df["시가총액"]>=50_000_000_000)
+    mask = (
+        (df.get("FCF수익률(%)", 0) >= 3)
+        & (df["배당수익률(%)"] >= 1)
+        & (df["부채비율(%)"].fillna(999) < 120)       # 150 → 120 강화 (재무 안전성)
+        & (df["시가총액"] >= 50_000_000_000)          # 500억 유지
+        & (df["배당성향(%)"].fillna(999) < 80)         # 신규: EPS 대비 과도 배당 차단
+        & (df["현금전환율(%)"].fillna(0) >= 70)        # 신규: 이익→현금 전환 품질
+    )
     return df[mask].sort_values("현금배당_점수", ascending=False)
 
 def apply_turnaround_screen(df):
-    base_mask = ((df.get("흑자전환")==1) | (df.get("이익률_급개선")==1)) & (df["TTM_순이익"]>0) & (df["시가총액"]>=30_000_000_000)
+    base_mask = (
+        ((df.get("흑자전환")==1) | (df.get("이익률_급개선")==1))
+        & (df["TTM_순이익"] > 0)
+        & (df["TTM_영업CF"].fillna(-1) > 0)         # [신규] 회계 흑자가 아닌 실제 현금 창출 검증
+        & (df["Q_매출_YoY(%)"].fillna(0) > -15)     # [신규] 매출 급감(-15%↓) 방지 (구조조정형 허용)
+        & (df["시가총액"] >= 30_000_000_000)
+        & (df["이자보상배율"].fillna(0) > 1.5)       # [신규] 이자 상환 능력 (파산 리스크 통제)
+    )
     # 스마트머니 승률 50%+ OR VCP 신호 보조 조건 (있을 때만 적용)
     if "스마트머니_승률" in df.columns:
         smart_mask = (df["스마트머니_승률"].fillna(0) >= 0.5) | (df.get("VCP_신호", 0).fillna(0) == 1)

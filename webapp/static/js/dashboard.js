@@ -78,7 +78,7 @@
     leaders:        { title: "🔥 시장 주도주 (Leaders)",  criteria: "시총 1,000억↑ · 순이익 흑자 · RS 80↑ · 수급(+) · 거래 5억↑" },
     quality_value:  { title: "💎 우량가치 (Quality & Value)", criteria: "일반(ROIC 10%·PEG<1.2) + 금융(ROE 8%·PBR<1.5) 듀얼 트랙" },
     growth_mom:     { title: "🚀 고성장 모멘텀 (Growth)", criteria: "매출/이익 동반성장(10%↑) · RS 50↑ · 흑자도산 방지" },
-    cash_div:       { title: "💰 현금배당 (Cash & Div)",  criteria: "FCF수익률 3%↑ · 배당수익률 1%↑ · 부채비율 < 150%" },
+    cash_div:       { title: "💰 현금배당 (Cash & Div)",  criteria: "FCF수익률 3%↑ · 배당수익률 1%↑ · 배당성향 < 80% · 현금전환율 70%↑ · 부채비율 < 120%" },
     turnaround:     { title: "🔄 턴어라운드 (Turnaround)", criteria: "흑자전환 OR 이익률 급개선 · TTM 순이익 흑자" },
     multi_strategy:  { title: "🏆 Multi-Pick (3관왕 이상)", criteria: "5개 전략 중 3개 이상 동시 선정 종목" },
     forward_covered: { title: "🔭 Forward Est. (컨센서스 추정치)", criteria: "애널리스트 커버 ~535종목 내 Forward 모멘텀 점수 순위" },
@@ -141,14 +141,16 @@
     `,
     cash_div: `
       <h6>💰 현금배당주 (Cash & Dividend) 선별</h6>
-      <p>배당만 많이 주는 게 아니라, 실제 현금 창출 능력이 뛰어난 기업입니다.</p>
+      <p>배당만 많이 주는 게 아니라, <strong>실제 현금 창출력</strong>과 <strong>배당 지속 가능성</strong>이 검증된 기업입니다.</p>
       <ul>
-        <li><strong>핵심 지표:</strong> <span class="badge bg-light text-dark border">FCF수익률</span>, <span class="badge bg-light text-dark border">배당수익률</span>, <span class="badge bg-light text-dark border">배당성장</span></li>
+        <li><strong>핵심 지표:</strong> <span class="badge bg-light text-dark border">FCF수익률</span> <span class="badge bg-light text-dark border">배당성향%</span> <span class="badge bg-light text-dark border">ROIC</span> <span class="badge bg-light text-dark border">현금전환율</span></li>
         <li><strong>진짜 배당주 구별법:</strong>
           <ul>
-            <li><strong>FCF > 배당금총액:</strong> 잉여현금흐름(FCF)이 배당금보다 많아야 배당 삭감 위험이 적습니다.</li>
-            <li><strong>배당성장(CAGR):</strong> 현재 배당률이 조금 낮아도, 매년 배당을 늘려주는 기업이 장기적으로 유리합니다.</li>
-            <li><strong>배당수익률 > 국채금리:</strong> 최소한 은행 이자보다는 높아야 매력이 있습니다.</li>
+            <li><strong>배당성향 < 50%:</strong> EPS의 절반 이하를 배당하면 이익 재투자와 배당 삭감 위험 모두 방어됩니다. 80% 초과는 <span class="badge bg-warning text-dark">경고</span> 신호.</li>
+            <li><strong>ROIC ≥ 10%:</strong> 자본 대비 수익률이 높아야 5~10년 뒤에도 배당이 유지됩니다. 해자(Moat) 확인 지표.</li>
+            <li><strong>현금전환율 ≥ 70%:</strong> 순이익의 70% 이상이 실제 현금으로 들어와야 진짜 배당 재원이 됩니다.</li>
+            <li><strong>배당경고 = 0:</strong> 배당성향 > 80%, 배당수익률 > 10% + RS 하위권, 현금전환율 < 70% 중 하나라도 해당하면 경고 플래그가 켜집니다.</li>
+            <li><strong>동반성장 = ✓:</strong> 이익 성장과 배당 성장이 함께 이루어진 종목만이 진정한 복리 배당주입니다.</li>
           </ul>
         </li>
       </ul>
@@ -249,13 +251,14 @@
       { key: "52주_최고대비(%)", label: "고가대비", fmt: "f1" }, { key: "FCF_CAGR", label: "FCF CAGR", fmt: "f1" },
       { key: "고성장_점수", label: "성장점수", fmt: "f1" }
     ],
-    // 5. 현금배당 - FCF, 배당, 현금흐름 (12개)
+    // 5. 현금배당 - FCF, 배당, 현금흐름 (15개)
     cash_div: [
       { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "종가", label: "현재가", fmt: "int" },
       { key: "FCF수익률(%)", label: "FCF%", fmt: "f2" }, { key: "배당수익률(%)", label: "배당%", fmt: "f2" },
-      { key: "DPS_CAGR", label: "DPS CAGR", fmt: "f1" }, { key: "배당_연속증가", label: "배당연속", fmt: "int" },
-      { key: "ROE(%)", label: "ROE", fmt: "f2" }, { key: "영업CF_CAGR", label: "CF CAGR", fmt: "f1" },
-      { key: "이익품질_양호", label: "이익품질", fmt: "flag" }, { key: "부채비율(%)", label: "부채%", fmt: "f1" },
+      { key: "배당성향(%)", label: "배당성향%", fmt: "f1" }, { key: "배당_경고신호", label: "경고", fmt: "flag" },
+      { key: "ROIC(%)", label: "ROIC%", fmt: "f1" }, { key: "DPS_CAGR", label: "DPS CAGR", fmt: "f1" },
+      { key: "배당_연속증가", label: "배당연속", fmt: "int" }, { key: "현금전환율(%)", label: "현금전환%", fmt: "f1" },
+      { key: "부채비율(%)", label: "부채%", fmt: "f1" }, { key: "이익품질_양호", label: "이익품질", fmt: "flag" },
       { key: "배당_수익동반증가", label: "동반성장", fmt: "flag" }, { key: "현금배당_점수", label: "배당점수", fmt: "f1" }
     ],
     // 6. 턴어라운드 - 전환신호, 이익률, 수급 (12개)
@@ -338,6 +341,8 @@
       "배당수익률(%)": [v => v >= 3, v => v == 0],
       "DPS_CAGR":     [v => v >= 10, v => v <= 0],
       "배당_연속증가": [v => v >= 5, v => v == 0],
+      "배당성향(%)":   [v => v > 0 && v <= 50, v => v >= 80],  // Good: ≤50%, Bad: ≥80%
+      "배당_경고신호": [v => v === 0, v => v === 1],             // Good: 경고없음, Bad: 경고
 
       // Technical
       "RSI_14":           [v => v <= 30, v => v >= 70], // Oversold(Buy)=Good, Overbought=Bad
@@ -442,6 +447,7 @@
       "F8_매출총이익률": "전년 대비 GPM 증가.",
       "F9_자산회전율": "전년 대비 자산회전율 증가.",
       "부채비율(%)": "자본 대비 부채 비율. (Good: ≤ 100%, Bad: ≥ 200%)",
+      "유동비율(%)": "유동자산 / 유동부채 × 100. 단기 채무 상환 능력. (Good: ≥ 150%, Bad: ≤ 100%)",
       "부채상환능력": "영업활동현금흐름 / 총부채. (Good: ≥ 0.5, Bad: ≤ 0.1)",
       "이자보상배율": "영업이익 / 이자비용. (Good: ≥ 5, Bad: < 1)",
       "이익품질_양호": "영업CF > 순이익 여부. 현금 흐름 건전성.",
@@ -456,11 +462,14 @@
       "DPS_CAGR": "배당 성장률. (Good: ≥ 10%, Bad: ≤ 0%)",
       "배당_연속증가": "연속 배당 증가 연수. (Good: ≥ 5년)",
       "배당_수익동반증가": "순이익과 배당이 함께 성장.",
+      "배당성향(%)": "EPS 대비 배당금 비율(DPS/EPS×100). (Good: ≤ 50%, Bad: ≥ 80%). 80%↑은 이익 이상 배당(Payout Trap) 위험.",
+      "배당_경고신호": "Value/Payout Trap 감지. 배당성향>80% OR 배당수익률>10%+RS하위권 OR 현금전환율<70% 중 하나 해당 시 1(경고). 0=이상없음.",
 
       // 4. 성장성 (CAGR / YoY)
       "매출_CAGR": "매출 연평균 성장률. (Good: ≥ 15%, Bad: ≤ 0%)",
       "영업이익_CAGR": "영업이익 연평균 성장률. (Good: ≥ 15%, Bad: ≤ 0%)",
       "순이익_CAGR": "순이익 연평균 성장률. (Good: ≥ 15%, Bad: ≤ 0%)",
+      "영업CF_CAGR": "영업활동현금흐름 연평균 성장률. (Good: ≥ 15%, Bad: ≤ 0%)",
       "FCF_CAGR": "FCF 연평균 성장률. (Good: ≥ 15%, Bad: ≤ 0%)",
       "Q_매출_YoY(%)": "분기 매출 전년비 성장. (Good: ≥ 15%, Bad: ≤ 0%)",
       "Q_영업이익_YoY(%)": "분기 영업이익 전년비 성장. (Good: ≥ 15%, Bad: ≤ 0%)",
@@ -468,6 +477,9 @@
       "TTM_매출_YoY(%)": "TTM 매출 전년비 성장. (Good: ≥ 15%, Bad: ≤ 0%)",
       "TTM_영업이익_YoY(%)": "TTM 영업이익 전년비 성장. (Good: ≥ 15%, Bad: ≤ 0%)",
       "TTM_순이익_YoY(%)": "TTM 순이익 전년비 성장. (Good: ≥ 15%, Bad: ≤ 0%)",
+      "Q_매출_연속YoY성장": "최근 분기까지 YoY 매출 성장이 연속된 분기 수. (Good: ≥ 4분기)",
+      "Q_영업이익_연속YoY성장": "최근 분기까지 YoY 영업이익 성장이 연속된 분기 수. (Good: ≥ 4분기)",
+      "Q_순이익_연속YoY성장": "최근 분기까지 YoY 순이익 성장이 연속된 분기 수. (Good: ≥ 4분기)",
       "흑자전환": "적자에서 흑자로 전환.",
       "이익률_개선": "전년 대비 영업이익률 상승.",
       "이익률_급개선": "영업이익률 2%p 이상 급등.",
@@ -486,6 +498,8 @@
       "ROIC(%)": "투자자본수익률(NOPAT/IC). (Good: ≥ 15%, Bad: ≤ 5%)",
       "ROIC_전년(%)": "전년 ROIC.",
       "ROIC_개선": "전년 대비 ROIC 상승.",
+      "영업이익률_최근": "최근 연도 영업이익률(%). 추세 확인용. (Good: ≥ 10%, Bad: ≤ 0%)",
+      "영업이익률_전년": "전년도 영업이익률(%). 최근값과 비교해 개선·악화 파악. (Good: ≥ 10%, Bad: ≤ 0%)",
       "GPM_최근(%)": "최근 매출총이익률.",
       "GPM_전년(%)": "전년 매출총이익률.",
       "GPM_변화(pp)": "GPM 변화폭.",
@@ -533,6 +547,13 @@
       "Fwd_2yr_영업이익_성장(%)": "내년 대비 내후년 예상 영업이익 성장률(2년 지속 성장 확인). (Good: ≥ 10%, Bad: ≤ 0%) ⚠️ 커버리지 종목만 유효.",
       "Fwd_모멘텀_점수": "Forward 모멘텀 종합 점수. 커버리지 ~535종목 내 백분위 랭킹. (Good: ≥ 80, Bad: ≤ 40) ⚠️ forward_covered 탭에서만 계산됨.",
 
+      // 11. 데이터 품질
+      "데이터_연수": "재무데이터 누적 연수. 값이 클수록 CAGR 등 장기 지표의 신뢰도 높음. (Good: ≥ 5년)",
+      "최근분기": "TTM·분기 지표의 기준이 되는 가장 최근 분기 코드 (예: 2024Q3).",
+      "PER_이상": "PER 계산 불가 또는 음수 여부 플래그. 1이면 PER 신뢰 불가.",
+      "순이익_전년음수": "전년도 순이익이 적자(음수)였는지 여부. 1이면 전년 적자.",
+      "순이익_당기양수": "당기 순이익이 흑자(양수)인지 여부. 1이면 당기 흑자.",
+
       // 9. 점수 (Good: ≥ 80, Bad: ≤ 50)
       "종합점수": "전체 전략 종합 점수.",
       "성장성_점수": "성장성 부문 점수.",
@@ -578,15 +599,17 @@
     {
       title: "성장성",
       metrics: [
-        { key: "매출_CAGR",           label: "매출CAGR%",    fmt: "f1" },
-        { key: "영업이익_CAGR",       label: "OP CAGR%",     fmt: "f1" },
-        { key: "순이익_CAGR",         label: "NP CAGR%",     fmt: "f1" },
-        { key: "FCF_CAGR",            label: "FCF CAGR%",    fmt: "f1" },
-        { key: "Q_매출_YoY(%)",       label: "Q 매출YoY%",   fmt: "f1" },
-        { key: "Q_영업이익_YoY(%)",   label: "Q OP YoY%",    fmt: "f1" },
-        { key: "Q_순이익_YoY(%)",     label: "Q NP YoY%",    fmt: "f1" },
-        { key: "TTM_매출_YoY(%)",     label: "TTM 매출YoY%", fmt: "f1" },
-        { key: "TTM_영업이익_YoY(%)", label: "TTM OP YoY%",  fmt: "f1" },
+        { key: "매출_CAGR",           label: "매출CAGR%",       fmt: "f1" },
+        { key: "영업이익_CAGR",       label: "OP CAGR%",        fmt: "f1" },
+        { key: "순이익_CAGR",         label: "NP CAGR%",        fmt: "f1" },
+        { key: "영업CF_CAGR",         label: "영업CF CAGR%",    fmt: "f1" },
+        { key: "FCF_CAGR",            label: "FCF CAGR%",       fmt: "f1" },
+        { key: "Q_매출_YoY(%)",       label: "Q 매출YoY%",      fmt: "f1" },
+        { key: "Q_영업이익_YoY(%)",   label: "Q OP YoY%",       fmt: "f1" },
+        { key: "Q_순이익_YoY(%)",     label: "Q NP YoY%",       fmt: "f1" },
+        { key: "TTM_매출_YoY(%)",     label: "TTM 매출YoY%",    fmt: "f1" },
+        { key: "TTM_영업이익_YoY(%)", label: "TTM OP YoY%",     fmt: "f1" },
+        { key: "TTM_순이익_YoY(%)",   label: "TTM NP YoY%",     fmt: "f1" },
       ]
     },
     {
@@ -603,6 +626,7 @@
         { key: "F8_매출총이익률", label: "F8 매출총이익률", fmt: "flag" },
         { key: "F9_자산회전율", label: "F9 자산회전율", fmt: "flag" },
         { key: "부채비율(%)",  label: "부채비율%",  fmt: "f1" },
+        { key: "유동비율(%)",  label: "유동비율%",  fmt: "f1" },
         { key: "부채상환능력", label: "부채상환능력", fmt: "f2" },
         { key: "이자보상배율", label: "이자보상배율", fmt: "f2" },
       ]
@@ -612,9 +636,12 @@
       metrics: [
         { key: "배당수익률(%)",    label: "배당수익률%",  fmt: "f2" },
         { key: "DPS_최근",         label: "DPS",          fmt: "int" },
+        { key: "배당성향(%)",      label: "배당성향%",    fmt: "f1" },
+        { key: "배당_경고신호",    label: "배당경고",     fmt: "flag" },
         { key: "DPS_CAGR",         label: "DPS CAGR%",    fmt: "f1" },
         { key: "배당_연속증가",    label: "배당연속증가",  fmt: "int" },
         { key: "배당_수익동반증가", label: "수익동반증가", fmt: "flag" },
+        { key: "현금전환율(%)",    label: "현금전환%",    fmt: "f1" },
       ]
     },
     {
@@ -683,10 +710,13 @@
     {
       title: "연속 성장",
       metrics: [
-        { key: "매출_연속성장",    label: "매출 연속성장",  fmt: "int" },
-        { key: "영업이익_연속성장", label: "OP 연속성장",   fmt: "int" },
-        { key: "순이익_연속성장",  label: "NP 연속성장",   fmt: "int" },
-        { key: "영업CF_연속성장",  label: "CF 연속성장",   fmt: "int" },
+        { key: "매출_연속성장",         label: "매출 연속성장",       fmt: "int" },
+        { key: "영업이익_연속성장",     label: "OP 연속성장",         fmt: "int" },
+        { key: "순이익_연속성장",       label: "NP 연속성장",         fmt: "int" },
+        { key: "영업CF_연속성장",       label: "CF 연속성장",         fmt: "int" },
+        { key: "Q_매출_연속YoY성장",    label: "Q 매출 연속YoY성장",  fmt: "int" },
+        { key: "Q_영업이익_연속YoY성장", label: "Q OP 연속YoY성장",   fmt: "int" },
+        { key: "Q_순이익_연속YoY성장",  label: "Q NP 연속YoY성장",   fmt: "int" },
         { key: "흑자전환",         label: "흑자전환",       fmt: "flag" },
         { key: "이익률_개선",      label: "이익률 개선",    fmt: "flag" },
         { key: "이익률_급개선",    label: "이익률 급개선",  fmt: "flag" },
@@ -699,12 +729,14 @@
     {
       title: "효율성 & 마진",
       metrics: [
-        { key: "ROIC(%)",          label: "ROIC%",          fmt: "f1" },
-        { key: "ROIC_전년(%)",     label: "ROIC 전년%",     fmt: "f1" },
-        { key: "ROIC_개선",        label: "ROIC 개선",      fmt: "flag" },
-        { key: "GPM_최근(%)",      label: "GPM 최근%",      fmt: "f1" },
-        { key: "GPM_전년(%)",      label: "GPM 전년%",      fmt: "f1" },
-        { key: "GPM_변화(pp)",     label: "GPM 변화(pp)",   fmt: "f1" },
+        { key: "ROIC(%)",          label: "ROIC%",             fmt: "f1" },
+        { key: "ROIC_전년(%)",     label: "ROIC 전년%",        fmt: "f1" },
+        { key: "ROIC_개선",        label: "ROIC 개선",         fmt: "flag" },
+        { key: "영업이익률_최근",  label: "영업이익률% (최근)", fmt: "f1" },
+        { key: "영업이익률_전년",  label: "영업이익률% (전년)", fmt: "f1" },
+        { key: "GPM_최근(%)",      label: "GPM 최근%",         fmt: "f1" },
+        { key: "GPM_전년(%)",      label: "GPM 전년%",         fmt: "f1" },
+        { key: "GPM_변화(pp)",     label: "GPM 변화(pp)",      fmt: "f1" },
         { key: "퀄리티_턴어라운드", label: "퀄리티 턴어라운드", fmt: "flag" },
       ]
     },
@@ -721,6 +753,17 @@
         { key: "Fwd_매출_성장률(%)",         label: "Fwd 매출성장%",  fmt: "f1" },
         { key: "Fwd_순이익_성장률(%)",       label: "Fwd NP성장%",    fmt: "f1" },
         { key: "Fwd_2yr_영업이익_성장(%)",   label: "2yr OP성장%",    fmt: "f1" },
+        { key: "Fwd_모멘텀_점수",            label: "Fwd 모멘텀점수", fmt: "f1" },
+      ]
+    },
+    {
+      title: "데이터 품질",
+      metrics: [
+        { key: "데이터_연수",      label: "데이터 연수",      fmt: "int" },
+        { key: "최근분기",         label: "기준분기",         fmt: "str" },
+        { key: "PER_이상",         label: "PER 이상",         fmt: "flag" },
+        { key: "순이익_전년음수",  label: "전년 순손실",      fmt: "flag" },
+        { key: "순이익_당기양수",  label: "당기 흑자",        fmt: "flag" },
       ]
     },
   ];
@@ -781,6 +824,9 @@
         { col: "배당수익률(%)", label: "배당수익률%" },
         { col: "DPS_CAGR",     label: "DPS CAGR%" },
         { col: "배당_연속증가", label: "배당연속증가" },
+        { col: "배당성향(%)",   label: "배당성향%" },
+        { col: "ROIC(%)",       label: "ROIC%" },
+        { col: "현금전환율(%)", label: "현금전환율%" },
       ]
     },
     {
@@ -1424,8 +1470,12 @@
     dividend: [
       { key: "배당수익률(%)", label: "배당수익률%", fmt: "f2" },
       { key: "DPS_최근",     label: "DPS",          fmt: "int" },
+      { key: "배당성향(%)",   label: "배당성향%",    fmt: "f1" },
+      { key: "배당_경고신호", label: "배당경고",     fmt: "flag" },
       { key: "DPS_CAGR",     label: "DPS CAGR%",    fmt: "f1" },
       { key: "배당_연속증가", label: "배당연속증가", fmt: "int" },
+      { key: "ROIC(%)",       label: "ROIC%",        fmt: "f1" },
+      { key: "현금전환율(%)", label: "현금전환%",    fmt: "f1" },
     ],
   };
 
