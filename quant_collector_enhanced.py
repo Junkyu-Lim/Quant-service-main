@@ -156,11 +156,21 @@ def normalize_market(m: str) -> str:
 # ═════════════════════════════════════════════
 
 def collect_master() -> pd.DataFrame:
-    """KRX 전종목 마스터 수집"""
+    """KRX 전종목 마스터 수집 (실패 시 DB 캐시 사용)"""
     log.info("📘 종목 마스터 수집 중...")
-    df = fdr.StockListing("KRX")[["Code", "Name", "Market"]]
-    df.columns = ["종목코드", "종목명", "시장구분"]
-    df["시장구분"] = df["시장구분"].apply(normalize_market)
+    df = None
+    try:
+        df = fdr.StockListing("KRX")[["Code", "Name", "Market"]]
+        df.columns = ["종목코드", "종목명", "시장구분"]
+        df["시장구분"] = df["시장구분"].apply(normalize_market)
+    except Exception as e:
+        log.warning(f"  ⚠️ fdr.StockListing 실패: {e} — DB 캐시에서 로드합니다.")
+        import db as _db
+        df = _db.load_latest("master")
+        if df.empty:
+            raise RuntimeError("KRX 마스터 수집 실패 및 DB 캐시 없음") from e
+        log.info(f"  → DB 캐시 사용: {len(df)}개 종목")
+        return df
 
     name = df["종목명"].fillna("")
     code = df["종목코드"].fillna("")
@@ -187,7 +197,16 @@ def collect_daily(biz_day: str) -> pd.DataFrame:
 
     # 1. KRX 전종목 리스팅 (가격, 시가총액, 거래량 등 포함됨)
     # fdr.StockListing('KRX')는 종가, 시가총액, 거래량 등을 기본 포함합니다.
-    df_krx = fdr.StockListing('KRX')
+    try:
+        df_krx = fdr.StockListing('KRX')
+    except Exception as e:
+        log.warning(f"  ⚠️ fdr.StockListing 실패: {e} — DB 캐시에서 로드합니다.")
+        import db as _db
+        df_krx = _db.load_latest("daily")
+        if df_krx.empty:
+            raise RuntimeError("KRX 시세 수집 실패 및 DB 캐시 없음") from e
+        log.info(f"  → DB 캐시 사용: {len(df_krx)}개 종목")
+        return df_krx
     
     # 컬럼 이름이 한글/영문 혼용될 수 있어 정리
     # (최신 fdr 버전에 따라 컬럼명이 다를 수 있으니 확인 후 매핑)
@@ -699,20 +718,42 @@ def fetch_indicators(ticker: str) -> list[dict]:
 # ═════════════════════════════════════════════
 
 def fetch_shares(ticker: str) -> dict | None:
-    """발행주식수, 자사주, 유통주식수 수집"""
+    """발행주식수, 자사주, 유통주식수, FICS 섹터 수집"""
+    from bs4 import BeautifulSoup
     url = (
         f"https://comp.fnguide.com/SVO2/ASP/SVD_Main.asp"
         f"?pGB=1&gicode=A{ticker}&stkGb=701"
     )
-    tables = load_tables(url)
-    if not tables:
+    # HTML 원문 저장 (테이블 파싱 + 섹터 파싱 공용)
+    try:
+        r = _session.get(url, timeout=REQUEST_TIMEOUT)
+        r.raise_for_status()
+        raw = r.content
+    except Exception:
         return None
 
+    # ── 테이블 파싱 (pd.read_html) ──
+    tables = []
+    for enc in ("cp949", "euc-kr", "utf-8"):
+        try:
+            html = raw.decode(enc, errors="strict")
+            tables = pd.read_html(StringIO(html), displayed_only=False)
+            break
+        except Exception:
+            continue
+    if not tables:
+        try:
+            html = raw.decode("cp949", errors="replace")
+            tables = pd.read_html(StringIO(html), displayed_only=False)
+        except Exception:
+            pass
+
     # 발행주식수
+    issued = 0
     try:
         issued = safe_int(str(tables[0].iloc[6, 1]).split("/")[0])
     except Exception:
-        issued = 0
+        pass
 
     # 자사주
     treasury = 0
@@ -727,12 +768,26 @@ def fetch_shares(ticker: str) -> dict | None:
                 pass
 
     float_shares = max((issued or 0) - treasury, 0)
+
+    # ── FICS 섹터 파싱 (span.stxt.stxt2) ──
+    sector = None
+    try:
+        soup = BeautifulSoup(raw, "html.parser")
+        fics_span = soup.find("span", class_="stxt2")
+        if fics_span:
+            text = fics_span.get_text(strip=True)
+            # "FICS  반도체 및 관련장비" → "반도체 및 관련장비"
+            sector = text.replace("FICS", "").strip()
+    except Exception:
+        pass
+
     return {
         "종목코드": ticker,
         "기준일": date.today().isoformat(),
         "발행주식수": issued,
         "자사주": treasury,
         "유통주식수": float_shares,
+        "섹터": sector,
     }
 
 

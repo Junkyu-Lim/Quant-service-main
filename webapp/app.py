@@ -80,6 +80,7 @@ DISPLAY_COLS = [
     "Fwd_PER", "Fwd_PBR", "Fwd_EPS", "Fwd_ROE(%)", "Fwd_OPM(%)",
     "Fwd_영업이익_성장률(%)", "Fwd_매출_성장률(%)", "Fwd_순이익_성장률(%)", "Fwd_2yr_영업이익_성장(%)",
     "Fwd_모멘텀_점수",  # ephemeral: forward_covered 탭에서만 동적 계산됨
+    "섹터",
 ]
 
 def _load_data() -> pd.DataFrame:
@@ -154,6 +155,9 @@ def api_stocks():
         if codes: filtered = filtered[filtered["종목코드"].isin(codes)]
     if market and "시장구분" in filtered.columns:
         filtered = filtered[filtered["시장구분"] == market.upper()]
+    sector = request.args.get("sector", "").strip()
+    if sector and "섹터" in filtered.columns:
+        filtered = filtered[filtered["섹터"] == sector]
     if q:
         mask = (filtered["종목명"].str.contains(q, case=False, na=False) | filtered["종목코드"].str.contains(q, case=False, na=False))
         filtered = filtered[mask]
@@ -181,6 +185,16 @@ def api_stock_detail(code: str):
     row = df[df["종목코드"] == code.zfill(6)]
     if row.empty: return jsonify({"error": "Stock not found"}), 404
     return jsonify({c: _safe_val(row.iloc[0].get(c)) for c in df.columns})
+
+@app.route("/api/sectors")
+def api_sectors():
+    """섹터 목록 + 종목 수 반환"""
+    df = _load_data()
+    if df.empty or "섹터" not in df.columns:
+        return jsonify([])
+    counts = df["섹터"].dropna().value_counts().reset_index()
+    counts.columns = ["섹터", "count"]
+    return jsonify(counts.to_dict(orient="records"))
 
 @app.route("/api/markets/summary")
 def api_market_summary():
@@ -239,18 +253,42 @@ def api_batch_changes():
 
 @app.route("/api/stocks/<code>/financials")
 def api_stock_financials(code: str):
-    df = _db.load_stock_financials(code)
+    period = request.args.get("period", "annual")  # "annual" | "quarter"
+    df = _db.load_stock_financials(code, period=period)
     if df.empty: return jsonify({"years": [], "series": []})
-    df["year"] = df["기준일"].astype(str).str[:4]
-    years = sorted(df["year"].unique())
-    series = []
-    for acc in ["매출액", "영업이익", "당기순이익"]:
-        data = []
-        for y in years:
-            v = df[(df["year"]==y) & (df["계정"]==acc)]["값"]
-            data.append(_safe_val(v.iloc[0]) if not v.empty else None)
-        series.append({"name": acc, "data": data})
-    return jsonify({"years": years, "series": series})
+    if period == "quarter":
+        # 기준일 YYYYMM → "YYYYQN" 레이블
+        df["label"] = df["기준일"].astype(str).apply(lambda x: _month_to_quarter(x))
+        labels = sorted(df["label"].unique())
+        series = []
+        for acc in ["매출액", "영업이익", "당기순이익"]:
+            data = []
+            for lbl in labels:
+                v = df[(df["label"] == lbl) & (df["계정"] == acc)]["값"]
+                data.append(_safe_val(v.iloc[0]) if not v.empty else None)
+            series.append({"name": acc, "data": data})
+        return jsonify({"years": labels, "series": series})
+    else:
+        df["year"] = df["기준일"].astype(str).str[:4]
+        years = sorted(df["year"].unique())
+        series = []
+        for acc in ["매출액", "영업이익", "당기순이익"]:
+            data = []
+            for y in years:
+                v = df[(df["year"]==y) & (df["계정"]==acc)]["값"]
+                data.append(_safe_val(v.iloc[0]) if not v.empty else None)
+            series.append({"name": acc, "data": data})
+        return jsonify({"years": years, "series": series})
+
+def _month_to_quarter(date_str: str) -> str:
+    """'YYYYMM' or 'YYYY-MM-DD' → 'YYYYQN'"""
+    try:
+        s = date_str.replace("-", "")[:6]
+        y, m = int(s[:4]), int(s[4:6])
+        q = (m - 1) // 3 + 1
+        return f"{y}Q{q}"
+    except Exception:
+        return date_str[:7]
 
 COMPARE_METRICS_META = {
     "PER": {"best": "low"}, "PBR": {"best": "low"}, "PEG": {"best": "low"},
@@ -269,6 +307,27 @@ def api_stocks_tab_counts():
     result = {"all": len(df)}
     for s in screens[1:]:
         result[s] = len(_apply_screen_filter(df.copy(), s))
+    return jsonify(result)
+
+@app.route("/api/info")
+def api_info():
+    """DB 수집일, 종목 수, 최근분기 정보 반환 (데이터 품질 표시용)"""
+    import os, datetime
+    db_path = str(config.DB_PATH)
+    result = {"db_mtime": None, "stock_count": 0, "latest_quarter": None, "days_old": None}
+    if os.path.exists(db_path):
+        mtime = os.path.getmtime(db_path)
+        dt = datetime.datetime.fromtimestamp(mtime)
+        result["db_mtime"] = dt.strftime("%Y-%m-%d %H:%M")
+        days_old = (datetime.datetime.now() - dt).days
+        result["days_old"] = days_old
+    df = _load_data()
+    if not df.empty:
+        result["stock_count"] = len(df)
+        if "최근분기" in df.columns:
+            qvals = df["최근분기"].dropna()
+            if not qvals.empty:
+                result["latest_quarter"] = qvals.mode().iloc[0]
     return jsonify(result)
 
 @app.route("/api/stocks/compare")
@@ -320,6 +379,9 @@ def api_stock_analysis(code: str):
         return jsonify(result)
     except Exception as e:
         log.exception("Analysis failed for %s", code)
+        err_name = type(e).__name__
+        if "Timeout" in err_name or "timeout" in str(e).lower():
+            return jsonify({"error": "분석 시간이 초과되었습니다. 잠시 후 다시 시도해주세요."}), 504
         return jsonify({"error": str(e)}), 500
 
 

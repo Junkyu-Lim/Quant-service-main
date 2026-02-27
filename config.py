@@ -22,7 +22,7 @@ DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
 
 # Claude API (for qualitative analysis reports)
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-ANALYSIS_MODEL = os.environ.get("ANALYSIS_MODEL", "claude-sonnet-4-5-20250929")
+ANALYSIS_MODEL = os.environ.get("ANALYSIS_MODEL", "claude-sonnet-4-6")
 
 # Gemini API (for AI analysis)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")

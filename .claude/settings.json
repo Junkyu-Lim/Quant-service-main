@@ -18,7 +18,20 @@
       "WebFetch(domain:www.valueline.co.kr)",
       "WebFetch(domain:comp.fnguide.com)",
       "WebFetch(domain:alphasquare.co.kr)",
-      "Read(//c/Users/limjk/.claude/projects/c--Users-limjk-Quant-service-main/memory/**)"
+      "Read(//c/Users/limjk/.claude/projects/c--Users-limjk-Quant-service-main/memory/**)",
+      "Bash(curl -s \"http://localhost:5000/api/stocks/005930/financials?period=annual\")",
+      "Bash(curl -s \"http://localhost:5000/api/stocks\")",
+      "Bash(curl -s \"http://localhost:5000/api/stocks/071320/financials?period=annual\")",
+      "Bash(curl -s \"http://localhost:5000/api/stocks/017940/financials?period=annual\")",
+      "Bash(taskkill //FI \"WINDOWTITLE eq eq\" //F)",
+      "Bash(netstat -ano)",
+      "Read(//c/Users/limjk/Quant-service-main/**)",
+      "Bash(curl -s \"http://localhost:5000/api/stocks/207940/financials?period=annual\")",
+      "Bash(curl -s \"http://localhost:5000/api/stocks/207940/financials?period=quarter\")",
+      "Bash(curl -s https://api.anthropic.com/v1/models)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\limjk\\.claude\\projects\\c--Users-limjk-Quant-service-main\\memory"
     ]
   }
 }

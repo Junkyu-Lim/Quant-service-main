@@ -72,6 +72,26 @@
     if (currentScreen === "watchlist") loadStocks();
   }
 
+  // ─── Watchlist CSV 내보내기 ───────────────────────────────────────────
+  function exportTableCSV() {
+    const rows = document.querySelectorAll("#stock-tbody tr[data-code]");
+    if (!rows.length) { alert("내보낼 데이터가 없습니다."); return; }
+    const headers = [...document.querySelectorAll("#table-header th")]
+      .map(th => th.textContent.trim())
+      .filter((_, i) => i >= 2); // 체크박스, 별표 열 제외
+    const lines = [headers.join(",")];
+    rows.forEach(tr => {
+      const cells = [...tr.querySelectorAll("td")].slice(2); // 체크박스, 별표 제외
+      lines.push(cells.map(td => `"${td.textContent.trim().replace(/"/g, '""')}"`).join(","));
+    });
+    const bom = "\uFEFF";
+    const blob = new Blob([bom + lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href = url; a.download = `quant_${currentScreen}_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click(); URL.revokeObjectURL(url);
+  }
+
   // ─── 전략 설명 ────────────────────────────────────────────────────────
   const STRATEGY_DESCRIPTIONS = {
     all:            { title: "📊 전체 종목",            criteria: "전체 시장 종목 조회" },
@@ -989,7 +1009,9 @@
       screen: apiScreen, page: currentPage, size: pageSize,
       sort: sortCol, order: sortOrder,
     });
+    const sector = document.getElementById("f-sector")?.value || "";
     if (market)     params.set("market", market);
+    if (sector)     params.set("sector", sector);
     if (q)          params.set("q", q);
     if (codesParam) params.set("codes", codesParam);
 
@@ -1109,7 +1131,13 @@
       const res = await fetch(`/api/stocks/${code}`);
       currentDetailData = await res.json();
       renderDetailModal(currentDetailData);
-      new bootstrap.Modal(document.getElementById("detail-modal")).show();
+      const modalEl = document.getElementById("detail-modal");
+      const modal = new bootstrap.Modal(modalEl);
+      // 모달 애니메이션 완료 후 차트 렌더 (display:none 상태에서 크기 0 방지)
+      modalEl.addEventListener("shown.bs.modal", () => {
+        loadFinancialChart(code);
+      }, { once: true });
+      modal.show();
     } catch (e) { console.error("openDetail:", e); }
   }
 
@@ -1117,11 +1145,13 @@
     const code   = stock["종목코드"] || currentDetailCode;
     const name   = stock["종목명"]   || "Unknown";
     const market = stock["시장구분"] || "";
+    const sector = stock["섹터"]     || "";
     const price  = stock["종가"];
 
     document.getElementById("detail-title").innerHTML =
       `<strong>${name}</strong> <span class="text-muted fs-6">${code}</span>
        <span class="badge ${market === "KOSPI" ? "bg-primary" : "bg-danger"} ms-2">${market}</span>
+       ${sector ? `<span class="badge bg-secondary ms-1">${sector}</span>` : ""}
        ${price != null ? `<span class="ms-2 fw-bold">${fmt(price, "int")}원</span>` : ""}`;
 
     const btnWD = document.getElementById("btn-watch-detail");
@@ -1151,38 +1181,196 @@
     document.getElementById("btn-analysis-gemini").dataset.code = code;
     document.getElementById("btn-analysis-claude").dataset.code  = code;
 
-    // 재무 차트 로드
-    loadFinancialChart(code);
+    // 점수 브레이크다운 렌더링
+    renderScoreBreakdown(stock);
+    // 재무 차트는 shown.bs.modal 이벤트 후 openDetail()에서 호출됨
     initTooltips();
   }
+
+  // 점수 색상 계산 (0~100 → 빨강~초록)
+  function scoreColor(v) {
+    if (v == null) return "#ced4da";
+    if (v >= 75) return "#198754";
+    if (v >= 55) return "#20c997";
+    if (v >= 40) return "#ffc107";
+    return "#dc3545";
+  }
+
+  // 전략 배지 설정
+  const STRATEGY_BADGE_INFO = {
+    "주도주_점수":    { label: "주도주",  color: "#dc3545" },
+    "우량가치_점수":  { label: "우량가치", color: "#0d6efd" },
+    "고성장_점수":    { label: "고성장",  color: "#198754" },
+    "현금배당_점수":  { label: "현금배당", color: "#fd7e14" },
+    "턴어라운드_점수":{ label: "턴어라운드", color: "#6f42c1" },
+  };
+
+  let scoreRadarChart = null;
+
+  function renderScoreBreakdown(stock) {
+    // 레이더 축 정의: 3개 기본 + 5개 전략
+    const RADAR_AXES = [
+      { key: "성장성_점수",    label: "성장성" },
+      { key: "안정성_점수",    label: "안정성" },
+      { key: "가격_점수",      label: "가치" },
+      { key: "주도주_점수",    label: "주도주" },
+      { key: "우량가치_점수",  label: "우량가치" },
+      { key: "고성장_점수",    label: "고성장" },
+      { key: "현금배당_점수",  label: "배당" },
+      { key: "턴어라운드_점수",label: "턴어라운드" },
+    ];
+
+    const values = RADAR_AXES.map(a => {
+      const v = stock[a.key];
+      return (v != null && !isNaN(v)) ? Math.round(v) : 0;
+    });
+    const labels = RADAR_AXES.map(a => a.label);
+
+    // 레이더 차트
+    if (scoreRadarChart) { scoreRadarChart.destroy(); scoreRadarChart = null; }
+    const ctx = document.getElementById("score-radar-chart").getContext("2d");
+    scoreRadarChart = new Chart(ctx, {
+      type: "radar",
+      data: {
+        labels,
+        datasets: [{
+          label: "점수",
+          data: values,
+          backgroundColor: "rgba(13,110,253,0.15)",
+          borderColor: "rgba(13,110,253,0.8)",
+          borderWidth: 2,
+          pointBackgroundColor: values.map(v => scoreColor(v)),
+          pointRadius: 4,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          r: {
+            min: 0, max: 100,
+            ticks: { stepSize: 25, font: { size: 9 }, color: "#adb5bd" },
+            grid: { color: "rgba(0,0,0,0.06)" },
+            pointLabels: { font: { size: 10 }, color: "#495057" },
+          }
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: ctx => ` ${ctx.parsed.r}점`,
+            }
+          }
+        }
+      }
+    });
+
+    // 바 리스트 (우측 패널)
+    const BAR_ITEMS = [
+      { key: "종합점수",      label: "종합 점수" },
+      { key: "성장성_점수",   label: "성장성" },
+      { key: "안정성_점수",   label: "안정성" },
+      { key: "가격_점수",     label: "가치" },
+      { key: "주도주_점수",   label: "주도주" },
+      { key: "우량가치_점수", label: "우량가치" },
+      { key: "고성장_점수",   label: "고성장" },
+      { key: "현금배당_점수", label: "배당" },
+      { key: "턴어라운드_점수", label: "턴어라운드" },
+    ];
+
+    const barHtml = BAR_ITEMS.map(item => {
+      const v = stock[item.key];
+      const pct = (v != null && !isNaN(v)) ? Math.min(100, Math.max(0, v)) : 0;
+      const color = scoreColor(v);
+      const isBold = item.key === "종합점수";
+      return `<div class="score-bd-row${isBold ? " fw-bold" : ""}">
+        <div class="score-bd-label">${item.label}</div>
+        <div class="score-bd-track">
+          <div class="score-bd-fill" style="width:${pct}%; background:${color};"></div>
+        </div>
+        <div class="score-bd-val" style="color:${color};">${v != null ? Math.round(v) : "-"}</div>
+      </div>`;
+    }).join("");
+    document.getElementById("score-bar-list").innerHTML = barHtml;
+
+    // 전략 배지 (점수 높은 전략만 표시)
+    const BADGE_THRESHOLD = 65;
+    const badgeHtml = Object.entries(STRATEGY_BADGE_INFO).map(([key, info]) => {
+      const v = stock[key];
+      if (v == null || v < BADGE_THRESHOLD) return "";
+      const opacity = v >= 80 ? "1" : "0.65";
+      return `<span class="strategy-badge" style="color:${info.color}; border-color:${info.color}; opacity:${opacity};">${info.label} ${Math.round(v)}</span>`;
+    }).join("");
+    document.getElementById("strategy-badges").innerHTML = badgeHtml || `<small class="text-muted">해당 전략 없음</small>`;
+  }
+
+  let _finPeriod = "annual"; // "annual" | "quarter"
 
   async function loadFinancialChart(code) {
     const area = document.getElementById("financial-chart-area");
     try {
-      const res  = await fetch(`/api/stocks/${code}/financials`);
+      const period = _finPeriod;
+      const url = `/api/stocks/${code}/financials?period=${period}`;
+      const res  = await fetch(url);
       const data = await res.json();
       if (!data.years || data.years.length === 0) { area.style.display = "none"; return; }
+      // display를 먼저 설정 후 다음 tick에 chart 생성 (숨겨진 상태에서 렌더 시 크기=0 방지)
       area.style.display = "";
       if (financialChart) { financialChart.destroy(); financialChart = null; }
+      await new Promise(r => setTimeout(r, 0));
       const ctx = document.getElementById("financial-chart").getContext("2d");
+
+      // 영업이익 성장률 (YoY) 계산
+      const opSeries = data.series.find(s => s.name === "영업이익");
+      const opGrowth = opSeries ? opSeries.data.map((v, i) => {
+        if (i === 0 || opSeries.data[i-1] == null || opSeries.data[i-1] === 0 || v == null) return null;
+        return parseFloat(((v - opSeries.data[i-1]) / Math.abs(opSeries.data[i-1]) * 100).toFixed(1));
+      }) : [];
+
+      const barDatasets = data.series.map((s, i) => ({
+        type: "bar",
+        label: s.name === "매출액" ? "매출" : s.name === "영업이익" ? "영업이익" : "순이익",
+        data: s.data.map(v => v != null ? Math.round(v / 1e8) : null),
+        backgroundColor: ["rgba(13,110,253,0.65)", "rgba(25,135,84,0.65)", "rgba(220,53,69,0.65)"][i],
+        yAxisID: "y",
+        order: 1,
+      }));
+
+      const datasets = [...barDatasets];
+      if (opGrowth.some(v => v !== null)) {
+        datasets.push({
+          type: "line",
+          label: "영업이익 YoY%",
+          data: opGrowth,
+          borderColor: "#fd7e14",
+          backgroundColor: "rgba(253,126,20,0.1)",
+          borderWidth: 2,
+          pointRadius: 3,
+          yAxisID: "y2",
+          order: 0,
+        });
+      }
+
+      const titleText = period === "quarter" ? "분기 실적 추이 (억원)" : "연간 실적 추이 (억원)";
       financialChart = new Chart(ctx, {
         type: "bar",
-        data: {
-          labels: data.years,
-          datasets: data.series.map((s, i) => ({
-            label: s.name,
-            data: s.data.map(v => v != null ? Math.round(v / 1e8) : null),
-            backgroundColor: ["rgba(13,110,253,0.7)", "rgba(25,135,84,0.7)", "rgba(220,53,69,0.7)"][i],
-          }))
-        },
+        data: { labels: data.years, datasets },
         options: {
           responsive: true,
           maintainAspectRatio: false,
+          interaction: { mode: "index", intersect: false },
           plugins: {
-            title: { display: true, text: "연간 실적 추이 (억원)" },
-            legend: { position: "bottom" },
+            title: { display: true, text: titleText, font: { size: 12 } },
+            legend: { position: "bottom", labels: { font: { size: 10 }, boxWidth: 12 } },
           },
-          scales: { y: { beginAtZero: false } }
+          scales: {
+            y:  { beginAtZero: false, ticks: { font: { size: 10 } },
+                  title: { display: true, text: "억원", font: { size: 9 } } },
+            y2: { position: "right", beginAtZero: false,
+                  ticks: { font: { size: 10 }, callback: v => v + "%" },
+                  grid: { drawOnChartArea: false },
+                  title: { display: true, text: "YoY%", font: { size: 9 } } },
+          }
         }
       });
     } catch (e) { area.style.display = "none"; }
@@ -1213,12 +1401,28 @@
       }
       // 캐시 없거나 모드 다르면 생성
       if (!data) {
-        const postRes = await fetch(`/api/stocks/${code}/analysis`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mode }),
-        });
-        data = await postRes.json();
+        console.log("[AI분석] POST 요청 시작:", code, mode);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 360000);
+        const loadingText = document.getElementById("report-loading-text");
+        const baseMsg = mode === "gemini" ? "Gemini로 분석 중 (Google Search 포함)" : "Claude로 심층 분석 중";
+        let elapsed = 0;
+        const timerInterval = setInterval(() => {
+          elapsed++;
+          loadingText.textContent = `${baseMsg}... (${elapsed}초)`;
+        }, 1000);
+        try {
+          const postRes = await fetch(`/api/stocks/${code}/analysis`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mode }),
+            signal: controller.signal,
+          });
+          data = await postRes.json();
+        } finally {
+          clearInterval(timerInterval);
+          clearTimeout(timeoutId);
+        }
       }
 
       document.getElementById("report-loading").style.display = "none";
@@ -1234,8 +1438,9 @@
       document.getElementById("btn-regenerate").dataset.mode = mode;
     } catch (e) {
       document.getElementById("report-loading").style.display = "none";
+      const msg = e.name === "AbortError" ? "분석 시간이 초과되었습니다. 다시 시도해주세요." : e.message;
       document.getElementById("report-content").innerHTML =
-        `<div class="alert alert-danger">오류: ${e.message}</div>`;
+        `<div class="alert alert-danger">오류: ${msg}</div>`;
     }
   }
 
@@ -1389,6 +1594,68 @@
     );
   }
 
+  // ─── 필터 프리셋 ─────────────────────────────────────────────────────
+  const PRESET_KEY = "quant_filter_presets";
+  function getPresets() {
+    try { return JSON.parse(localStorage.getItem(PRESET_KEY) || "[]"); }
+    catch { return []; }
+  }
+  function savePresets(list) { localStorage.setItem(PRESET_KEY, JSON.stringify(list)); }
+
+  function getCurrentFilterSnapshot() {
+    return {
+      market:        document.getElementById("f-market")?.value  || "",
+      sector:        document.getElementById("f-sector")?.value  || "",
+      search:        document.getElementById("f-search")?.value  || "",
+      columnFilters: JSON.parse(JSON.stringify(columnFilters)),
+    };
+  }
+
+  function applyPreset(snap) {
+    if (snap.market !== undefined) document.getElementById("f-market").value = snap.market;
+    if (snap.sector !== undefined) {
+      const sel = document.getElementById("f-sector");
+      if (sel) sel.value = snap.sector;
+    }
+    if (snap.search !== undefined) document.getElementById("f-search").value = snap.search;
+    Object.keys(columnFilters).forEach(k => delete columnFilters[k]);
+    if (snap.columnFilters) {
+      Object.assign(columnFilters, snap.columnFilters);
+    }
+    if (advFilterOpen) renderFilterPanel(); else updateAdvButton();
+    currentPage = 1; loadStocks();
+  }
+
+  function renderPresets() {
+    const list = document.getElementById("preset-list");
+    if (!list) return;
+    const presets = getPresets();
+    if (!presets.length) { list.innerHTML = `<span class="text-muted small">저장된 프리셋 없음</span>`; return; }
+    list.innerHTML = presets.map((p, i) =>
+      `<span class="preset-chip" data-idx="${i}">
+        ${p.name}
+        <span class="preset-del" data-idx="${i}" title="삭제">✕</span>
+      </span>`
+    ).join("");
+    list.querySelectorAll(".preset-chip").forEach(chip => {
+      chip.addEventListener("click", e => {
+        if (e.target.classList.contains("preset-del")) return;
+        const idx = parseInt(chip.dataset.idx, 10);
+        applyPreset(getPresets()[idx]);
+      });
+    });
+    list.querySelectorAll(".preset-del").forEach(btn => {
+      btn.addEventListener("click", e => {
+        e.stopPropagation();
+        const idx = parseInt(btn.dataset.idx, 10);
+        const presets = getPresets();
+        presets.splice(idx, 1);
+        savePresets(presets);
+        renderPresets();
+      });
+    });
+  }
+
   function resetAdvFilter() {
     Object.keys(columnFilters).forEach(k => delete columnFilters[k]);
     if (advFilterOpen) renderFilterPanel();
@@ -1419,7 +1686,8 @@
   }
 
   async function openCompareModal() {
-    if (compareSet.size < 2) { alert("2개 이상 종목을 선택해주세요."); return; }
+    if (compareSet.size < 2) { alert("2개 이상 종목을 선택하세요 (최대 5개)."); return; }
+    if (compareSet.size > 5) { alert("최대 5개까지 비교 가능합니다."); return; }
     const codes = [...compareSet].join(",");
     try {
       const res  = await fetch(`/api/stocks/compare?codes=${codes}`);
@@ -1479,8 +1747,16 @@
     ],
   };
 
+  let _compareCharts = []; // 비교 모달 내 미니 차트 인스턴스
+
+  function destroyCompareCharts() {
+    _compareCharts.forEach(c => { try { c.destroy(); } catch (e) {} });
+    _compareCharts = [];
+  }
+
   function renderCompareModal(data) {
-    const stocks  = data.stocks     || [];
+    destroyCompareCharts();
+    const stocks   = data.stocks      || [];
     const metaMeta = data.metrics_meta || {};
     const cats = [
       { key: "all",           label: "전체" },
@@ -1490,6 +1766,7 @@
       { key: "stability",     label: "안정성" },
       { key: "technical",     label: "기술적" },
       { key: "dividend",      label: "배당" },
+      { key: "financials",    label: "재무추이" },
     ];
     const tabsEl = document.getElementById("compare-category-tabs");
     if (tabsEl) {
@@ -1501,11 +1778,61 @@
           e.preventDefault();
           tabsEl.querySelectorAll(".nav-link").forEach(x => x.classList.remove("active"));
           a.classList.add("active");
-          renderCompareTable(stocks, metaMeta, a.dataset.cat);
+          if (a.dataset.cat === "financials") {
+            renderCompareFinancials(stocks);
+          } else {
+            renderCompareTable(stocks, metaMeta, a.dataset.cat);
+          }
         })
       );
     }
     renderCompareTable(stocks, metaMeta, "all");
+  }
+
+  async function renderCompareFinancials(stocks) {
+    destroyCompareCharts();
+    const container = document.getElementById("compare-table-container");
+    if (!container) return;
+    const COLORS = ["#0d6efd","#198754","#dc3545","#fd7e14","#6f42c1"];
+    const rows = stocks.map((s, si) =>
+      `<div class="col-md-6 mb-3">
+        <div class="card h-100">
+          <div class="card-header py-1 px-2 small fw-bold">${s["종목명"]} <span class="text-muted">${s["종목코드"]}</span></div>
+          <div class="card-body p-2" style="height:180px;">
+            <canvas id="cmp-fin-${si}"></canvas>
+          </div>
+        </div>
+      </div>`
+    ).join("");
+    container.innerHTML = `<div class="row g-2">${rows}</div>`;
+
+    for (let si = 0; si < stocks.length; si++) {
+      const s = stocks[si];
+      try {
+        const res  = await fetch(`/api/stocks/${s["종목코드"]}/financials`);
+        const data = await res.json();
+        if (!data.years || !data.years.length) continue;
+        const ctx = document.getElementById(`cmp-fin-${si}`)?.getContext("2d");
+        if (!ctx) continue;
+        const chart = new Chart(ctx, {
+          type: "bar",
+          data: {
+            labels: data.years,
+            datasets: data.series.map((sr, i) => ({
+              label: sr.name,
+              data: sr.data.map(v => v != null ? Math.round(v / 1e8) : null),
+              backgroundColor: ["rgba(13,110,253,0.7)","rgba(25,135,84,0.7)","rgba(220,53,69,0.7)"][i],
+            }))
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { position: "bottom", labels: { font: { size: 9 }, boxWidth: 10 } } },
+            scales: { x: { ticks: { font: { size: 9 } } }, y: { ticks: { font: { size: 9 } }, beginAtZero: false } }
+          }
+        });
+        _compareCharts.push(chart);
+      } catch (e) { /* 개별 실패 무시 */ }
+    }
   }
 
   function renderCompareTable(stocks, metaMeta, catKey) {
@@ -1591,7 +1918,7 @@
 
   // 상단 버튼
   document.getElementById("btn-refresh").addEventListener("click", () => {
-    loadMarketSummary(); loadBatchChanges(); loadStocks();
+    loadMarketSummary(); loadBatchChanges(); loadDataInfo(); loadStocks();
   });
   document.getElementById("btn-trigger").addEventListener("click", triggerPipeline);
 
@@ -1601,6 +1928,8 @@
   });
   document.getElementById("btn-clear").addEventListener("click", () => {
     document.getElementById("f-market").value = "";
+    const sectorSel = document.getElementById("f-sector");
+    if (sectorSel) sectorSel.value = "";
     document.getElementById("f-search").value = "";
     currentPage = 1; loadStocks();
   });
@@ -1610,9 +1939,25 @@
   });
 
   // Advanced Filter
-  document.getElementById("btn-adv-toggle")?.addEventListener("click", toggleAdvFilter);
+  document.getElementById("btn-adv-toggle")?.addEventListener("click", () => {
+    toggleAdvFilter();
+    if (advFilterOpen) renderPresets();
+  });
   document.getElementById("btn-adv-reset")?.addEventListener("click", resetAdvFilter);
   document.getElementById("adv-search")?.addEventListener("input", () => renderFilterPanel());
+
+  // 프리셋 저장 버튼
+  document.getElementById("btn-preset-save")?.addEventListener("click", () => {
+    const snap = getCurrentFilterSnapshot();
+    const hasFilter = snap.market || snap.sector || snap.search || Object.keys(snap.columnFilters).length;
+    if (!hasFilter) { alert("저장할 필터 조건이 없습니다."); return; }
+    const name = prompt("프리셋 이름을 입력하세요:", "내 프리셋");
+    if (!name) return;
+    const presets = getPresets();
+    presets.push({ name: name.trim(), ...snap });
+    savePresets(presets);
+    renderPresets();
+  });
 
   // 비교 기능
   document.getElementById("btn-compare")?.addEventListener("click", openCompareModal);
@@ -1622,9 +1967,22 @@
     document.querySelectorAll(".compare-cb").forEach(cb => { cb.checked = false; });
   });
 
+  // CSV 내보내기
+  document.getElementById("btn-export-csv")?.addEventListener("click", exportTableCSV);
+
   // 관심종목 버튼 (세부 모달)
   document.getElementById("btn-watch-detail").addEventListener("click", function () {
     if (this.dataset.code) toggleWatch(this.dataset.code);
+  });
+
+  // 재무 차트 연간/분기 토글
+  document.getElementById("fin-period-toggle")?.querySelectorAll("button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#fin-period-toggle button").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      _finPeriod = btn.dataset.period;
+      if (currentDetailCode) loadFinancialChart(currentDetailCode);
+    });
   });
 
   // AI 분석 버튼
@@ -1665,6 +2023,9 @@
       currentPage   = 1;
       buildHeader();
       loadStocks();
+      // CSV 버튼은 모든 탭에서 표시
+      const csvBtn = document.getElementById("btn-export-csv");
+      if (csvBtn) csvBtn.style.display = "";
       renderChangeBanner();
       
       const desc = STRATEGY_DESCRIPTIONS[currentScreen];
@@ -1683,11 +2044,58 @@
     })
   );
 
+  // 섹터 드롭다운 초기화
+  async function loadSectorOptions() {
+    const sel = document.getElementById("f-sector");
+    if (!sel) return;
+    try {
+      const res  = await fetch("/api/sectors");
+      const data = await res.json();
+      // 기존 옵션 (전체 섹터) 유지 후 추가
+      const current = sel.value;
+      while (sel.options.length > 1) sel.remove(1);
+      data.forEach(({ 섹터: name, count }) => {
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = `${name} (${count})`;
+        sel.appendChild(opt);
+      });
+      sel.value = current;
+    } catch (e) { /* 섹터 API 실패 시 무시 */ }
+  }
+  const sectorEl = document.getElementById("f-sector");
+  if (sectorEl) sectorEl.addEventListener("change", () => { currentPage = 1; loadStocks(); });
+
+  // ─── 데이터 품질 정보 ─────────────────────────────────────────────────
+  async function loadDataInfo() {
+    try {
+      const res  = await fetch("/api/info");
+      const info = await res.json();
+      const el   = document.getElementById("data-quality-badge");
+      if (!el) return;
+      const days = info.days_old;
+      const mtime = info.db_mtime || "";
+      const quarter = info.latest_quarter ? ` · ${info.latest_quarter}` : "";
+      const count = info.stock_count ? ` · ${info.stock_count.toLocaleString()}종목` : "";
+      if (days === null) { el.style.display = "none"; return; }
+      el.style.display = "";
+      if (days >= 30) {
+        el.innerHTML = `<span class="badge bg-danger" title="마지막 수집: ${mtime}">⚠ ${days}일 전 수집${count}${quarter}</span>`;
+      } else if (days >= 7) {
+        el.innerHTML = `<span class="badge bg-warning text-dark" title="마지막 수집: ${mtime}">${days}일 전 수집${count}${quarter}</span>`;
+      } else {
+        el.innerHTML = `<span class="badge bg-success" title="마지막 수집: ${mtime}">최신 데이터${count}${quarter}</span>`;
+      }
+    } catch (e) { /* 무시 */ }
+  }
+
   // ─── 초기화 ──────────────────────────────────────────────────────────
   buildHeader();
   loadMarketSummary();
   loadBatchChanges();
   loadTabCounts();
+  loadSectorOptions();
+  loadDataInfo();
   loadStocks();
   updateWatchlistCount();
 

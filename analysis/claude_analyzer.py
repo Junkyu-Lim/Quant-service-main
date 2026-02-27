@@ -605,7 +605,7 @@ def _generate_report_claude(stock: dict) -> dict:
         qualitative_section=qualitative_section,
     )
 
-    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY, timeout=300.0)
     message = client.messages.create(
         model=config.ANALYSIS_MODEL,
         max_tokens=16384,

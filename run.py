@@ -30,7 +30,7 @@ def cmd_server(args):
     import db as _db
     _db.init_db()
 
-    app.run(host=config.HOST, port=config.PORT, debug=config.DEBUG)
+    app.run(host=config.HOST, port=config.PORT, debug=config.DEBUG, threaded=True)
 
 
 def cmd_pipeline(args):

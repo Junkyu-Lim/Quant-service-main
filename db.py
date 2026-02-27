@@ -64,6 +64,7 @@ _SCHEMA_STATEMENTS = [
     발행주식수    BIGINT,
     자사주        BIGINT,
     유통주식수    BIGINT,
+    섹터          TEXT,
     collected_date TEXT NOT NULL,
     PRIMARY KEY (종목코드, collected_date)
 )""",
@@ -196,7 +197,8 @@ _SCHEMA_STATEMENTS = [
     "ROIC(%)"     DOUBLE,
     "ROIC_전년(%)" DOUBLE,
     ROIC_개선     INTEGER,
-    "퀄리티_턴어라운드" INTEGER
+    "퀄리티_턴어라운드" INTEGER,
+    섹터          TEXT
 )""",
 ]
 
@@ -241,8 +243,9 @@ def table_has_data(table: str, collected_date: str) -> bool:
 
 def _insert_df(conn, df: pd.DataFrame, table: str):
     """DataFrame을 DuckDB 테이블에 삽입"""
+    cols = ", ".join(df.columns)
     conn.register("_insert_tmp", df)
-    conn.execute(f"INSERT INTO {table} SELECT * FROM _insert_tmp")
+    conn.execute(f"INSERT INTO {table} ({cols}) SELECT {cols} FROM _insert_tmp")
     conn.unregister("_insert_tmp")
 
 
@@ -390,8 +393,9 @@ def delete_report(code: str):
         )
 
 
-def load_stock_financials(code: str) -> pd.DataFrame:
-    """특정 종목의 연간 재무제표 시계열 (매출액/영업이익/당기순이익, 실적치만)"""
+def load_stock_financials(code: str, period: str = "annual") -> pd.DataFrame:
+    """특정 종목의 연간/분기 재무제표 시계열 (매출액/영업이익/당기순이익, 실적치만)"""
+    주기 = "q" if period == "quarter" else "y"
     with get_conn() as conn:
         try:
             row = conn.execute(
@@ -401,11 +405,11 @@ def load_stock_financials(code: str) -> pd.DataFrame:
                 return pd.DataFrame()
             latest = row[0]
             df = conn.execute(
-                """SELECT 기준일, 계정, 값
+                f"""SELECT 기준일, 계정, 값
                    FROM financial_statements
                    WHERE 종목코드 = ?
                    AND collected_date = ?
-                   AND 주기 = 'A'
+                   AND 주기 = '{주기}'
                    AND 계정 IN ('매출액', '영업이익', '당기순이익')
                    AND 추정치 = 0
                    ORDER BY 기준일""",

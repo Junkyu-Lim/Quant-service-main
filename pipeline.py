@@ -106,6 +106,11 @@ def run_pipeline(skip_collect: bool = False, test_mode: bool = False, skip_price
         master_info = master[["종목코드", "시장구분", "종목구분"]].drop_duplicates("종목코드")
         full_df = full_df.merge(master_info, on="종목코드", how="left")
 
+    # Merge FICS 섹터 from shares
+    if not shares.empty and "섹터" in shares.columns:
+        sector_map = shares[["종목코드", "섹터"]].drop_duplicates("종목코드")
+        full_df = full_df.merge(sector_map, on="종목코드", how="left")
+
     # 전략별 종합점수 사전 계산 (기술적 지표 이후, DB 저장 전)
     _progress("전략 점수 계산 중", 84)
     full_df = calc_strategy_scores(full_df)
