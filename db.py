@@ -110,6 +110,15 @@ _SCHEMA_STATEMENTS = [
     generated_date TEXT NOT NULL,
     PRIMARY KEY (종목코드)
 )""",
+    """CREATE TABLE IF NOT EXISTS portfolio (
+    종목코드      TEXT PRIMARY KEY,
+    수량          INTEGER NOT NULL DEFAULT 0,
+    평균매입가    DOUBLE NOT NULL DEFAULT 0,
+    매입일        TEXT,
+    메모          TEXT,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+)""",
     """CREATE TABLE IF NOT EXISTS dashboard_result (
     종목코드      TEXT PRIMARY KEY,
     종목명        TEXT,
@@ -418,6 +427,47 @@ def load_stock_financials(code: str, period: str = "annual") -> pd.DataFrame:
         except Exception:
             return pd.DataFrame()
     return df
+
+
+def load_portfolio() -> list[dict]:
+    """포트폴리오 전체 조회"""
+    with get_conn() as conn:
+        try:
+            cur = conn.execute("SELECT * FROM portfolio ORDER BY updated_at DESC")
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+        except Exception:
+            return []
+
+
+def upsert_portfolio_item(code: str, qty: int, price: float,
+                          buy_date: str, memo: str):
+    """포트폴리오 항목 추가/수정 (INSERT OR REPLACE)"""
+    from datetime import datetime
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    code = code.zfill(6)
+    with get_conn() as conn:
+        # 기존 항목이 있으면 created_at 유지
+        cur = conn.execute(
+            "SELECT created_at FROM portfolio WHERE 종목코드 = ?", [code]
+        )
+        row = cur.fetchone()
+        created = row[0] if row else now
+        conn.execute(
+            """INSERT OR REPLACE INTO portfolio
+               (종목코드, 수량, 평균매입가, 매입일, 메모, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            [code, qty, price, buy_date, memo, created, now],
+        )
+    log.info("포트폴리오 저장: %s (수량=%d, 단가=%.0f)", code, qty, price)
+
+
+def delete_portfolio_item(code: str):
+    """포트폴리오에서 종목 삭제"""
+    code = code.zfill(6)
+    with get_conn() as conn:
+        conn.execute("DELETE FROM portfolio WHERE 종목코드 = ?", [code])
+    log.info("포트폴리오 삭제: %s", code)
 
 
 def get_data_status() -> dict:
