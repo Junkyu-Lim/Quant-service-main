@@ -34,6 +34,7 @@
     multi_strategy:   "종합점수",
     forward_covered:  "Fwd_모멘텀_점수",
     watchlist:        "종합점수",
+    portfolio:        "비중",
   };
 
   // ─── 관심종목 ──────────────────────────────────────────────────────────
@@ -104,6 +105,7 @@
     multi_strategy:  { title: "🏆 Multi-Pick (3관왕 이상)", criteria: "5개 전략 중 3개 이상 동시 선정 종목" },
     forward_covered: { title: "🔭 Forward Est. (컨센서스 추정치)", criteria: "애널리스트 커버 ~535종목 내 Forward 모멘텀 점수 순위" },
     watchlist:       { title: "⭐ 관심 종목",             criteria: "사용자가 직접 추가한 종목" },
+    portfolio:       { title: "📋 포트폴리오 (보유종목)",   criteria: "매수 수량/단가 기록, 수익률/비중 분석" },
   };
 
   // ─── 전략별 상세 가이드 콘텐츠 ──────────────────────────────────────────
@@ -228,6 +230,16 @@
         <li>다른 탭에서 <span class="text-warning">☆</span> 버튼을 눌러 추가한 종목들이 여기에 표시됩니다.</li>
         <li>정기적으로 리스트를 점검하여 투자 매력이 떨어진 종목은 제외하고, 새로운 유망 종목으로 교체하세요.</li>
         <li>'비교하기' 기능을 사용하여 관심 종목들 간의 지표 우열을 가려보세요.</li>
+        <li>관심종목 행의 <span class="text-info">+PF</span> 버튼으로 포트폴리오에 편입할 수 있습니다.</li>
+      </ul>
+    `,
+    portfolio: `
+      <h6>📋 포트폴리오 관리</h6>
+      <p>보유 종목의 매수 내역을 기록하고 실시간 수익률과 비중을 관리합니다.</p>
+      <ul>
+        <li><strong>종목 추가:</strong> 상단 '+ 종목 추가' 버튼이나, 관심종목/상세 모달의 '포트폴리오 추가' 버튼을 사용하세요.</li>
+        <li><strong>수정/삭제:</strong> 각 행의 ✎(수정) / ✕(삭제) 버튼으로 매수 내역을 관리합니다.</li>
+        <li><strong>요약:</strong> 상단 요약 바에서 총평가, 총손익, 섹터 비중을 확인하세요.</li>
       </ul>
     `
   };
@@ -318,6 +330,15 @@
       { key: "PBR", label: "PBR", fmt: "f2" }, { key: "ROE(%)", label: "ROE", fmt: "f2" },
       { key: "부채비율(%)", label: "부채%", fmt: "f1" }, { key: "배당수익률(%)", label: "배당%", fmt: "f2" },
       { key: "종합점수", label: "점수", fmt: "f1" }
+    ],
+    // 10. 포트폴리오 - 보유종목 관리 (11개)
+    portfolio: [
+      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" },
+      { key: "현재가", label: "현재가", fmt: "int" }, { key: "수량", label: "수량", fmt: "int" },
+      { key: "평균매입가", label: "매입가", fmt: "int" }, { key: "매입금액", label: "매입금액", fmt: "int" },
+      { key: "평가금액", label: "평가금액", fmt: "int" }, { key: "수익금액", label: "수익금", fmt: "int" },
+      { key: "수익률", label: "수익률%", fmt: "f2" }, { key: "비중", label: "비중%", fmt: "f1" },
+      { key: "섹터", label: "섹터" }
     ]
   };
 
@@ -929,7 +950,7 @@
   function renderTabBadges() {
     document.querySelectorAll("#screen-tabs .nav-link[data-screen]").forEach(link => {
       const screen = link.dataset.screen;
-      if (screen === "watchlist") return;
+      if (screen === "watchlist" || screen === "portfolio") return;
 
       // 기존 배지 제거
       link.querySelectorAll(".tab-count-badge, .tab-diff").forEach(el => el.remove());
@@ -998,6 +1019,22 @@
     let apiScreen  = currentScreen;
     let codesParam = "";
 
+    // 포트폴리오 탭은 전용 API 사용
+    if (currentScreen === "portfolio") {
+      const pf = await loadPortfolio();
+      renderPortfolioSummary();
+      if (!pf || !pf.items.length) {
+        renderPortfolioTable([]);
+        pageInfo.textContent = "0건";
+      } else {
+        renderPortfolioTable(pf.items);
+        pageInfo.textContent = `${pf.items.length}건`;
+      }
+      btnPrev.disabled = true;
+      btnNext.disabled = true;
+      return;
+    }
+
     if (currentScreen === "watchlist") {
       const wl = [...getWatchlist()];
       if (wl.length === 0) { renderTable([]); return; }
@@ -1033,7 +1070,7 @@
       btnNext.disabled = data.page >= totalPages;
 
       // 현재 탭 카운트 실시간 갱신 (서버 재시작 전에도 보임)
-      if (currentScreen !== "watchlist") {
+      if (currentScreen !== "watchlist" && currentScreen !== "portfolio") {
         tabCounts[currentScreen] = data.total;
         renderTabBadges();
       }
@@ -1056,7 +1093,9 @@
       const code    = s["종목코드"];
       const watched = wl.has(code);
       const isNew   = newCodes.has(code);
-      const compareCb = `<td class="text-center p-1"><input type="checkbox" class="compare-cb" data-code="${code}" ${compareSet.has(code) ? "checked" : ""}></td>`;
+      const compareCb = currentScreen === "watchlist"
+        ? `<td class="text-center p-1"><button class="btn btn-sm btn-outline-info pf-add-btn" data-code="${code}" data-name="${(s["종목명"]||"").replace(/"/g,"&quot;")}" style="font-size:.6rem;padding:1px 4px;line-height:1.2;">+PF</button></td>`
+        : `<td class="text-center p-1"><input type="checkbox" class="compare-cb" data-code="${code}" ${compareSet.has(code) ? "checked" : ""}></td>`;
       const star      = `<td class="text-center p-1"><button class="watch-btn${watched ? " watched" : ""}" data-code="${code}">${watched ? "★" : "☆"}</button></td>`;
       const cells = cols.map(c => {
         let cls = "";
@@ -1082,9 +1121,12 @@
     tbody.querySelectorAll(".compare-cb").forEach(cb =>
       cb.addEventListener("change", e => { e.stopPropagation(); toggleCompare(cb.dataset.code, cb.checked); })
     );
+    tbody.querySelectorAll(".pf-add-btn").forEach(btn =>
+      btn.addEventListener("click", e => { e.stopPropagation(); openPortfolioAdd(btn.dataset.code, btn.dataset.name); })
+    );
     tbody.querySelectorAll("tr[data-code]").forEach(tr =>
       tr.addEventListener("click", e => {
-        if (e.target.classList.contains("watch-btn") || e.target.classList.contains("compare-cb")) return;
+        if (e.target.classList.contains("watch-btn") || e.target.classList.contains("compare-cb") || e.target.classList.contains("pf-add-btn")) return;
         openDetail(tr.dataset.code);
       })
     );
@@ -1939,6 +1981,183 @@
     document.querySelectorAll('.tooltip').forEach(e => e.remove());
   }
 
+  // ─── 포트폴리오 ──────────────────────────────────────────────────────
+  let portfolioData = null;
+
+  async function loadPortfolio() {
+    try {
+      const res = await fetch("/api/portfolio");
+      portfolioData = await res.json();
+      updatePortfolioCount();
+      return portfolioData;
+    } catch (e) { console.error("loadPortfolio:", e); return null; }
+  }
+
+  function updatePortfolioCount() {
+    const el = document.getElementById("cnt-portfolio");
+    if (el && portfolioData) el.textContent = portfolioData.summary.종목수 || 0;
+  }
+
+  function renderPortfolioSummary() {
+    const bar = document.getElementById("portfolio-summary-bar");
+    if (!bar) return;
+    if (currentScreen !== "portfolio") { bar.style.display = "none"; return; }
+    bar.style.display = "";
+
+    const statsEl = document.getElementById("portfolio-summary-stats");
+    const sectorEl = document.getElementById("portfolio-sector-dist");
+    if (!portfolioData || !portfolioData.items.length) {
+      statsEl.innerHTML = '<span class="text-muted small">포트폴리오가 비어 있습니다. 종목을 추가해보세요.</span>';
+      sectorEl.innerHTML = "";
+      return;
+    }
+    const s = portfolioData.summary;
+    const plClass = s.총수익금액 >= 0 ? "val-pos" : "val-neg";
+    const plSign  = s.총수익금액 >= 0 ? "+" : "";
+    statsEl.innerHTML = `
+      <span class="fw-bold">총평가 <span class="fs-6">${Math.round(s.총평가금액).toLocaleString("ko-KR")}</span>원</span>
+      <span class="mx-1 text-muted">|</span>
+      <span class="${plClass} fw-bold">${plSign}${Math.round(s.총수익금액).toLocaleString("ko-KR")}원 (${plSign}${s.총수익률.toFixed(2)}%)</span>
+      <span class="mx-1 text-muted">|</span>
+      <span class="text-muted small">${s.종목수}종목</span>`;
+
+    const sectors = portfolioData["섹터별"] || [];
+    sectorEl.innerHTML = sectors.slice(0, 8).map(d =>
+      `<span class="badge bg-light text-dark border">${d.섹터} ${d.비중.toFixed(1)}%</span>`
+    ).join("");
+  }
+
+  function renderPortfolioTable(items) {
+    const cols = COLUMNS.portfolio;
+    const headerEl = document.getElementById("table-header");
+    const tbodyEl  = document.getElementById("stock-tbody");
+
+    // 헤더 구성 (관리 컬럼 추가)
+    headerEl.innerHTML =
+      `<tr><th width="55" class="text-center">관리</th>` +
+      cols.map(c => {
+        const arrow = sortCol === c.key ? (sortOrder === "desc" ? " ↓" : " ↑") : "";
+        return `<th data-col="${c.key}" style="cursor:pointer; user-select:none;">${c.label}<span class="sort-arrow text-muted small">${arrow}</span></th>`;
+      }).join("") + `</tr>`;
+
+    if (!items.length) {
+      tbodyEl.innerHTML = `<tr><td colspan="${cols.length + 1}" class="text-center py-4 text-muted">
+        포트폴리오가 비어 있습니다. '+ 종목 추가' 버튼으로 종목을 추가하세요.</td></tr>`;
+      return;
+    }
+
+    tbodyEl.innerHTML = items.map(e => {
+      const plClass = (e["수익률"] || 0) >= 0 ? "val-pos" : "val-neg";
+      const actionBtns = `<td class="text-center p-1">
+        <button class="btn btn-sm btn-outline-secondary pf-edit-btn" data-code="${e["종목코드"]}" title="편집" style="font-size:.7rem;padding:1px 5px;">✎</button>
+        <button class="btn btn-sm btn-outline-danger pf-del-btn" data-code="${e["종목코드"]}" title="삭제" style="font-size:.7rem;padding:1px 5px;">✕</button>
+      </td>`;
+      const cells = cols.map(c => {
+        let cls = "";
+        if (c.key === "수익률" || c.key === "수익금액") cls = plClass;
+        return `<td class="${cls}">${fmt(e[c.key], c.fmt)}</td>`;
+      }).join("");
+      return `<tr data-code="${e["종목코드"]}">${actionBtns}${cells}</tr>`;
+    }).join("");
+
+    // 헤더 정렬 이벤트
+    headerEl.querySelectorAll("th[data-col]").forEach(th => {
+      th.addEventListener("click", () => {
+        const col = th.dataset.col;
+        if (sortCol === col) {
+          sortOrder = sortOrder === "desc" ? "asc" : "desc";
+        } else {
+          sortCol = col; sortOrder = "desc";
+        }
+        // 클라이언트 정렬
+        const sorted = [...items].sort((a, b) => {
+          const va = a[sortCol] ?? -Infinity, vb = b[sortCol] ?? -Infinity;
+          return sortOrder === "desc" ? (vb > va ? 1 : -1) : (va > vb ? 1 : -1);
+        });
+        renderPortfolioTable(sorted);
+      });
+    });
+
+    // 수정 버튼
+    tbodyEl.querySelectorAll(".pf-edit-btn").forEach(btn =>
+      btn.addEventListener("click", e => { e.stopPropagation(); openPortfolioEdit(btn.dataset.code); })
+    );
+    // 삭제 버튼
+    tbodyEl.querySelectorAll(".pf-del-btn").forEach(btn =>
+      btn.addEventListener("click", e => {
+        e.stopPropagation();
+        if (confirm("이 종목을 포트폴리오에서 삭제하시겠습니까?")) deletePortfolioEntry(btn.dataset.code);
+      })
+    );
+    // 행 클릭 → 상세 모달
+    tbodyEl.querySelectorAll("tr[data-code]").forEach(tr =>
+      tr.addEventListener("click", e => {
+        if (e.target.closest(".pf-edit-btn, .pf-del-btn")) return;
+        openDetail(tr.dataset.code);
+      })
+    );
+  }
+
+  function openPortfolioAdd(code, name) {
+    document.getElementById("pf-code").value = code || "";
+    document.getElementById("pf-code").readOnly = !!code;
+    document.getElementById("pf-stock-name").textContent = name || "";
+    document.getElementById("pf-qty").value = "";
+    document.getElementById("pf-price").value = "";
+    document.getElementById("pf-date").value = new Date().toISOString().slice(0, 10);
+    document.getElementById("pf-memo").value = "";
+    document.getElementById("portfolio-modal-title").textContent = "포트폴리오 추가";
+    new bootstrap.Modal(document.getElementById("portfolio-modal")).show();
+  }
+
+  function openPortfolioEdit(code) {
+    if (!portfolioData) return;
+    const entry = portfolioData.items.find(e => e["종목코드"] === code);
+    if (!entry) return;
+    document.getElementById("pf-code").value = entry["종목코드"];
+    document.getElementById("pf-code").readOnly = true;
+    document.getElementById("pf-stock-name").textContent = entry["종목명"] || "";
+    document.getElementById("pf-qty").value = entry["수량"];
+    document.getElementById("pf-price").value = entry["평균매입가"];
+    document.getElementById("pf-date").value = entry["매입일"] || "";
+    document.getElementById("pf-memo").value = entry["메모"] || "";
+    document.getElementById("portfolio-modal-title").textContent = "포트폴리오 수정";
+    new bootstrap.Modal(document.getElementById("portfolio-modal")).show();
+  }
+
+  async function savePortfolioEntry() {
+    const code  = (document.getElementById("pf-code").value || "").trim().padStart(6, "0");
+    const qty   = parseInt(document.getElementById("pf-qty").value);
+    const price = parseFloat(document.getElementById("pf-price").value);
+    const date  = document.getElementById("pf-date").value;
+    const memo  = document.getElementById("pf-memo").value.trim();
+    if (!code || !qty || qty <= 0 || !price || price <= 0) {
+      alert("수량과 매입가를 올바르게 입력하세요."); return;
+    }
+    const isEdit = document.getElementById("pf-code").readOnly;
+    const url    = isEdit ? `/api/portfolio/${code}` : "/api/portfolio";
+    const method = isEdit ? "PUT" : "POST";
+    try {
+      const res = await fetch(url, {
+        method, headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ "종목코드": code, "수량": qty, "평균매입가": price, "매입일": date, "메모": memo }),
+      });
+      if (!res.ok) { const err = await res.json(); alert(err.error || "저장 실패"); return; }
+      bootstrap.Modal.getInstance(document.getElementById("portfolio-modal"))?.hide();
+      await loadPortfolio();
+      if (currentScreen === "portfolio") loadStocks();
+    } catch (e) { alert("저장 실패: " + e.message); }
+  }
+
+  async function deletePortfolioEntry(code) {
+    try {
+      const res = await fetch(`/api/portfolio/${code}`, { method: "DELETE" });
+      if (!res.ok) { alert("삭제 실패"); return; }
+      await loadPortfolio();
+      if (currentScreen === "portfolio") loadStocks();
+    } catch (e) { alert("삭제 실패: " + e.message); }
+  }
+
   // ─── DOM 참조 ─────────────────────────────────────────────────────────
   const tbody    = document.getElementById("stock-tbody");
   const headerRow = document.getElementById("table-header");
@@ -2011,6 +2230,36 @@
     if (this.dataset.code) toggleWatch(this.dataset.code);
   });
 
+  // 포트폴리오 저장 버튼
+  document.getElementById("btn-portfolio-save")?.addEventListener("click", savePortfolioEntry);
+
+  // 포트폴리오 추가 버튼 (세부 모달)
+  document.getElementById("btn-portfolio-detail")?.addEventListener("click", function () {
+    if (currentDetailCode && currentDetailData) {
+      openPortfolioAdd(currentDetailCode, currentDetailData["종목명"]);
+    }
+  });
+
+  // 포트폴리오 새 종목 추가 버튼 (요약 바)
+  document.getElementById("btn-portfolio-add-new")?.addEventListener("click", () => {
+    openPortfolioAdd("", "");
+  });
+
+  // 포트폴리오 모달: 종목코드 입력 시 종목명 자동 조회
+  document.getElementById("pf-code")?.addEventListener("blur", async function () {
+    const code = this.value.trim().padStart(6, "0");
+    if (code.length !== 6 || code === "000000") return;
+    try {
+      const res = await fetch(`/api/stocks/${code}`);
+      if (res.ok) {
+        const data = await res.json();
+        document.getElementById("pf-stock-name").textContent = data["종목명"] || "";
+      } else {
+        document.getElementById("pf-stock-name").textContent = "";
+      }
+    } catch (e) { /* ignore */ }
+  });
+
   // 재무 차트 연간/분기 토글
   document.getElementById("fin-period-toggle")?.querySelectorAll("button").forEach(btn => {
     btn.addEventListener("click", () => {
@@ -2051,13 +2300,24 @@
   document.querySelectorAll("#screen-tabs .nav-link").forEach(l =>
     l.addEventListener("click", e => {
       e.preventDefault();
+      const prevScreen = currentScreen;
       document.querySelectorAll("#screen-tabs .nav-link").forEach(x => x.classList.remove("active"));
       l.classList.add("active");
       currentScreen = l.dataset.screen;
       sortCol       = TAB_DEFAULT_SORT[currentScreen];
       sortOrder     = "desc";
       currentPage   = 1;
-      buildHeader();
+
+      // 포트폴리오 ↔ 일반 탭 전환 시 요약 바/마켓 요약 토글
+      if (currentScreen === "portfolio") {
+        document.getElementById("portfolio-summary-bar").style.display = "";
+      } else {
+        document.getElementById("portfolio-summary-bar").style.display = "none";
+        if (prevScreen === "portfolio") loadMarketSummary();
+      }
+
+      // 포트폴리오 탭은 자체 헤더를 빌드하므로 buildHeader 스킵
+      if (currentScreen !== "portfolio") buildHeader();
       loadStocks();
       // CSV 버튼은 모든 탭에서 표시
       const csvBtn = document.getElementById("btn-export-csv");
@@ -2141,6 +2401,7 @@
   loadSectorOptions();
   loadDataInfo();
   loadReportMap();
+  loadPortfolio();
   loadStocks();
   updateWatchlistCount();
 

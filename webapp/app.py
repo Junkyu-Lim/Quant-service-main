@@ -394,6 +394,142 @@ def api_stock_analysis(code: str):
         return jsonify({"error": err_str}), 500
 
 
+# ── Portfolio API ──────────────────────────────────────────────────────
+
+@app.route("/api/portfolio", methods=["GET"])
+def api_portfolio():
+    """포트폴리오 목록 + 현재가/수익률/비중 계산"""
+    entries = _db.load_portfolio()
+    if not entries:
+        return jsonify({
+            "items": [],
+            "summary": {"총매입금액": 0, "총평가금액": 0, "총수익금액": 0,
+                         "총수익률": 0, "종목수": 0},
+            "섹터별": [],
+        })
+
+    df = _load_data()
+    items = []
+    for e in entries:
+        code = e["종목코드"]
+        qty = e.get("수량", 0) or 0
+        avg_price = e.get("평균매입가", 0) or 0
+        buy_amount = qty * avg_price
+
+        # dashboard_result 에서 현재가/섹터 등 조회
+        cur_price = None
+        stock_name = code
+        sector = None
+        per = None
+        score = None
+        if not df.empty:
+            row = df[df["종목코드"] == code]
+            if not row.empty:
+                r = row.iloc[0]
+                cur_price = _safe_val(r.get("종가"))
+                stock_name = r.get("종목명", code)
+                sector = r.get("섹터")
+                per = _safe_val(r.get("PER"))
+                score = _safe_val(r.get("종합점수"))
+
+        eval_amount = (qty * cur_price) if cur_price else None
+        profit = (eval_amount - buy_amount) if eval_amount else None
+        profit_pct = ((cur_price / avg_price - 1) * 100) if (cur_price and avg_price) else None
+
+        items.append({
+            "종목코드": code,
+            "종목명": stock_name,
+            "수량": qty,
+            "평균매입가": avg_price,
+            "현재가": cur_price,
+            "매입금액": buy_amount,
+            "평가금액": eval_amount,
+            "수익금액": round(profit, 0) if profit is not None else None,
+            "수익률": round(profit_pct, 2) if profit_pct is not None else None,
+            "비중": 0,  # 아래에서 계산
+            "섹터": sector,
+            "PER": per,
+            "종합점수": score,
+            "매입일": e.get("매입일"),
+            "메모": e.get("메모", ""),
+        })
+
+    # 비중 계산
+    total_eval = sum(i["평가금액"] for i in items if i["평가금액"])
+    if total_eval > 0:
+        for i in items:
+            if i["평가금액"]:
+                i["비중"] = round(i["평가금액"] / total_eval * 100, 1)
+
+    total_buy = sum(i["매입금액"] for i in items if i["매입금액"])
+    total_profit = (total_eval - total_buy) if total_eval else 0
+    total_pct = ((total_eval / total_buy - 1) * 100) if (total_eval and total_buy) else 0
+
+    # 섹터별 분포
+    sector_map = {}
+    for i in items:
+        s = i["섹터"] or "기타"
+        sector_map.setdefault(s, 0)
+        sector_map[s] += (i["평가금액"] or 0)
+    sector_list = sorted(
+        [{"섹터": k, "평가금액": v, "비중": round(v / total_eval * 100, 1) if total_eval else 0}
+         for k, v in sector_map.items()],
+        key=lambda x: x["비중"], reverse=True,
+    )
+
+    return jsonify({
+        "items": items,
+        "summary": {
+            "총매입금액": round(total_buy),
+            "총평가금액": round(total_eval) if total_eval else 0,
+            "총수익금액": round(total_profit),
+            "총수익률": round(total_pct, 2),
+            "종목수": len(items),
+        },
+        "섹터별": sector_list,
+    })
+
+
+@app.route("/api/portfolio", methods=["POST"])
+def api_portfolio_add():
+    """포트폴리오에 종목 추가"""
+    body = request.get_json(silent=True) or {}
+    code = (body.get("종목코드") or body.get("code", "")).strip()
+    if not code:
+        return jsonify({"error": "종목코드가 필요합니다."}), 400
+    code = code.zfill(6)
+    qty = int(body.get("수량", body.get("qty", 0)))
+    price = float(body.get("평균매입가", body.get("price", 0)))
+    buy_date = body.get("매입일", body.get("date", ""))
+    memo = body.get("메모", body.get("memo", ""))
+    if qty <= 0 or price <= 0:
+        return jsonify({"error": "수량과 매입가는 0보다 커야 합니다."}), 400
+    _db.upsert_portfolio_item(code, qty, price, buy_date, memo)
+    return jsonify({"status": "ok", "종목코드": code})
+
+
+@app.route("/api/portfolio/<code>", methods=["PUT"])
+def api_portfolio_update(code: str):
+    """포트폴리오 항목 수정"""
+    code = code.zfill(6)
+    body = request.get_json(silent=True) or {}
+    qty = int(body.get("수량", body.get("qty", 0)))
+    price = float(body.get("평균매입가", body.get("price", 0)))
+    buy_date = body.get("매입일", body.get("date", ""))
+    memo = body.get("메모", body.get("memo", ""))
+    if qty <= 0 or price <= 0:
+        return jsonify({"error": "수량과 매입가는 0보다 커야 합니다."}), 400
+    _db.upsert_portfolio_item(code, qty, price, buy_date, memo)
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/portfolio/<code>", methods=["DELETE"])
+def api_portfolio_delete(code: str):
+    """포트폴리오에서 종목 삭제"""
+    _db.delete_portfolio_item(code)
+    return jsonify({"status": "ok"})
+
+
 def _apply_screen_filter(df: pd.DataFrame, name: str) -> pd.DataFrame:
     if name == "leaders":
         mask = (
