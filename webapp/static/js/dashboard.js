@@ -1136,8 +1136,9 @@
   // ─── 헤더 구성 ────────────────────────────────────────────────────────
   function buildHeader() {
     const cols = COLUMNS[currentScreen] || COLUMNS.all;
+    const firstColLabel = currentScreen === "watchlist" ? "+PF" : "";
     headerRow.innerHTML =
-      `<tr><th width="20"></th><th width="30">★</th>` +
+      `<tr><th width="20" class="text-center small text-muted">${firstColLabel}</th><th width="30">★</th>` +
       cols.map(c => {
         const arrow = sortCol === c.key ? (sortOrder === "desc" ? " ↓" : " ↑") : "";
         const tip = METRIC_TOOLTIPS[c.key]
@@ -2233,10 +2234,21 @@
   // 포트폴리오 저장 버튼
   document.getElementById("btn-portfolio-save")?.addEventListener("click", savePortfolioEntry);
 
-  // 포트폴리오 추가 버튼 (세부 모달)
+  // 포트폴리오 추가 버튼 (세부 모달) - 상세 모달을 먼저 닫고 포트폴리오 모달 열기
   document.getElementById("btn-portfolio-detail")?.addEventListener("click", function () {
     if (currentDetailCode && currentDetailData) {
-      openPortfolioAdd(currentDetailCode, currentDetailData["종목명"]);
+      const code = currentDetailCode;
+      const name = currentDetailData["종목명"];
+      const detailModal = bootstrap.Modal.getInstance(document.getElementById("detail-modal"));
+      if (detailModal) {
+        document.getElementById("detail-modal").addEventListener("hidden.bs.modal", function handler() {
+          this.removeEventListener("hidden.bs.modal", handler);
+          openPortfolioAdd(code, name);
+        });
+        detailModal.hide();
+      } else {
+        openPortfolioAdd(code, name);
+      }
     }
   });
 
@@ -2247,8 +2259,10 @@
 
   // 포트폴리오 모달: 종목코드 입력 시 종목명 자동 조회
   document.getElementById("pf-code")?.addEventListener("blur", async function () {
-    const code = this.value.trim().padStart(6, "0");
-    if (code.length !== 6 || code === "000000") return;
+    const raw = this.value.trim();
+    if (raw.length === 0 || raw.length > 6) return;
+    const code = raw.padStart(6, "0");
+    if (code === "000000") return;
     try {
       const res = await fetch(`/api/stocks/${code}`);
       if (res.ok) {
