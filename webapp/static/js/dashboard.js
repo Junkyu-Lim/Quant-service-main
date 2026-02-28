@@ -919,6 +919,7 @@
   async function loadMarketSummary() {
     try {
       const res  = await fetch("/api/markets/summary");
+      if (!res.ok) return;
       const data = await res.json();
       const el   = document.getElementById("market-summary");
       if (!el) return;
@@ -942,6 +943,7 @@
   async function loadTabCounts() {
     try {
       const res = await fetch("/api/stocks/tab_counts");
+      if (!res.ok) return;
       tabCounts = await res.json();
       renderTabBadges();
     } catch (e) { console.error("loadTabCounts:", e); }
@@ -983,6 +985,7 @@
   async function loadBatchChanges() {
     try {
       const res  = await fetch("/api/batch/changes");
+      if (!res.ok) return;
       batchChanges = await res.json();
       renderChangeBanner();
       renderTabBadges();
@@ -1062,6 +1065,7 @@
 
     try {
       const res  = await fetch(`/api/stocks?${params}`);
+      if (!res.ok) throw new Error(`서버 오류: ${res.status}`);
       const data = await res.json();
       renderTable(data.items);
       const totalPages = Math.ceil(data.total / data.size) || 1;
@@ -1176,6 +1180,7 @@
     currentDetailCode = code;
     try {
       const res = await fetch(`/api/stocks/${code}`);
+      if (!res.ok) throw new Error("종목 정보를 불러올 수 없습니다.");
       currentDetailData = await res.json();
       renderDetailModal(currentDetailData);
       const modalEl = document.getElementById("detail-modal");
@@ -1382,6 +1387,7 @@
       const period = _finPeriod;
       const url = `/api/stocks/${code}/financials?period=${period}`;
       const res  = await fetch(url);
+      if (!res.ok) { area.style.display = "none"; return; }
       const data = await res.json();
       if (!data.years || data.years.length === 0) { area.style.display = "none"; return; }
       // display를 먼저 설정 후 다음 tick에 chart 생성 (숨겨진 상태에서 렌더 시 크기=0 방지)
@@ -1770,6 +1776,7 @@
     const codes = [...compareSet].join(",");
     try {
       const res  = await fetch(`/api/stocks/compare?codes=${codes}`);
+      if (!res.ok) throw new Error("비교 데이터 로드 실패");
       const data = await res.json();
       renderCompareModal(data);
       new bootstrap.Modal(document.getElementById("compare-modal")).show();
@@ -1889,6 +1896,7 @@
       const s = stocks[si];
       try {
         const res  = await fetch(`/api/stocks/${s["종목코드"]}/financials`);
+        if (!res.ok) continue;
         const data = await res.json();
         if (!data.years || !data.years.length) continue;
         const ctx = document.getElementById(`cmp-fin-${si}`)?.getContext("2d");
@@ -2360,6 +2368,7 @@
     if (!sel) return;
     try {
       const res  = await fetch("/api/sectors");
+      if (!res.ok) return;
       const data = await res.json();
       // 기존 옵션 (전체 섹터) 유지 후 추가
       const current = sel.value;
@@ -2380,6 +2389,7 @@
   async function loadDataInfo() {
     try {
       const res  = await fetch("/api/info");
+      if (!res.ok) return;
       const info = await res.json();
       const el   = document.getElementById("data-quality-badge");
       if (!el) return;
