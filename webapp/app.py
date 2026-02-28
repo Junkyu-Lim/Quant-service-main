@@ -340,6 +340,12 @@ def api_stocks_compare():
     stocks = [_row_to_dict(row, available) for _, row in matched.iterrows()]
     return jsonify({"stocks": stocks, "metrics_meta": COMPARE_METRICS_META})
 
+@app.route("/api/reports", methods=["GET"])
+def api_list_reports():
+    reports = _db.list_reports()
+    result = {r["종목코드"]: {"model": r["model_used"], "date": r["generated_date"]} for r in reports}
+    return jsonify(result)
+
 @app.route("/api/stocks/<code>/analysis", methods=["GET", "POST"])
 def api_stock_analysis(code: str):
     code = code.zfill(6)
@@ -380,9 +386,12 @@ def api_stock_analysis(code: str):
     except Exception as e:
         log.exception("Analysis failed for %s", code)
         err_name = type(e).__name__
-        if "Timeout" in err_name or "timeout" in str(e).lower():
+        err_str = str(e)
+        if "Timeout" in err_name or "timeout" in err_str.lower():
             return jsonify({"error": "분석 시간이 초과되었습니다. 잠시 후 다시 시도해주세요."}), 504
-        return jsonify({"error": str(e)}), 500
+        if "쿼터를 초과" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+            return jsonify({"error": err_str}), 429
+        return jsonify({"error": err_str}), 500
 
 
 def _apply_screen_filter(df: pd.DataFrame, name: str) -> pd.DataFrame:

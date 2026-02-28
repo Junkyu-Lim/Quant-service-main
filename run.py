@@ -3,12 +3,14 @@
 Entry point for the Quant service.
 
 Usage:
-    python run.py server                       – Start web server + batch scheduler
-    python run.py pipeline                     – Full pipeline (collect + screen)
-    python run.py pipeline --test              – Test mode (3 sample stocks)
-    python run.py pipeline --skip-collect      – Screen only (CSV data must exist)
-    python run.py collect                      – Run collector only
-    python run.py screen                       – Run screener only
+    python run.py server                            – Start web server + batch scheduler
+    python run.py pipeline                          – Full pipeline (collect + screen)
+    python run.py pipeline --test                   – Test mode (3 sample stocks)
+    python run.py pipeline --skip-collect           – Screen only (CSV data must exist)
+    python run.py pipeline --skip-investor          – Skip investor trading collection
+    python run.py collect                           – Run collector only
+    python run.py collect --skip-investor           – Collect without investor trading
+    python run.py screen                            – Run screener only
 """
 
 import argparse
@@ -39,12 +41,13 @@ def cmd_pipeline(args):
         skip_collect=args.skip_collect,
         test_mode=args.test,
         skip_price_history=args.skip_price_history,
+        skip_investor=args.skip_investor,
     )
 
 
 def cmd_collect(args):
     from quant_collector_enhanced import run_full
-    run_full(test_mode=args.test, skip_price_history=args.skip_price_history)
+    run_full(test_mode=args.test, skip_price_history=args.skip_price_history, skip_investor=args.skip_investor)
 
 
 def cmd_screen(args):
@@ -62,10 +65,12 @@ def main():
     p_pipe.add_argument("--test", action="store_true", help="Test mode (3 stocks only)")
     p_pipe.add_argument("--skip-collect", action="store_true", help="Skip collection, screen only")
     p_pipe.add_argument("--skip-price-history", action="store_true", help="Skip price history collection (faster, but no technical indicators)")
+    p_pipe.add_argument("--skip-investor", action="store_true", help="Skip investor trading collection (외국인/기관 매매동향)")
 
     p_col = sub.add_parser("collect", help="Run data collector only")
     p_col.add_argument("--test", action="store_true", help="Test mode (3 stocks only)")
     p_col.add_argument("--skip-price-history", action="store_true", help="Skip price history collection")
+    p_col.add_argument("--skip-investor", action="store_true", help="Skip investor trading collection (외국인/기관 매매동향)")
 
     sub.add_parser("screen", help="Run screener only (requires existing CSVs)")
 

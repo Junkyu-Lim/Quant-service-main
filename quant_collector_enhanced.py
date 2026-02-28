@@ -386,7 +386,7 @@ def collect_price_history(tickers: list[str], days: int = 260) -> pd.DataFrame:
 # ═════════════════════════════════════════════
 
 def collect_index_history(days: int = 365) -> pd.DataFrame:
-    """FinanceDataReader로 KOSPI/KOSDAQ 지수 히스토리 수집.
+    """KOSPI/KOSDAQ 지수 히스토리 수집 (1차 FDR, 2차 yfinance fallback).
 
     RS_250d 계산에 250거래일이 필요하므로 365 캘린더일 기준으로 수집.
 
@@ -402,20 +402,52 @@ def collect_index_history(days: int = 365) -> pd.DataFrame:
 
     indices = {"KOSPI": "KS11", "KOSDAQ": "KQ11"}
     all_rows = []
+    failed_indices = []
+
+    # ── 1차: FinanceDataReader ──
     for idx_name, fdr_code in indices.items():
         try:
             df = fdr.DataReader(fdr_code, start_str, end_str)
             if df is None or df.empty:
-                log.warning(f"  → {idx_name} 데이터 없음")
+                log.warning(f"  → {idx_name} FDR 데이터 없음")
+                failed_indices.append(idx_name)
                 continue
             for dt, r in df.iterrows():
                 dt_str = dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt)[:10]
                 close_val = safe_float(r.get("Close") if "Close" in r.index else r.iloc[3])
                 if close_val is not None:
                     all_rows.append({"지수코드": idx_name, "날짜": dt_str, "종가": close_val})
-            log.info(f"  → {idx_name}: {sum(1 for r in all_rows if r['지수코드'] == idx_name)}건")
+            log.info(f"  → {idx_name}(FDR): {sum(1 for r in all_rows if r['지수코드'] == idx_name)}건")
         except Exception as e:
-            log.warning(f"  → {idx_name} 수집 실패: {type(e).__name__}: {e}")
+            log.warning(f"  → {idx_name} FDR 수집 실패: {type(e).__name__}: {e}")
+            failed_indices.append(idx_name)
+
+    # ── 2차: yfinance fallback (FDR 실패 시) ──
+    if failed_indices:
+        import yfinance as yf
+        yf_indices = {"KOSPI": "^KS11", "KOSDAQ": "^KQ11"}
+        log.info(f"📈 지수 히스토리 yfinance fallback: {failed_indices}")
+        for idx_name in failed_indices:
+            yf_ticker = yf_indices.get(idx_name)
+            if not yf_ticker:
+                continue
+            try:
+                df = yf.download(yf_ticker, start=start_str, end=end_str, progress=False)
+                if df is None or df.empty:
+                    log.warning(f"  → {idx_name} yfinance 데이터 없음")
+                    continue
+                # yfinance MultiIndex columns: ('Close', '^KS11')
+                close_col = df["Close"]
+                if isinstance(close_col, pd.DataFrame):
+                    close_col = close_col.iloc[:, 0]
+                for dt, close_val in close_col.items():
+                    dt_str = dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt)[:10]
+                    val = safe_float(close_val)
+                    if val is not None:
+                        all_rows.append({"지수코드": idx_name, "날짜": dt_str, "종가": val})
+                log.info(f"  → {idx_name}(yfinance): {sum(1 for r in all_rows if r['지수코드'] == idx_name)}건")
+            except Exception as e:
+                log.warning(f"  → {idx_name} yfinance 수집 실패: {type(e).__name__}: {e}")
 
     return pd.DataFrame(all_rows) if all_rows else pd.DataFrame()
 
@@ -931,12 +963,13 @@ def test_crawling():
 # 메인 파이프라인
 # ═════════════════════════════════════════════
 
-def run_full(test_mode: bool = False, skip_price_history: bool = False, progress_callback=None):
+def run_full(test_mode: bool = False, skip_price_history: bool = False, skip_investor: bool = False, progress_callback=None):
     """전체 데이터 수집 (SQLite DB 저장 + 이어하기)
 
     Args:
         test_mode: True이면 TEST_TICKERS(3개)만 수집
         skip_price_history: True이면 주가 히스토리 수집 건너뜀 (기술적 지표 계산 불가)
+        skip_investor: True이면 투자자 매매동향 수집 건너뜀 (외국인/기관/개인 순매수)
         progress_callback: Optional callable(stage: str, pct: int) for progress tracking
     """
     def _progress(stage: str, pct: int):
@@ -1051,7 +1084,9 @@ def run_full(test_mode: bool = False, skip_price_history: bool = False, progress
 
     # ── 8) 투자자 매매동향 (외국인/기관/개인 순매수) ──
     _progress("투자자매매동향 수집 중", 45)
-    if _db.table_has_data("investor_trading", biz_day):
+    if skip_investor:
+        log.info("⏭️  investor_trading 수집 건너뜀 (--skip-investor)")
+    elif _db.table_has_data("investor_trading", biz_day):
         log.info("⏭️  investor_trading 이미 존재하여 수집 건너뜀")
     else:
         inv_df = collect_investor_trading(targets)

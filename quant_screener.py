@@ -196,14 +196,45 @@ def count_consecutive_growth(series_dict):
         else: break
     return count
 
+def _read_yoy_from_ratio_q(q_data, key):
+    """RATIO_Q 테이블의 YoY% 계정(증가율)을 직접 읽어 {날짜: yoy%} 반환.
+    계정명 패턴: '{key}증가율(({key} / {key}(-1Y)) - 1) * 100 ...'"""
+    if q_data.empty or "계정" not in q_data.columns:
+        return {}
+    # EXACT_ACCOUNTS 에서 가능한 원본 계정명들 수집
+    base_keys = EXACT_ACCOUNTS.get(key, [key])
+    # 증가율 계정: base_key + "증가율" 로 시작하거나 "(-1Y)" 포함하지 않고 기준 계정명 포함
+    def _is_growth_acct(name: str) -> bool:
+        for bk in base_keys:
+            norm_bk = _normalize_account(bk)
+            norm_name = _normalize_account(name)
+            if norm_name.startswith(norm_bk + "증가율"):
+                return True
+        return False
+    matched = q_data[q_data["계정"].apply(_is_growth_acct)]
+    if matched.empty:
+        return {}
+    # 날짜별 중복 제거 (우선순위: EXACT_ACCOUNTS 앞쪽)
+    matched = matched.copy()
+    matched = matched.dropna(subset=["값"])
+    matched = matched.drop_duplicates("기준일", keep="first")
+    return {str(r["기준일"]): float(r["값"]) for _, r in matched.iterrows() if pd.notna(r["값"])}
+
+
 def calc_quarterly_yoy(q_data, key):
     res = {"latest_yoy": np.nan, "consecutive_yoy_growth": 0, "latest_quarter": "", "yoy_series": {}}
     vals = find_account_value(q_data, key)
-    if len(vals) < 5: return res
     yoy_s = {}
-    for d in sorted(vals.keys()):
-        prev_d = str(int(d[:4])-1) + d[4:]
-        if prev_d in vals and vals[prev_d] is not None and vals[d] is not None and vals[prev_d] > 0: yoy_s[d] = ((vals[d]/vals[prev_d])-1)*100
+    if len(vals) >= 5:
+        for d in sorted(vals.keys()):
+            prev_d = str(int(d[:4])-1) + d[4:]
+            if prev_d in vals and vals[prev_d] is not None and vals[d] is not None and vals[prev_d] > 0:
+                yoy_s[d] = ((vals[d]/vals[prev_d])-1)*100
+    # 절대값으로 YoY 3개 미만이면 RATIO_Q 증가율 계정 직접 사용
+    if len(yoy_s) < 3:
+        yoy_direct = _read_yoy_from_ratio_q(q_data, key)
+        if len(yoy_direct) >= len(yoy_s):
+            yoy_s = yoy_direct
     if not yoy_s: return res
     res["yoy_series"], res["latest_quarter"] = yoy_s, max(yoy_s.keys())
     res["latest_yoy"] = yoy_s[res["latest_quarter"]]
@@ -673,9 +704,10 @@ def calc_valuation(daily, anal_df, multiplier, shares_df):
         np.nan,
     )
     # 배당_경고신호 — Value Trap(주가폭락 착시) 또는 Payout Trap(이익훼손 배당) 감지
+    _rs_weak = (df["RS_등급"].fillna(50) < 30) if "RS_등급" in df.columns else False
     df["배당_경고신호"] = np.where(
         (df["배당성향(%)"].fillna(0) > 80)
-        | ((df["배당수익률(%)"] > 10) & (df["RS_등급"].fillna(50) < 30))
+        | ((df["배당수익률(%)"] > 10) & _rs_weak)
         | (df["현금전환율(%)"].fillna(100) < 70),
         1,
         0,

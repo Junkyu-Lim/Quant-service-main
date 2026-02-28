@@ -21,6 +21,7 @@
   let pipelineTimer     = null;
   let pipelineStartTime = null;
   let tabCounts         = {};
+  let reportMap         = {};  // { "005930": {model, date}, ... }
 
   // ─── 탭 기본 정렬 ─────────────────────────────────────────────────────
   const TAB_DEFAULT_SORT = {
@@ -1067,7 +1068,10 @@
         }
         const newBadge = (isNew && c.key === "종목명")
           ? ' <span class="badge badge-new bg-success">NEW</span>' : "";
-        return `<td class="${cls}">${fmt(s[c.key], c.fmt)}${newBadge}</td>`;
+        const rep = reportMap[code];
+        const aiBadge = (rep && c.key === "종목명")
+          ? ` <span class="badge badge-ai" title="${rep.model} · ${rep.date}">AI</span>` : "";
+        return `<td class="${cls}">${fmt(s[c.key], c.fmt)}${newBadge}${aiBadge}</td>`;
       }).join("");
       return `<tr data-code="${code}" class="${isNew ? "row-new" : ""}">${compareCb}${star}${cells}</tr>`;
     }).join("");
@@ -1148,11 +1152,16 @@
     const sector = stock["섹터"]     || "";
     const price  = stock["종가"];
 
+    const rep = reportMap[code];
+    const aiHeaderBadge = rep
+      ? `<span class="badge badge-ai ms-2" title="${rep.model}으로 분석됨 · ${rep.date}">AI 분석 완료</span>` : "";
+
     document.getElementById("detail-title").innerHTML =
       `<strong>${name}</strong> <span class="text-muted fs-6">${code}</span>
        <span class="badge ${market === "KOSPI" ? "bg-primary" : "bg-danger"} ms-2">${market}</span>
        ${sector ? `<span class="badge bg-secondary ms-1">${sector}</span>` : ""}
-       ${price != null ? `<span class="ms-2 fw-bold">${fmt(price, "int")}원</span>` : ""}`;
+       ${price != null ? `<span class="ms-2 fw-bold">${fmt(price, "int")}원</span>` : ""}
+       ${aiHeaderBadge}`;
 
     const btnWD = document.getElementById("btn-watch-detail");
     if (btnWD) { btnWD.dataset.code = code; updateAllStarButtons(); }
@@ -1178,8 +1187,26 @@
     }).join("");
 
     // 분석 버튼에 code 설정
-    document.getElementById("btn-analysis-gemini").dataset.code = code;
-    document.getElementById("btn-analysis-claude").dataset.code  = code;
+    const geminiBtn = document.getElementById("btn-analysis-gemini");
+    const claudeBtn = document.getElementById("btn-analysis-claude");
+    geminiBtn.dataset.code = code;
+    claudeBtn.dataset.code = code;
+
+    // 보고서 캐시 상태를 버튼에 반영
+    geminiBtn.classList.remove("btn-success", "has-report");
+    claudeBtn.classList.remove("has-report");
+    geminiBtn.innerHTML = "Gemini 분석 (무료)";
+    claudeBtn.innerHTML = "Claude 분석 (프리미엄)";
+    if (rep) {
+      const isGemini = rep.model.toLowerCase().includes("gemini");
+      if (isGemini) {
+        geminiBtn.innerHTML = "✓ Gemini 분석 (캐시됨)";
+        geminiBtn.classList.add("btn-success");
+      } else {
+        claudeBtn.innerHTML = "✓ Claude 분석 (캐시됨)";
+        claudeBtn.classList.add("has-report");
+      }
+    }
 
     // 점수 브레이크다운 렌더링
     renderScoreBreakdown(stock);
@@ -1330,14 +1357,15 @@
       const barDatasets = data.series.map((s, i) => ({
         type: "bar",
         label: s.name === "매출액" ? "매출" : s.name === "영업이익" ? "영업이익" : "순이익",
-        data: s.data.map(v => v != null ? Math.round(v / 1e8) : null),
+        data: s.data.map(v => v != null ? Math.round(v) : null),
         backgroundColor: ["rgba(13,110,253,0.65)", "rgba(25,135,84,0.65)", "rgba(220,53,69,0.65)"][i],
         yAxisID: "y",
         order: 1,
       }));
 
       const datasets = [...barDatasets];
-      if (opGrowth.some(v => v !== null)) {
+      const hasYoY = opGrowth.some(v => v !== null);
+      if (hasYoY) {
         datasets.push({
           type: "line",
           label: "영업이익 YoY%",
@@ -1364,12 +1392,12 @@
             legend: { position: "bottom", labels: { font: { size: 10 }, boxWidth: 12 } },
           },
           scales: {
-            y:  { beginAtZero: false, ticks: { font: { size: 10 } },
-                  title: { display: true, text: "억원", font: { size: 9 } } },
-            y2: { position: "right", beginAtZero: false,
+            y: { beginAtZero: false, ticks: { font: { size: 10 } },
+                 title: { display: true, text: "억원", font: { size: 9 } } },
+            ...(hasYoY ? { y2: { position: "right", beginAtZero: false,
                   ticks: { font: { size: 10 }, callback: v => v + "%" },
                   grid: { drawOnChartArea: false },
-                  title: { display: true, text: "YoY%", font: { size: 9 } } },
+                  title: { display: true, text: "YoY%", font: { size: 9 } } } } : {}),
           }
         }
       });
@@ -1433,6 +1461,14 @@
         document.getElementById("report-content").innerHTML = data.report_html || "";
         document.getElementById("report-meta").textContent  =
           `${data.model || ""} · ${data.generated_date || ""}`;
+        // reportMap 갱신 → 테이블 행 뱃지 즉시 반영
+        const paddedCode = code.toString().padStart(6, "0");
+        reportMap[paddedCode] = { model: data.model || "", date: data.generated_date || "" };
+        const nameCell = document.querySelector(`tr[data-code="${paddedCode}"] td:nth-child(3)`);
+        if (nameCell && !nameCell.querySelector(".badge-ai")) {
+          nameCell.insertAdjacentHTML("beforeend",
+            ` <span class="badge badge-ai" title="${data.model} · ${data.generated_date}">AI</span>`);
+        }
       }
       document.getElementById("btn-regenerate").dataset.code = code;
       document.getElementById("btn-regenerate").dataset.mode = mode;
@@ -2089,6 +2125,14 @@
     } catch (e) { /* 무시 */ }
   }
 
+  // ─── 보고서 맵 ────────────────────────────────────────────────────────
+  async function loadReportMap() {
+    try {
+      const res = await fetch("/api/reports");
+      if (res.ok) reportMap = await res.json();
+    } catch (e) { /* 무시 */ }
+  }
+
   // ─── 초기화 ──────────────────────────────────────────────────────────
   buildHeader();
   loadMarketSummary();
@@ -2096,6 +2140,7 @@
   loadTabCounts();
   loadSectorOptions();
   loadDataInfo();
+  loadReportMap();
   loadStocks();
   updateWatchlistCount();
 

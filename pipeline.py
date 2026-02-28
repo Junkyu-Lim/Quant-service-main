@@ -29,7 +29,7 @@ from quant_screener import (
 log = logging.getLogger("PIPELINE")
 
 
-def run_pipeline(skip_collect: bool = False, test_mode: bool = False, skip_price_history: bool = False, progress_callback=None):
+def run_pipeline(skip_collect: bool = False, test_mode: bool = False, skip_price_history: bool = False, skip_investor: bool = False, progress_callback=None):
     """Run full pipeline: collect data then screen.
 
     Args:
@@ -37,6 +37,7 @@ def run_pipeline(skip_collect: bool = False, test_mode: bool = False, skip_price
             (useful when data already exists in DB).
         test_mode: If True, only collect 3 sample stocks.
         skip_price_history: If True, skip price history collection (faster, but no technical indicators).
+        skip_investor: If True, skip investor trading collection (외국인/기관 매매동향).
         progress_callback: Optional callable(stage: str, pct: int) to track progress.
     """
     def _progress(stage: str, pct: int):
@@ -55,10 +56,10 @@ def run_pipeline(skip_collect: bool = False, test_mode: bool = False, skip_price
         _progress("데이터 수집 준비 중", 5)
         if test_mode:
             log.info("Running collector in TEST mode (3 stocks)...")
-            collector_run(test_mode=True, skip_price_history=skip_price_history, progress_callback=_progress)
+            collector_run(test_mode=True, skip_price_history=skip_price_history, skip_investor=skip_investor, progress_callback=_progress)
         else:
             log.info("Running full collector...")
-            collector_run(skip_price_history=skip_price_history, progress_callback=_progress)
+            collector_run(skip_price_history=skip_price_history, skip_investor=skip_investor, progress_callback=_progress)
     else:
         log.info("Skipping collection (--skip-collect)")
         _progress("수집 단계 건너뜀", 48)

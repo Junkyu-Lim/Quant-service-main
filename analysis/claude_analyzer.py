@@ -541,15 +541,27 @@ def _generate_report_gemini(stock: dict) -> dict:
     )
 
     client = genai.Client(api_key=config.GEMINI_API_KEY)
-    response = client.models.generate_content(
-        model=config.GEMINI_RESEARCH_MODEL,
-        contents=prompt,
-        config=genai_types.GenerateContentConfig(
-            tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
-            temperature=0.5,
-            max_output_tokens=8192,
-        ),
-    )
+    try:
+        response = client.models.generate_content(
+            model=config.GEMINI_RESEARCH_MODEL,
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(
+                tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
+                temperature=0.5,
+                max_output_tokens=8192,
+            ),
+        )
+    except Exception as api_err:
+        err_str = str(api_err)
+        if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+            import re
+            retry_match = re.search(r"retry.*?(\d+)s", err_str, re.IGNORECASE)
+            retry_hint = f" {retry_match.group(1)}초 후 다시 시도해주세요." if retry_match else ""
+            raise RuntimeError(
+                f"Gemini API 무료 쿼터를 초과했습니다.{retry_hint} "
+                "유료 플랜으로 업그레이드하거나 Claude 분석(프리미엄)을 이용해주세요."
+            ) from api_err
+        raise
 
     raw_text = response.text.strip()
     model_name = config.GEMINI_RESEARCH_MODEL

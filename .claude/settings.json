@@ -28,7 +28,13 @@
       "Read(//c/Users/limjk/Quant-service-main/**)",
       "Bash(curl -s \"http://localhost:5000/api/stocks/207940/financials?period=annual\")",
       "Bash(curl -s \"http://localhost:5000/api/stocks/207940/financials?period=quarter\")",
-      "Bash(curl -s https://api.anthropic.com/v1/models)"
+      "Bash(curl -s https://api.anthropic.com/v1/models)",
+      "Bash(1:*)",
+      "Read(//c/Users/limjk/anaconda3/lib/site-packages/pykrx/stock/**)",
+      "Read(//c/Users/limjk/anaconda3/lib/site-packages/pykrx/website/krx/market/**)",
+      "Read(//c/Users/limjk/anaconda3/lib/site-packages/pykrx/website/comm/**)",
+      "Read(//c/Users/limjk/anaconda3/lib/site-packages/pykrx/website/krx/**)",
+      "Bash(pip index versions pykrx)"
     ],
     "additionalDirectories": [
       "c:\\Users\\limjk\\.claude\\projects\\c--Users-limjk-Quant-service-main\\memory"
