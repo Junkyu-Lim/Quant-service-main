@@ -919,6 +919,7 @@
   async function loadMarketSummary() {
     try {
       const res  = await fetch("/api/markets/summary");
+      if (!res.ok) return;
       const data = await res.json();
       const el   = document.getElementById("market-summary");
       if (!el) return;
@@ -942,6 +943,7 @@
   async function loadTabCounts() {
     try {
       const res = await fetch("/api/stocks/tab_counts");
+      if (!res.ok) return;
       tabCounts = await res.json();
       renderTabBadges();
     } catch (e) { console.error("loadTabCounts:", e); }
@@ -983,6 +985,7 @@
   async function loadBatchChanges() {
     try {
       const res  = await fetch("/api/batch/changes");
+      if (!res.ok) return;
       batchChanges = await res.json();
       renderChangeBanner();
       renderTabBadges();
@@ -1062,6 +1065,7 @@
 
     try {
       const res  = await fetch(`/api/stocks?${params}`);
+      if (!res.ok) throw new Error(`서버 오류: ${res.status}`);
       const data = await res.json();
       renderTable(data.items);
       const totalPages = Math.ceil(data.total / data.size) || 1;
@@ -1136,8 +1140,9 @@
   // ─── 헤더 구성 ────────────────────────────────────────────────────────
   function buildHeader() {
     const cols = COLUMNS[currentScreen] || COLUMNS.all;
+    const firstColLabel = currentScreen === "watchlist" ? "+PF" : "";
     headerRow.innerHTML =
-      `<tr><th width="20"></th><th width="30">★</th>` +
+      `<tr><th width="20" class="text-center small text-muted">${firstColLabel}</th><th width="30">★</th>` +
       cols.map(c => {
         const arrow = sortCol === c.key ? (sortOrder === "desc" ? " ↓" : " ↑") : "";
         const tip = METRIC_TOOLTIPS[c.key]
@@ -1175,6 +1180,7 @@
     currentDetailCode = code;
     try {
       const res = await fetch(`/api/stocks/${code}`);
+      if (!res.ok) throw new Error("종목 정보를 불러올 수 없습니다.");
       currentDetailData = await res.json();
       renderDetailModal(currentDetailData);
       const modalEl = document.getElementById("detail-modal");
@@ -1381,6 +1387,7 @@
       const period = _finPeriod;
       const url = `/api/stocks/${code}/financials?period=${period}`;
       const res  = await fetch(url);
+      if (!res.ok) { area.style.display = "none"; return; }
       const data = await res.json();
       if (!data.years || data.years.length === 0) { area.style.display = "none"; return; }
       // display를 먼저 설정 후 다음 tick에 chart 생성 (숨겨진 상태에서 렌더 시 크기=0 방지)
@@ -1769,6 +1776,7 @@
     const codes = [...compareSet].join(",");
     try {
       const res  = await fetch(`/api/stocks/compare?codes=${codes}`);
+      if (!res.ok) throw new Error("비교 데이터 로드 실패");
       const data = await res.json();
       renderCompareModal(data);
       new bootstrap.Modal(document.getElementById("compare-modal")).show();
@@ -1888,6 +1896,7 @@
       const s = stocks[si];
       try {
         const res  = await fetch(`/api/stocks/${s["종목코드"]}/financials`);
+        if (!res.ok) continue;
         const data = await res.json();
         if (!data.years || !data.years.length) continue;
         const ctx = document.getElementById(`cmp-fin-${si}`)?.getContext("2d");
@@ -2233,10 +2242,21 @@
   // 포트폴리오 저장 버튼
   document.getElementById("btn-portfolio-save")?.addEventListener("click", savePortfolioEntry);
 
-  // 포트폴리오 추가 버튼 (세부 모달)
+  // 포트폴리오 추가 버튼 (세부 모달) - 상세 모달을 먼저 닫고 포트폴리오 모달 열기
   document.getElementById("btn-portfolio-detail")?.addEventListener("click", function () {
     if (currentDetailCode && currentDetailData) {
-      openPortfolioAdd(currentDetailCode, currentDetailData["종목명"]);
+      const code = currentDetailCode;
+      const name = currentDetailData["종목명"];
+      const detailModal = bootstrap.Modal.getInstance(document.getElementById("detail-modal"));
+      if (detailModal) {
+        document.getElementById("detail-modal").addEventListener("hidden.bs.modal", function handler() {
+          this.removeEventListener("hidden.bs.modal", handler);
+          openPortfolioAdd(code, name);
+        });
+        detailModal.hide();
+      } else {
+        openPortfolioAdd(code, name);
+      }
     }
   });
 
@@ -2247,8 +2267,10 @@
 
   // 포트폴리오 모달: 종목코드 입력 시 종목명 자동 조회
   document.getElementById("pf-code")?.addEventListener("blur", async function () {
-    const code = this.value.trim().padStart(6, "0");
-    if (code.length !== 6 || code === "000000") return;
+    const raw = this.value.trim();
+    if (raw.length === 0 || raw.length > 6) return;
+    const code = raw.padStart(6, "0");
+    if (code === "000000") return;
     try {
       const res = await fetch(`/api/stocks/${code}`);
       if (res.ok) {
@@ -2346,6 +2368,7 @@
     if (!sel) return;
     try {
       const res  = await fetch("/api/sectors");
+      if (!res.ok) return;
       const data = await res.json();
       // 기존 옵션 (전체 섹터) 유지 후 추가
       const current = sel.value;
@@ -2366,6 +2389,7 @@
   async function loadDataInfo() {
     try {
       const res  = await fetch("/api/info");
+      if (!res.ok) return;
       const info = await res.json();
       const el   = document.getElementById("data-quality-badge");
       if (!el) return;

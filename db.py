@@ -414,15 +414,15 @@ def load_stock_financials(code: str, period: str = "annual") -> pd.DataFrame:
                 return pd.DataFrame()
             latest = row[0]
             df = conn.execute(
-                f"""SELECT 기준일, 계정, 값
+                """SELECT 기준일, 계정, 값
                    FROM financial_statements
                    WHERE 종목코드 = ?
                    AND collected_date = ?
-                   AND 주기 = '{주기}'
+                   AND 주기 = ?
                    AND 계정 IN ('매출액', '영업이익', '당기순이익')
                    AND 추정치 = 0
                    ORDER BY 기준일""",
-                [code.zfill(6), latest],
+                [code.zfill(6), latest, 주기],
             ).df()
         except Exception:
             return pd.DataFrame()

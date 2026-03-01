@@ -138,8 +138,11 @@ def api_stocks():
     market = request.args.get("market", "")
     q = request.args.get("q", "").strip()
     order = request.args.get("order", "desc")
-    page = max(int(request.args.get("page", 1)), 1)
-    size = min(int(request.args.get("size", 50)), 200)
+    try:
+        page = max(int(request.args.get("page", 1)), 1)
+        size = min(int(request.args.get("size", 50)), 200)
+    except (ValueError, TypeError):
+        page, size = 1, 50
     _default_sort = {
         "leaders": "주도주_점수", "quality_value": "우량가치_점수", "growth_mom": "고성장_점수",
         "cash_div": "현금배당_점수", "turnaround": "턴어라운드_점수", "multi_strategy": "전략수",
@@ -498,8 +501,11 @@ def api_portfolio_add():
     if not code:
         return jsonify({"error": "종목코드가 필요합니다."}), 400
     code = code.zfill(6)
-    qty = int(body.get("수량", body.get("qty", 0)))
-    price = float(body.get("평균매입가", body.get("price", 0)))
+    try:
+        qty = int(body.get("수량", body.get("qty", 0)))
+        price = float(body.get("평균매입가", body.get("price", 0)))
+    except (ValueError, TypeError):
+        return jsonify({"error": "수량과 매입가는 숫자여야 합니다."}), 400
     buy_date = body.get("매입일", body.get("date", ""))
     memo = body.get("메모", body.get("memo", ""))
     if qty <= 0 or price <= 0:
@@ -513,8 +519,11 @@ def api_portfolio_update(code: str):
     """포트폴리오 항목 수정"""
     code = code.zfill(6)
     body = request.get_json(silent=True) or {}
-    qty = int(body.get("수량", body.get("qty", 0)))
-    price = float(body.get("평균매입가", body.get("price", 0)))
+    try:
+        qty = int(body.get("수량", body.get("qty", 0)))
+        price = float(body.get("평균매입가", body.get("price", 0)))
+    except (ValueError, TypeError):
+        return jsonify({"error": "수량과 매입가는 숫자여야 합니다."}), 400
     buy_date = body.get("매입일", body.get("date", ""))
     memo = body.get("메모", body.get("memo", ""))
     if qty <= 0 or price <= 0:
