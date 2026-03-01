@@ -34,7 +34,8 @@
       "Read(//c/Users/limjk/anaconda3/lib/site-packages/pykrx/website/krx/market/**)",
       "Read(//c/Users/limjk/anaconda3/lib/site-packages/pykrx/website/comm/**)",
       "Read(//c/Users/limjk/anaconda3/lib/site-packages/pykrx/website/krx/**)",
-      "Bash(pip index versions pykrx)"
+      "Bash(pip index versions pykrx)",
+      "WebFetch(domain:www.k-etf.com)"
     ],
     "additionalDirectories": [
       "c:\\Users\\limjk\\.claude\\projects\\c--Users-limjk-Quant-service-main\\memory"

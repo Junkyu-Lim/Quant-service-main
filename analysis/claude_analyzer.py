@@ -4,10 +4,6 @@ AI 종목 정성 분석 보고서 생성기 (Grand Master Protocol v2).
 6대 투자 거장(Warren Buffett, Aswath Damodaran, Philip Fisher,
 Pat Dorsey, Peter Lynch, André Kostolany)의 핵심 철학을 기반으로
 9단계(Stage 0~8) 심층 분석 프로토콜을 수행합니다.
-
-지원 모드:
-  - gemini: Gemini API 단독 분석 (무료, Google Search grounding)
-  - claude: Claude API 분석 (프리미엄)
 """
 
 import json
@@ -15,13 +11,6 @@ import logging
 from datetime import datetime
 
 import anthropic
-
-try:
-    from google import genai
-    from google.genai import types as genai_types
-    _GENAI_AVAILABLE = True
-except ImportError:
-    _GENAI_AVAILABLE = False
 
 import config
 
@@ -108,7 +97,6 @@ SYSTEM_PROMPT = """\
    - 인내심 필요 정도
 """
 
-# Claude 모드용: 정량 + 정성 데이터를 받아 9단계 Grand Master 분석
 USER_PROMPT_TEMPLATE = """\
 아래 종목의 정량 데이터를 분석하여, 9단계 Grand Master 분석 보고서를 작성해주세요.
 
@@ -217,188 +205,11 @@ USER_PROMPT_TEMPLATE = """\
 ```
 """
 
-# Gemini 단독 분석용 프롬프트 (시스템 프롬프트 + 9단계 분석 지시를 하나로 통합)
-GEMINI_ANALYSIS_PROMPT = """\
-당신은 한국 주식시장 Grand Master 애널리스트입니다.
-Google 검색을 통해 이 기업의 사업 정보, 최신 뉴스, 산업 동향을 직접 수집하고,
-제공된 정량 데이터와 함께 9단계 Grand Master 분석 보고서를 작성해주세요.
-
-## [환각 방지 최우선 규칙]
-
-**가장 먼저** Google 검색으로 다음을 확인하세요:
-1. "{name}" 기업의 실제 핵심 사업 (검색어: "{name} 사업 제품")
-2. 종목코드 {code}가 어떤 기업인지 교차 확인
-3. 이 기업이 속한 산업 분류
-
-만약 검색 결과와 재무 데이터가 모순된다면(예: 검색에서 코스메틱 기업으로 나오는데
-데이터만 보면 반도체처럼 보임), 반드시 검색 결과를 우선하세요.
-기업 정보가 불확실하면 hallucination_flag를 true로 설정하고
-"데이터 검증 불가로 분석을 보류합니다"라고 출력하세요.
-
-## 9단계 분석 프레임워크
-
-### Stage 0: 사업 정체성 확인 [Google Search 필수]
-- 핵심 사업 모델 3줄 요약, 주요 제품/서비스 및 매출 구성
-
-### Stage 1: 거시환경 & 밸류체인 분석
-- 전방산업 CAGR, 밸류체인 포지셔닝, 경쟁사 대비 우위
-
-### Stage 2: 사업모델 수익성 해부
-- P×Q×C 분석, 캐시카우 vs 성장 드라이버
-
-### Stage 3: 기업 수명주기 & 4대 해자 검증
-- 무형자산/전환비용/네트워크효과/비용우위 - 각각 데이터 근거 포함
-
-### Stage 4: 부문별 실적 & 재무건전성
-- 매출총이익률 추세, FCF, 부채, 컨센서스 괴리
-
-### Stage 5: 향후 전망 & 모멘텀
-- CAPEX, 수주잔고, 신사업, 1년내 촉매
-
-### Stage 6: 라이프사이클 맞춤 밸류에이션 & 코스톨라니 달걀
-- 적합한 밸류에이션 방법론, 달걀 위치(1~6단계)
-
-### Stage 7: 6대 거장 원라이너 + 최종 판결 (S~F 등급)
-- Buffett(해자/안전마진), Damodaran(내재가치/내러티브),
-  Fisher(성장/경영품질), Dorsey(해자심층), Lynch(GARP/생활밀착), Kostolany(시장심리)
-
-### Stage 8: 트레이딩 액션 플랜
-- 진입가, 목표주가, 손절기준, 포트폴리오 비중
-
-## 종목 정보
-- 종목코드: {code}
-- 종목명: {name}
-- 시장: {market}
-
-## 정량 데이터
-{quant_data}
-
-## 지시사항
-1. Google Search로 이 기업의 사업 정체성을 먼저 확인하세요 (환각 방지)
-2. 검색으로 최신 뉴스, 산업 동향, 경쟁 환경을 수집하세요
-3. 반드시 아래 JSON 형식으로만 응답하세요. JSON 외 다른 텍스트는 절대 포함하지 마세요.
-
-```json
-{{
-  "business_identity": {{
-    "core_business": "<3줄 이내 핵심 사업 모델 요약>",
-    "key_products": "<주요 제품/서비스>",
-    "revenue_breakdown": "<매출 구성>",
-    "industry_classification": "<산업 분류>",
-    "confidence": "<high|medium|low>",
-    "hallucination_flag": false
-  }},
-  "stage1_macro": {{
-    "upstream_cagr": "<전방산업 성장률>",
-    "value_chain_position": "<밸류체인 포지션>",
-    "competitive_advantages": "<경쟁 우위>",
-    "analysis": "<3-5문장>"
-  }},
-  "stage2_business_model": {{
-    "p_times_q_analysis": "<P×Q×C 분석>",
-    "cash_cow_drivers": "<캐시카우 사업부>",
-    "growth_drivers": "<성장 드라이버>",
-    "analysis": "<3-5문장>"
-  }},
-  "stage3_moat": {{
-    "lifecycle_stage": "<도입기|성장기|성숙기|쇠퇴기>",
-    "intangible_assets": {{"exists": true, "evidence": "<근거>"}},
-    "switching_costs": {{"exists": false, "evidence": "<근거>"}},
-    "network_effects": {{"exists": false, "evidence": "<근거>"}},
-    "cost_advantage": {{"exists": false, "evidence": "<근거>"}},
-    "moat_rating": "<wide|narrow|none>",
-    "analysis": "<3-5문장>"
-  }},
-  "stage4_financials": {{
-    "gross_margin_trend": "<매출총이익률 추세>",
-    "fcf_quality": "<FCF 품질>",
-    "debt_assessment": "<부채 평가>",
-    "consensus_deviation": "<컨센서스 괴리>",
-    "analysis": "<3-5문장>"
-  }},
-  "stage5_outlook": {{
-    "capex_signals": "<CAPEX 신호>",
-    "order_backlog": "<수주/파이프라인>",
-    "new_business": "<신사업>",
-    "catalysts_12m": ["<촉매1>", "<촉매2>", "<촉매3>"],
-    "analysis": "<3-5문장>"
-  }},
-  "stage6_valuation": {{
-    "lifecycle_matched_method": "<밸류에이션 방법론>",
-    "fair_value_range": "<적정가치 범위>",
-    "kostolany_egg_position": <1-6>,
-    "market_psychology": "<과열|중립|공포>",
-    "analysis": "<3-5문장>"
-  }},
-  "stage7_masters": {{
-    "buffett": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<3-5문장>"}},
-    "damodaran": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<3-5문장>"}},
-    "fisher": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<3-5문장>"}},
-    "dorsey": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<3-5문장>"}},
-    "lynch": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<3-5문장>"}},
-    "kostolany": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<3-5문장>"}}
-  }},
-  "stage8_action": {{
-    "entry_price": "<진입가>",
-    "target_price": "<목표주가>",
-    "stop_loss": "<손절기준>",
-    "portfolio_weight": "<비중>",
-    "holding_period": "<보유기간>",
-    "analysis": "<2-3문장>"
-  }},
-  "composite_score": <1-100 정수, 가중평균: Buffett 20%, Damodaran 15%, Fisher 15%, Dorsey 15%, Lynch 15%, Kostolany 10%, 사업정체성 신뢰도 10%>,
-  "investment_grade": "<S|A|B+|B|C+|C|D|F>",
-  "summary": "<5-7문장 종합 투자 의견>",
-  "risks": ["<리스크1>", "<리스크2>", "<리스크3>"],
-  "catalysts": ["<촉매1>", "<촉매2>", "<촉매3>"]
-}}
-```
-"""
-
-# Gemini 정성 자료 수집용 프롬프트 (Claude 모드에서 사전 수집)
-GEMINI_RESEARCH_PROMPT = """\
-다음 한국 상장기업에 대해 Google 검색을 통해 최신 정성 정보를 수집해주세요.
-
-## 기업 정보
-- 종목코드: {code}
-- 종목명: {name}
-- 시장: {market}
-
-## 수집 항목 (각 항목 3-5문장, 한국어로 작성)
-
-### 0. 핵심 사업 정체성 확인 [최우선 - 환각 방지]
-"{name}" (종목코드: {code})의 실제 핵심 사업을 확인하세요.
-검색어 예시: "{name} 사업", "{name} 제품", "{name} IR"
-- 이 기업이 어느 산업에 속하는지 (예: 화장품, 반도체, 게임, 식품 등)
-- 주요 제품/서비스 3가지
-- 대략적인 매출 구성 비율
-
-### 1. 기업 개요 및 사업 모델
-이 기업의 주요 사업 영역, 핵심 제품/서비스, 매출 구조, 경쟁 포지션을 간략히 설명해주세요.
-
-### 2. 최근 뉴스 및 주요 이벤트 (최근 6개월 이내)
-최근 공시, 실적 발표, 신사업 진출, 경영진 변화, M&A, 대규모 계약 등 주요 이벤트를 나열해주세요.
-
-### 3. 산업 트렌드 및 업황
-이 기업이 속한 산업의 현재 트렌드, 성장 동력, 규제 환경, 경쟁 구도 변화를 설명해주세요.
-
-### 4. CAPEX & 성장 투자 신호
-최근 설비투자, 공장 증설, R&D 확대, 신사업 진출 관련 공시나 뉴스를 수집해주세요.
-
-### 5. 주요 리스크 및 기회 요인
-현재 이 기업이 직면한 주요 외부 리스크(원자재, 환율, 경쟁, 규제 등)와 성장 기회(신시장, 기술혁신 등)를 설명해주세요.
-
-검색 결과를 바탕으로 사실에 근거한 정보만 작성하세요.
-정보가 불확실한 경우 "확인 필요"로 표시하세요.
-특히 섹션 0(핵심 사업 정체성)은 반드시 정확히 작성해야 합니다.
-"""
-
 
 # ─────────────────────────────────────────
 # 정량 데이터 포맷팅
 # ─────────────────────────────────────────
 
-# 분석에 포함할 지표 그룹
 QUANT_SECTIONS = {
     "밸류에이션": [
         ("PER", "f2"), ("PBR", "f2"), ("PSR", "f2"), ("PEG", "f2"),
@@ -481,124 +292,26 @@ def _parse_json_response(raw_text: str) -> dict:
 
 
 # ─────────────────────────────────────────
-# Gemini API 호출
+# Claude API 호출
 # ─────────────────────────────────────────
 
-def collect_qualitative_data(stock: dict) -> str:
+def generate_report(stock: dict, mode: str = "claude") -> dict:
     """
-    Gemini API (Google Search grounding)로 종목의 정성 데이터를 수집합니다.
+    종목 분석 보고서를 생성합니다 (Claude API).
+
+    Args:
+        stock: dashboard_result의 한 종목 데이터 (dict)
+        mode: 사용하지 않음 (호환성 유지)
 
     Returns:
-        수집된 정성 데이터 텍스트. 실패 시 빈 문자열 반환.
-    """
-    if not config.GEMINI_API_KEY:
-        log.warning("GEMINI_API_KEY가 설정되지 않아 정성 데이터 수집을 건너뜁니다.")
-        return ""
-    if not _GENAI_AVAILABLE:
-        log.warning("google-genai 패키지가 설치되지 않아 정성 데이터 수집을 건너뜁니다.")
-        return ""
-
-    code = str(stock.get("종목코드", "")).zfill(6)
-    name = stock.get("종목명", "Unknown")
-    market = stock.get("시장구분", "")
-
-    prompt = GEMINI_RESEARCH_PROMPT.format(code=code, name=name, market=market)
-
-    try:
-        client = genai.Client(api_key=config.GEMINI_API_KEY)
-        response = client.models.generate_content(
-            model=config.GEMINI_RESEARCH_MODEL,
-            contents=prompt,
-            config=genai_types.GenerateContentConfig(
-                tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
-                temperature=0.3,
-                max_output_tokens=2000,
-            ),
-        )
-        qualitative_text = response.text.strip()
-        log.info("Gemini 정성 데이터 수집 완료: %s %s (%d chars)",
-                 code, name, len(qualitative_text))
-        return qualitative_text
-    except Exception as e:
-        log.warning("Gemini 정성 데이터 수집 실패 (%s %s): %s", code, name, str(e)[:120])
-        return ""
-
-
-def _generate_report_gemini(stock: dict) -> dict:
-    """Gemini API 단독으로 분석 보고서를 생성합니다 (무료)."""
-    if not config.GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY 환경변수가 설정되지 않았습니다.")
-    if not _GENAI_AVAILABLE:
-        raise ValueError("google-genai 패키지가 설치되지 않았습니다. pip install google-genai")
-
-    code = str(stock.get("종목코드", "")).zfill(6)
-    name = stock.get("종목명", "Unknown")
-    market = stock.get("시장구분", "")
-
-    quant_text = format_quant_data(stock)
-    prompt = GEMINI_ANALYSIS_PROMPT.format(
-        code=code, name=name, market=market, quant_data=quant_text,
-    )
-
-    client = genai.Client(api_key=config.GEMINI_API_KEY)
-    try:
-        response = client.models.generate_content(
-            model=config.GEMINI_RESEARCH_MODEL,
-            contents=prompt,
-            config=genai_types.GenerateContentConfig(
-                tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
-                temperature=0.5,
-                max_output_tokens=8192,
-            ),
-        )
-    except Exception as api_err:
-        err_str = str(api_err)
-        if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-            import re
-            retry_match = re.search(r"retry.*?(\d+)s", err_str, re.IGNORECASE)
-            retry_hint = f" {retry_match.group(1)}초 후 다시 시도해주세요." if retry_match else ""
-            raise RuntimeError(
-                f"Gemini API 무료 쿼터를 초과했습니다.{retry_hint} "
-                "유료 플랜으로 업그레이드하거나 Claude 분석(프리미엄)을 이용해주세요."
-            ) from api_err
-        raise
-
-    raw_text = response.text.strip()
-    model_name = config.GEMINI_RESEARCH_MODEL
-
-    try:
-        scores = _parse_json_response(raw_text)
-    except json.JSONDecodeError as e:
-        log.error("Gemini JSON 파싱 실패 (%s %s): %s", code, name, str(e)[:100])
-        log.debug("시도한 텍스트: %s", raw_text[:300])
-        return {
-            "scores": {},
-            "report_html": "<p>오류: JSON 파싱 실패</p>",
-            "error": str(e),
-            "model": config.GEMINI_RESEARCH_MODEL,
-            "generated_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "mode": "gemini",
+        {
+            "scores": { ... },
+            "report_html": "...",
+            "model": "...",
+            "generated_date": "...",
+            "mode": "claude",
         }
-
-    generated_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    report_html = render_html(code, name, market, stock, scores,
-                              generated_date, model_label=f"Gemini ({model_name})")
-
-    return {
-        "scores": scores,
-        "report_html": report_html,
-        "model": model_name,
-        "generated_date": generated_date,
-        "mode": "gemini",
-    }
-
-
-# ─────────────────────────────────────────
-# Claude API 호출 (+ Gemini 정성 자료 수집)
-# ─────────────────────────────────────────
-
-def _generate_report_claude(stock: dict) -> dict:
-    """Claude API만 사용하여 분석 보고서를 생성합니다 (비용 절약)."""
+    """
     if not config.ANTHROPIC_API_KEY:
         raise ValueError("ANTHROPIC_API_KEY 환경변수가 설정되지 않았습니다.")
 
@@ -608,13 +321,10 @@ def _generate_report_claude(stock: dict) -> dict:
 
     quant_text = format_quant_data(stock)
 
-    # Claude 모드는 정량 데이터만 사용 (비용 절약, Gemini 호출 없음)
-    qualitative_section = ""
-
     user_prompt = USER_PROMPT_TEMPLATE.format(
         code=code, name=name, market=market,
         quant_data=quant_text,
-        qualitative_section=qualitative_section,
+        qualitative_section="",
     )
 
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY, timeout=300.0)
@@ -642,7 +352,6 @@ def _generate_report_claude(stock: dict) -> dict:
         }
 
     model_label = f"Claude ({config.ANALYSIS_MODEL})"
-
     generated_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     report_html = render_html(code, name, market, stock, scores,
                               generated_date, model_label=model_label)
@@ -654,32 +363,6 @@ def _generate_report_claude(stock: dict) -> dict:
         "generated_date": generated_date,
         "mode": "claude",
     }
-
-
-# ─────────────────────────────────────────
-# 통합 엔트리포인트
-# ─────────────────────────────────────────
-
-def generate_report(stock: dict, mode: str = "gemini") -> dict:
-    """
-    종목 분석 보고서를 생성합니다.
-
-    Args:
-        stock: dashboard_result의 한 종목 데이터 (dict)
-        mode: "gemini" (무료, Gemini 단독) 또는 "claude" (프리미엄, Gemini 수집 + Claude 분석)
-
-    Returns:
-        {
-            "scores": { ... },
-            "report_html": "...",
-            "model": "...",
-            "generated_date": "...",
-            "mode": "gemini" | "claude",
-        }
-    """
-    if mode == "claude":
-        return _generate_report_claude(stock)
-    return _generate_report_gemini(stock)
 
 
 # ─────────────────────────────────────────
@@ -1052,3 +735,535 @@ def render_html(code: str, name: str, market: str, stock: dict,
     <span>{generated_date}</span>
   </div>
 </div>"""
+
+
+# ─────────────────────────────────────────
+# 포트폴리오 AI 종합 분석
+# ─────────────────────────────────────────
+
+PORTFOLIO_SYSTEM_PROMPT = """\
+당신은 한국 주식시장 포트폴리오 전략 어드바이저입니다.
+투자자의 보유 포트폴리오 전체를 분석하여 포트폴리오 수준의 전략적 조언을 제공합니다.
+
+## 분석 프레임워크
+
+### 1. 포트폴리오 건강도 평가
+- 전체 포트폴리오의 품질 점수 (0-100)
+- 분산도, 밸류에이션, 성장성, 안정성 관점에서 종합 평가
+
+### 2. 종목별 액션 권고
+- 각 종목에 대해 BUY_MORE / HOLD / TRIM / SELL 중 하나를 권고
+- 현재 비중 vs 권장 비중 제시
+- 정량 데이터와 기존 AI 분석을 종합하여 근거 제시
+
+### 3. 섹터 집중도 분석
+- 섹터별 비중 분포의 적절성 평가
+- 과집중/과소 섹터 식별
+- 섹터 리밸런싱 권고
+
+### 4. 포트폴리오 리스크 & 촉매
+- 포트폴리오 전체 관점에서의 주요 리스크 (상관관계, 동일 리스크 노출 등)
+- 포트폴리오 전체 관점에서의 상승 촉매
+
+### 5. 보완 제안
+- 포트폴리오에 부족한 섹터/테마/스타일 식별
+- 추가 편입 후보 테마 제안 (종목 추천 아님, 테마/섹터 수준)
+
+## 분석 지침
+- 포트폴리오 비중이 높은 종목에 더 주의를 기울이세요
+- 종목 간 상관관계와 중복 리스크를 식별하세요
+- 데이터가 없는 종목(ETF, 우선주 등)은 비중 분석에만 포함하세요
+- 6대 투자 거장(Buffett, Damodaran, Fisher, Dorsey, Lynch, Kostolany)의 관점이 기존 분석에 포함되어 있으면 이를 종합적으로 활용하세요
+- 한국어로 분석하세요
+"""
+
+PORTFOLIO_USER_PROMPT_TEMPLATE = """\
+아래 포트폴리오의 전체 데이터를 분석하여, 포트폴리오 수준의 전략적 분석 보고서를 작성해주세요.
+
+## 포트폴리오 요약
+- 총 종목수: {stock_count}
+- 총평가금액: {total_eval}원
+- 총수익률: {total_return}%
+- 섹터 분포: {sector_distribution}
+
+## 종목별 데이터
+
+{per_stock_sections}
+
+## 출력 형식
+
+반드시 아래 JSON 형식으로만 응답하세요. JSON 외 다른 텍스트는 절대 포함하지 마세요.
+
+```json
+{{
+  "portfolio_health": {{
+    "score": 0,
+    "grade": "B",
+    "diversification": "분산도 평가 2-3문장",
+    "valuation": "밸류에이션 평가 2-3문장",
+    "growth_quality": "성장성/품질 평가 2-3문장",
+    "overall_assessment": "종합 평가 3-5문장"
+  }},
+  "stock_actions": [
+    {{
+      "code": "종목코드",
+      "name": "종목명",
+      "action": "BUY_MORE|HOLD|TRIM|SELL",
+      "current_weight": 0.0,
+      "recommended_weight": 0.0,
+      "rationale": "2-3문장 근거"
+    }}
+  ],
+  "sector_analysis": {{
+    "concentration_risk": "섹터 집중 리스크 평가 2-3문장",
+    "overweight_sectors": ["과비중 섹터"],
+    "underweight_sectors": ["과소비중 섹터"],
+    "rebalancing_suggestion": "리밸런싱 권고 2-3문장"
+  }},
+  "portfolio_risks": [
+    {{
+      "risk": "리스크 설명",
+      "severity": "high|medium|low",
+      "affected_stocks": ["종목코드"]
+    }}
+  ],
+  "portfolio_catalysts": [
+    {{
+      "catalyst": "촉매 설명",
+      "impact": "high|medium|low",
+      "benefiting_stocks": ["종목코드"]
+    }}
+  ],
+  "missing_themes": [
+    {{
+      "theme": "부족한 테마/섹터명",
+      "reason": "왜 추가가 필요한지 1-2문장"
+    }}
+  ],
+  "summary": "5-7문장 종합 포트폴리오 전략 의견"
+}}
+```
+"""
+
+
+def format_portfolio_stock(stock: dict, portfolio_item: dict,
+                           ai_report: dict | None) -> str:
+    """포트폴리오 종목 1개의 데이터를 텍스트로 포맷팅."""
+    code = str(portfolio_item.get("종목코드", "")).zfill(6)
+    name = portfolio_item.get("종목명", code)
+
+    lines = [f"\n### {name} ({code})"]
+    lines.append(f"- 보유수량: {portfolio_item.get('수량', 0):,}주")
+    avg = portfolio_item.get("평균매입가", 0) or 0
+    lines.append(f"- 평균매입가: {avg:,.0f}원")
+    cur = portfolio_item.get("현재가")
+    lines.append(f"- 현재가: {cur:,.0f}원" if cur else "- 현재가: N/A")
+    pct = portfolio_item.get("수익률")
+    lines.append(f"- 수익률: {pct:.2f}%" if pct is not None else "- 수익률: N/A")
+    weight = portfolio_item.get("비중", 0)
+    lines.append(f"- 비중: {weight:.1f}%")
+    lines.append(f"- 섹터: {portfolio_item.get('섹터') or 'N/A'}")
+
+    # 정량 데이터 (reuse format_quant_data)
+    if stock:
+        lines.append(format_quant_data(stock))
+
+    # ETF 메타데이터 (하드코딩)
+    etf_meta = config.ETF_METADATA.get(code)
+    if etf_meta and not stock:
+        lines.append("\n#### ETF 정보")
+        lines.append(f"- 테마/섹터: {etf_meta['sector']}")
+        lines.append(f"- 설명: {etf_meta['description']}")
+        lines.append(f"- 주요 구성종목: {', '.join(etf_meta['constituents'])}")
+
+    # 기존 AI 분석 요약
+    if ai_report:
+        lines.append("\n#### 기존 AI 분석 요약")
+        lines.append(f"- 종합점수: {ai_report.get('composite_score', 'N/A')}")
+        lines.append(f"- 등급: {ai_report.get('investment_grade', 'N/A')}")
+        lines.append(f"- 요약: {ai_report.get('summary', 'N/A')}")
+        risks = ai_report.get("risks", [])
+        if risks:
+            lines.append(f"- 리스크: {', '.join(str(r) for r in risks[:3])}")
+        catalysts = ai_report.get("catalysts", [])
+        if catalysts:
+            lines.append(f"- 촉매: {', '.join(str(c) for c in catalysts[:3])}")
+        # 거장 점수 요약
+        masters = ai_report.get("stage7_masters", {})
+        if masters:
+            master_scores = []
+            for key, info in MASTER_INFO.items():
+                m = masters.get(key, {})
+                s = m.get("score", 0)
+                master_scores.append(f"{info['name']}: {s}/10")
+            lines.append(f"- 거장 점수: {', '.join(master_scores)}")
+
+    return "\n".join(lines)
+
+
+def generate_portfolio_report(portfolio_items: list[dict],
+                              stock_data: dict[str, dict],
+                              ai_reports: dict[str, dict]) -> dict:
+    """
+    포트폴리오 전체 분석 보고서 생성 (Claude API).
+
+    Args:
+        portfolio_items: api_portfolio() 결과의 items 리스트
+        stock_data: {종목코드: dashboard_result row dict}
+        ai_reports: {종목코드: scores dict (parsed JSON)}
+
+    Returns:
+        { "scores": {...}, "report_html": "...", "model": "...",
+          "generated_date": "...", "mode": "claude" }
+    """
+    if not config.ANTHROPIC_API_KEY:
+        raise ValueError("ANTHROPIC_API_KEY 환경변수가 설정되지 않았습니다.")
+
+    # 종목별 섹션 빌드
+    per_stock_parts = []
+    for item in portfolio_items:
+        code = item["종목코드"]
+        stock = stock_data.get(code)
+        ai = ai_reports.get(code)
+        if stock:
+            per_stock_parts.append(
+                format_portfolio_stock(stock, item, ai)
+            )
+        else:
+            # ETF/우선주 등 — 기본 정보만
+            per_stock_parts.append(
+                format_portfolio_stock({}, item, ai)
+            )
+
+    # 요약 통계
+    total_eval = sum(i.get("평가금액", 0) or 0 for i in portfolio_items)
+    total_buy = sum(i.get("매입금액", 0) or 0 for i in portfolio_items)
+    total_return = ((total_eval / total_buy - 1) * 100) if total_buy else 0
+
+    sector_map: dict[str, float] = {}
+    for i in portfolio_items:
+        s = i.get("섹터") or "기타"
+        sector_map[s] = sector_map.get(s, 0) + (i.get("평가금액", 0) or 0)
+    sector_dist = ", ".join(
+        f"{k} {v / total_eval * 100:.1f}%" for k, v in
+        sorted(sector_map.items(), key=lambda x: -x[1])
+    ) if total_eval else "N/A"
+
+    user_prompt = PORTFOLIO_USER_PROMPT_TEMPLATE.format(
+        stock_count=len(portfolio_items),
+        total_eval=f"{round(total_eval):,}",
+        total_return=f"{total_return:.2f}",
+        sector_distribution=sector_dist,
+        per_stock_sections="\n".join(per_stock_parts),
+    )
+
+    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY, timeout=600.0)
+    message = client.messages.create(
+        model=config.ANALYSIS_MODEL,
+        max_tokens=16384,
+        system=PORTFOLIO_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_prompt}],
+    )
+
+    raw_text = message.content[0].text.strip()
+
+    try:
+        scores = _parse_json_response(raw_text)
+    except json.JSONDecodeError as e:
+        log.error("포트폴리오 분석 JSON 파싱 실패: %s", str(e)[:100])
+        log.debug("시도한 JSON: %s", raw_text[:200])
+        return {
+            "scores": {},
+            "report_html": "<p>오류: JSON 파싱 실패</p>",
+            "error": str(e),
+            "model": config.ANALYSIS_MODEL,
+            "generated_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "mode": "claude",
+        }
+
+    generated_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    model_label = f"Claude ({config.ANALYSIS_MODEL})"
+    report_html = render_portfolio_html(scores, portfolio_items,
+                                        generated_date, model_label)
+
+    return {
+        "scores": scores,
+        "report_html": report_html,
+        "model": config.ANALYSIS_MODEL,
+        "generated_date": generated_date,
+        "mode": "claude",
+    }
+
+
+def render_portfolio_html(scores: dict, portfolio_items: list[dict],
+                          generated_date: str, model_label: str) -> str:
+    """포트폴리오 분석 결과를 HTML 보고서로 렌더링."""
+
+    health = scores.get("portfolio_health", {})
+    stock_actions = scores.get("stock_actions", [])
+    sector_analysis = scores.get("sector_analysis", {})
+    risks = scores.get("portfolio_risks", [])
+    catalysts = scores.get("portfolio_catalysts", [])
+    missing = scores.get("missing_themes", [])
+    summary = scores.get("summary", "")
+
+    grade = health.get("grade", "N/A")
+    score = health.get("score", 0)
+    grade_color = _grade_color(grade)
+
+    # 액션 뱃지 컬러/라벨 매핑
+    action_colors = {
+        "BUY_MORE": "#1e8449",
+        "HOLD": "#2c3e50",
+        "TRIM": "#b9770e",
+        "SELL": "#c0392b",
+    }
+    action_labels = {
+        "BUY_MORE": "추가매수",
+        "HOLD": "보유유지",
+        "TRIM": "비중축소",
+        "SELL": "매도",
+    }
+
+    # 종목별 액션 테이블
+    action_rows = ""
+    for sa in stock_actions:
+        action = sa.get("action", "HOLD")
+        color = action_colors.get(action, "#6c757d")
+        label = action_labels.get(action, action)
+        cur_w = sa.get("current_weight", 0) or 0
+        rec_w = sa.get("recommended_weight", 0) or 0
+        weight_diff = rec_w - cur_w
+        diff_str = f"+{weight_diff:.1f}%" if weight_diff > 0 else f"{weight_diff:.1f}%"
+        diff_cls = "val-pos" if weight_diff > 0 else ("val-neg" if weight_diff < 0 else "")
+        action_rows += f"""
+        <tr>
+          <td><strong>{sa.get("name", "")}</strong>
+            <span class="text-muted small">{sa.get("code", "")}</span></td>
+          <td><span class="pf-action-badge" style="background:{color};">{label}</span></td>
+          <td>{cur_w:.1f}%</td>
+          <td>{rec_w:.1f}%</td>
+          <td class="{diff_cls}">{diff_str}</td>
+          <td class="small">{sa.get("rationale", "")}</td>
+        </tr>"""
+
+    # 리스크 아이템
+    severity_colors = {"high": "#c0392b", "medium": "#b9770e", "low": "#2c3e50"}
+    risk_html = ""
+    for r in risks:
+        sev = r.get("severity", "medium")
+        sev_color = severity_colors.get(sev, "#6c757d")
+        affected = ", ".join(r.get("affected_stocks", []))
+        risk_html += f"""
+        <div class="pf-risk-item">
+          <span class="pf-severity-badge" style="background:{sev_color};">
+            {sev.upper()}</span>
+          <strong>{r.get("risk", "")}</strong>
+          <span class="text-muted small ms-2">관련: {affected}</span>
+        </div>"""
+
+    # 촉매 아이템
+    catalyst_html = ""
+    for c in catalysts:
+        imp = c.get("impact", "medium")
+        imp_color = severity_colors.get(imp, "#6c757d")
+        benefiting = ", ".join(c.get("benefiting_stocks", []))
+        catalyst_html += f"""
+        <div class="pf-catalyst-item">
+          <span class="pf-severity-badge" style="background:{imp_color};">
+            {imp.upper()}</span>
+          <strong>{c.get("catalyst", "")}</strong>
+          <span class="text-muted small ms-2">수혜: {benefiting}</span>
+        </div>"""
+
+    # 보완 테마
+    theme_html = ""
+    for t in missing:
+        theme_html += f"""
+        <div class="pf-theme-item">
+          <strong>{t.get("theme", "")}</strong>
+          <div class="small text-muted">{t.get("reason", "")}</div>
+        </div>"""
+
+    # 과비중/과소비중 섹터 뱃지
+    overweight = sector_analysis.get("overweight_sectors", [])
+    underweight = sector_analysis.get("underweight_sectors", [])
+    ow_badges = " ".join(
+        f'<span class="badge bg-danger me-1">{s}</span>' for s in overweight
+    ) if overweight else '<span class="text-muted small">없음</span>'
+    uw_badges = " ".join(
+        f'<span class="badge bg-info me-1">{s}</span>' for s in underweight
+    ) if underweight else '<span class="text-muted small">없음</span>'
+
+    return f"""\
+<div class="analysis-report portfolio-analysis">
+  <div class="report-header">
+    <div class="stock-identity">
+      <h2 class="stock-name">포트폴리오 종합 분석</h2>
+      <span class="stock-code">{len(portfolio_items)}종목 보유</span>
+    </div>
+    <div class="composite-section">
+      <div class="composite-grade" style="background: {grade_color};">{grade}</div>
+      <div class="composite-score-wrap">
+        <div class="composite-label">포트폴리오 건강도</div>
+        <div class="composite-num">{score}<span class="composite-max">/100</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="summary-box">
+    <h4>포트폴리오 종합 의견</h4>
+    <p>{summary}</p>
+  </div>
+
+  <div class="stage-card">
+    <div class="stage-card-title">포트폴리오 건강도 상세</div>
+    <div class="stage-field"><strong>분산도:</strong> {health.get("diversification", "N/A")}</div>
+    <div class="stage-field"><strong>밸류에이션:</strong> {health.get("valuation", "N/A")}</div>
+    <div class="stage-field"><strong>성장성/품질:</strong> {health.get("growth_quality", "N/A")}</div>
+    <div class="stage-analysis">{health.get("overall_assessment", "")}</div>
+  </div>
+
+  <div class="stage-card">
+    <div class="stage-card-title">종목별 액션 권고</div>
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0">
+        <thead><tr>
+          <th>종목</th><th>액션</th><th>현재비중</th><th>권장비중</th><th>변경</th><th>근거</th>
+        </tr></thead>
+        <tbody>{action_rows}</tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="stage-card">
+    <div class="stage-card-title">섹터 집중도 분석</div>
+    <div class="stage-field"><strong>집중 리스크:</strong>
+      {sector_analysis.get("concentration_risk", "N/A")}</div>
+    <div class="stage-field"><strong>과비중 섹터:</strong> {ow_badges}</div>
+    <div class="stage-field"><strong>과소비중 섹터:</strong> {uw_badges}</div>
+    <div class="stage-analysis">{sector_analysis.get("rebalancing_suggestion", "")}</div>
+  </div>
+
+  <div class="risk-catalyst-grid">
+    <div class="risk-section">
+      <h4>포트폴리오 리스크</h4>
+      {risk_html if risk_html else '<p class="text-muted small">식별된 리스크 없음</p>'}
+    </div>
+    <div class="catalyst-section">
+      <h4>포트폴리오 촉매</h4>
+      {catalyst_html if catalyst_html else '<p class="text-muted small">식별된 촉매 없음</p>'}
+    </div>
+  </div>
+
+  <div class="stage-card">
+    <div class="stage-card-title">보완이 필요한 테마/섹터</div>
+    {theme_html if theme_html else '<p class="text-muted small">현재 포트폴리오 구성이 적절합니다.</p>'}
+  </div>
+
+  <div class="report-footer">
+    <span>Generated by {model_label} &mdash; Portfolio Advisor</span>
+    <span>{generated_date}</span>
+  </div>
+</div>"""
+
+
+# ─────────────────────────────────────────
+# 보고서 변경점 요약 (이전 vs 현재)
+# ─────────────────────────────────────────
+
+def _compare_master_scores(old_masters: dict, new_masters: dict) -> list[str]:
+    """거장별 점수 변화를 비교하여 텍스트 리스트로 반환."""
+    changes = []
+    for key, info in MASTER_INFO.items():
+        old_s = old_masters.get(key, {}).get("score", 0)
+        new_s = new_masters.get(key, {}).get("score", 0)
+        if old_s != new_s:
+            arrow = "▲" if new_s > old_s else "▼"
+            diff = new_s - old_s
+            changes.append(f"{info['name']}: {old_s}→{new_s} ({arrow}{abs(diff):+.1f})")
+    return changes
+
+
+def generate_diff_summary(old_scores_json: str, new_scores: dict) -> str:
+    """이전 보고서와 현재 보고서의 scores를 비교하여 HTML diff 요약을 생성."""
+    try:
+        old_scores = json.loads(old_scores_json) if isinstance(old_scores_json, str) else (old_scores_json or {})
+    except (json.JSONDecodeError, TypeError):
+        return ""
+
+    if not old_scores or not new_scores:
+        return ""
+
+    sections = []
+
+    # 1. 종합 점수 / 등급 변화
+    old_composite = old_scores.get("composite_score", 0)
+    new_composite = new_scores.get("composite_score", 0)
+    old_grade = old_scores.get("investment_grade", "N/A")
+    new_grade = new_scores.get("investment_grade", "N/A")
+
+    if old_composite != new_composite or old_grade != new_grade:
+        arrow = "▲" if new_composite > old_composite else "▼" if new_composite < old_composite else "→"
+        grade_change = f' (등급: {old_grade}→{new_grade})' if old_grade != new_grade else ""
+        sections.append(
+            f'<div class="diff-item diff-grade">'
+            f'<strong>종합점수:</strong> {old_composite}점 → {new_composite}점 {arrow}{grade_change}'
+            f'</div>'
+        )
+
+    # 2. 거장별 점수 변화
+    old_masters = old_scores.get("stage7_masters", {})
+    new_masters = new_scores.get("stage7_masters", {})
+    master_changes = _compare_master_scores(old_masters, new_masters)
+    if master_changes:
+        items = "".join(f"<li>{c}</li>" for c in master_changes)
+        sections.append(
+            f'<div class="diff-item"><strong>거장별 점수 변화:</strong>'
+            f'<ul class="mb-0">{items}</ul></div>'
+        )
+
+    # 3. 액션 변화 (매수/매도 의견)
+    old_action = old_scores.get("stage8_action", {}).get("recommendation", "")
+    new_action = new_scores.get("stage8_action", {}).get("recommendation", "")
+    if old_action and new_action and old_action != new_action:
+        sections.append(
+            f'<div class="diff-item diff-action">'
+            f'<strong>투자의견 변경:</strong> {old_action} → {new_action}'
+            f'</div>'
+        )
+
+    # 4. 목표가 변화
+    old_target = old_scores.get("stage6_valuation", {}).get("target_price")
+    new_target = new_scores.get("stage6_valuation", {}).get("target_price")
+    if old_target and new_target and old_target != new_target:
+        try:
+            old_tp = int(old_target)
+            new_tp = int(new_target)
+            pct = (new_tp - old_tp) / old_tp * 100 if old_tp else 0
+            arrow = "▲" if pct > 0 else "▼"
+            sections.append(
+                f'<div class="diff-item">'
+                f'<strong>목표가:</strong> {old_tp:,}원 → {new_tp:,}원 ({arrow}{abs(pct):.1f}%)'
+                f'</div>'
+            )
+        except (ValueError, TypeError):
+            pass
+
+    # 5. 리스크/촉매 변화
+    old_risks = set(old_scores.get("risks", []))
+    new_risks = set(new_scores.get("risks", []))
+    added_risks = new_risks - old_risks
+    removed_risks = old_risks - new_risks
+    if added_risks:
+        items = "".join(f"<li>+ {r}</li>" for r in list(added_risks)[:3])
+        sections.append(f'<div class="diff-item"><strong>새로운 리스크:</strong><ul class="mb-0">{items}</ul></div>')
+    if removed_risks:
+        items = "".join(f"<li>- {r}</li>" for r in list(removed_risks)[:3])
+        sections.append(f'<div class="diff-item"><strong>해소된 리스크:</strong><ul class="mb-0">{items}</ul></div>')
+
+    if not sections:
+        return '<div class="diff-summary"><p class="text-muted mb-0">이전 보고서 대비 주요 변경사항이 없습니다.</p></div>'
+
+    content = "\n".join(sections)
+    return f'<div class="diff-summary">{content}</div>'

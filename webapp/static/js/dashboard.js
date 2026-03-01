@@ -119,108 +119,290 @@
       </ul>
       <h6>💡 팁</h6>
       <p>전체 목록에서도 컬럼 헤더를 클릭하여 <strong>PER 낮은 순</strong>, <strong>ROE 높은 순</strong> 등으로 정렬해보세요.</p>
+      <h6>📐 종합점수 구성</h6>
+      <p>종합점수 = (성장성 + 안정성 + 가격) ÷ 3 — 각 세부 점수는 전체 종목 대비 백분위 순위로 산출됩니다.</p>
+      <ul>
+        <li><strong>성장성:</strong> 영업이익_CAGR×35% + 매출_CAGR×30% + 분기영업이익YoY×25% + 실적가속연속×10%</li>
+        <li><strong>안정성:</strong> ROE×40% + F스코어×35% + FCF수익률×25%</li>
+        <li><strong>가격:</strong> PER역순×40% + 괴리율(S-RIM)×35% + PBR역순×25%</li>
+      </ul>
     `,
     leaders: `
       <h6>🔥 시장 주도주 (Leaders) 공략법</h6>
-      <p>시장의 관심(수급)과 실적 성장이 동시에 받쳐주는 주도주를 찾습니다.</p>
+      <p>시장의 관심(수급)과 실적 성장이 <strong>동시에</strong> 받쳐주는 주도주를 찾습니다.</p>
+
+      <h6>✅ 진입 조건 (모두 충족 필요)</h6>
       <ul>
-        <li><strong>핵심 지표:</strong> <span class="badge bg-light text-dark border">수급강도</span>, <span class="badge bg-light text-dark border">거래대금</span>, <span class="badge bg-light text-dark border">영업이익 성장률</span></li>
-        <li><strong>매매 포인트:</strong>
-          <ul>
-            <li><strong>수급강도 양수(+) 유지:</strong> 외국인/기관이 꾸준히 사고 있다는 신호입니다.</li>
-            <li><strong>RSI 70 이하:</strong> 과열권(70 이상)보다는, 상승 추세 중 일시적 조정(눌림목) 구간을 노리세요.</li>
-            <li><strong>이격도 체크:</strong> MA20 이격도가 너무 높지 않은(105% 이하) 종목이 안전합니다.</li>
-          </ul>
-        </li>
+        <li>시가총액 ≥ 1,000억 · TTM 순이익 흑자</li>
+        <li><strong>RS_등급 ≥ 80</strong> (전체 종목 대비 상위 20% 상대강도)</li>
+        <li>수급강도 > 0 (외인+기관 순매수 우위)</li>
+        <li>20일 평균 거래대금 > 5억 원</li>
+      </ul>
+
+      <h6>📐 주도주 점수 구성</h6>
+      <ul>
+        <li><span class="badge bg-primary text-white">RS_등급</span> × <strong>25%</strong> — 핵심. 60일(40%)·120일(30%)·250일(30%) 복합 상대강도 백분위</li>
+        <li><span class="badge bg-light text-dark border">수급강도</span> × 20% — 외인+기관 순매수액 / 시총 (20일 합산)</li>
+        <li><span class="badge bg-light text-dark border">영업이익_CAGR</span> × 15% — 연간 이익 성장 지속성</li>
+        <li><span class="badge bg-light text-dark border">분기영업이익YoY</span> × 15% — 최근 분기 실적 모멘텀</li>
+        <li><span class="badge bg-light text-dark border">실적가속_연속</span> × 10% — 2분기 연속 ΔYoY > 0 (가속 가중치)</li>
+        <li><span class="badge bg-light text-dark border">거래대금</span> × 10% · <span class="badge bg-light text-dark border">RSI</span> × 5%</li>
+      </ul>
+
+      <h6>🎯 매매 포인트</h6>
+      <ul>
+        <li><strong>수급강도 양수(+) 지속:</strong> 외국인/기관이 꾸준히 순매수 중이라는 신호입니다.</li>
+        <li><strong>양매수_비율 확인:</strong> 외인과 기관이 <em>동시에</em> 순매수한 날의 비율 — 높을수록 수급 확신도가 강합니다.</li>
+        <li><strong>RSI 50~70 구간:</strong> 상승 추세 중 과열이 아닌 눌림목 구간을 노리세요. 70 초과는 단기 과열.</li>
+        <li><strong>MA20 이격도 체크:</strong> 105% 이하 종목이 상대적으로 안전합니다.</li>
+        <li><strong>실적가속_연속 = 1:</strong> 분기 이익 성장이 가속도를 내고 있는 구간 — 주가 상승 탄력의 핵심 신호.</li>
       </ul>
     `,
     quality_value: `
       <h6>💎 우량가치주 (Quality & Value) 발굴</h6>
       <p>싸면서도 돈을 잘 벌고 재무가 튼튼한 '육각형 미인' 종목을 찾습니다.</p>
+
+      <h6>✅ 진입 조건 — 듀얼 트랙</h6>
+      <p>기업 성격에 따라 <strong>자동으로 두 가지 기준</strong> 중 하나가 적용됩니다.</p>
+      <div class="row g-2 mb-2">
+        <div class="col-6">
+          <div class="border rounded p-2 h-100">
+            <strong>일반기업 트랙</strong>
+            <ul class="mb-0 mt-1 small">
+              <li>ROIC ≥ 10%</li>
+              <li>PEG &lt; 1.2</li>
+              <li>F스코어 ≥ 5</li>
+              <li>부채비율 &lt; 120%</li>
+              <li>유동비율 > 120%</li>
+              <li>순이익 연속 흑자</li>
+              <li>시총 ≥ 1,000억</li>
+            </ul>
+          </div>
+        </div>
+        <div class="col-6">
+          <div class="border rounded p-2 h-100">
+            <strong>금융/지주 트랙</strong>
+            <small class="text-muted d-block">(금융·은행·증권·보험 등)</small>
+            <ul class="mb-0 mt-1 small">
+              <li>ROE ≥ 8%</li>
+              <li>PBR &lt; 1.5</li>
+              <li>배당수익률 ≥ 2%</li>
+              <li>F스코어 ≥ 4</li>
+              <li>시총 ≥ 3,000억</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <h6>📐 우량가치 점수 구성</h6>
       <ul>
-        <li><strong>핵심 지표:</strong> <span class="badge bg-light text-dark border">PEG</span>, <span class="badge bg-light text-dark border">ROE</span>, <span class="badge bg-light text-dark border">F-Score</span></li>
-        <li><strong>Value Trap 피하기:</strong>
-          <ul>
-            <li>PER/PBR이 낮다고 무조건 좋은 게 아닙니다. <strong>ROE가 10% 이상</strong> 유지되는지 꼭 확인하세요.</li>
-            <li><strong>PEG 0.5 ~ 1.0:</strong> 이익 성장률 대비 저평가된 구간입니다. 0.5 이하면 강력 매수 후보입니다.</li>
-            <li><strong>F-Score 7점 이상:</strong> 재무 건전성이 매우 뛰어난 기업입니다.</li>
-          </ul>
-        </li>
+        <li><span class="badge bg-primary text-white">FCF수익률</span> × <strong>25%</strong> — 시총 대비 잉여현금 창출력</li>
+        <li><span class="badge bg-primary text-white">ROIC</span> × <strong>25%</strong> — NOPAT / 투하자본 (세율 22% 적용)</li>
+        <li><span class="badge bg-light text-dark border">F스코어</span> × 20% — Piotroski 9개 항목 재무 건전성</li>
+        <li><span class="badge bg-light text-dark border">괴리율(S-RIM)</span> × 20% — (적정주가 − 현재가) / 현재가</li>
+        <li><span class="badge bg-light text-dark border">PEG 역순</span> × 10% — PER ÷ min(순이익CAGR, 100%)</li>
+      </ul>
+
+      <h6>🔑 핵심 지표 해석</h6>
+      <ul>
+        <li><strong>ROIC 계산:</strong> NOPAT(영업이익×78%) ÷ 투하자본(총자산 − 유동부채 − 잉여현금). 자본비용(통상 9%)을 넘어야 진짜 가치 창출.</li>
+        <li><strong>PEG 0.5 ~ 1.0:</strong> 이익 성장률 대비 저평가 구간. 0.5 이하면 강력 매수 후보. PEG = PER ÷ 순이익CAGR(최대 100% 캡).</li>
+        <li><strong>S-RIM 적정주가:</strong> BPS 기반 초과이익 현가 모델 (자본비용 Ke=9%, 지속계수 0.9). 괴리율이 높을수록 저평가.</li>
+        <li><strong>F-Score 7점↑:</strong> 수익성·레버리지·유동성·효율성 9항목 합산. 8~9점은 최상위 재무 건전성.</li>
+      </ul>
+
+      <h6>⚠️ Value Trap 피하기</h6>
+      <ul>
+        <li>PER/PBR이 낮아도 <strong>ROE가 10% 미만이면 함정</strong>일 수 있습니다. 수익 창출력이 먼저입니다.</li>
+        <li>ROIC가 WACC(자본비용)보다 낮은 기업은 성장할수록 가치가 줄어듭니다.</li>
       </ul>
     `,
     growth_mom: `
       <h6>🚀 고성장 모멘텀주 (Growth) 투자</h6>
       <p>매출과 이익이 폭발적으로 성장하며 주가 추세가 살아있는 종목입니다.</p>
+
+      <h6>✅ 진입 조건 (모두 충족 필요)</h6>
       <ul>
-        <li><strong>핵심 지표:</strong> <span class="badge bg-light text-dark border">영업이익 CAGR</span>, <span class="badge bg-light text-dark border">분기 매출 YoY</span>, <span class="badge bg-light text-dark border">MA60 이격도</span></li>
-        <li><strong>체크리스트:</strong>
-          <ul>
-            <li><strong>실적 가속화:</strong> 연간 성장률(CAGR)보다 최근 분기 성장률(YoY)이 더 높은 종목이 좋습니다.</li>
-            <li><strong>정배열 초입:</strong> MA60 이격도가 100% 근처에서 상승 머리를 들고 있는 종목을 주목하세요.</li>
-            <li><strong>부채비율 관리:</strong> 성장을 위해 빚을 너무 많이 쓰진 않았는지(부채비율 200% 이하 권장) 확인하세요.</li>
-          </ul>
-        </li>
+        <li>매출_CAGR ≥ 10% & 영업이익_CAGR ≥ 10% (연간 복합 성장)</li>
+        <li>분기 영업이익 YoY > 0 (최근 분기도 성장 중)</li>
+        <li><strong>RS_등급 ≥ 50</strong> (시장 대비 상대강도 중위권 이상)</li>
+        <li>TTM 영업현금흐름 > 0 (흑자도산 방지)</li>
+        <li>시총 ≥ 500억</li>
+      </ul>
+
+      <h6>📐 고성장 점수 구성</h6>
+      <ul>
+        <li><span class="badge bg-primary text-white">RS_등급</span> × <strong>25%</strong> — 주가 추세가 점수 최대 비중. 성장주는 주가 선행이 핵심.</li>
+        <li><span class="badge bg-primary text-white">분기영업이익YoY</span> × 20% — 최근 실적 모멘텀</li>
+        <li><span class="badge bg-primary text-white">실적가속_연속</span> × 20% — 2분기 연속 YoY 가속도 양수</li>
+        <li><span class="badge bg-light text-dark border">PEG 역순</span> × 20% — 성장률 대비 밸류에이션</li>
+        <li><span class="badge bg-light text-dark border">영업이익_CAGR</span> × 15% — 연간 성장 지속성</li>
+      </ul>
+
+      <h6>🎯 핵심 지표 해석</h6>
+      <ul>
+        <li><strong>실적가속_연속 = 1:</strong> 분기 영업이익 YoY가 2분기 연속으로 가속 중 (ΔYoY > 0 두 번 연속). 성장 모멘텀이 강화되는 가장 강력한 신호.</li>
+        <li><strong>OP가속도(영업이익_가속도):</strong> 이번 분기 YoY% − 전 분기 YoY%. 양수면 성장 가속, 음수면 감속. 가속 초기 진입이 최적.</li>
+        <li><strong>정배열 초입:</strong> MA60 이격도가 100~103% 구간에서 위를 향하면 추세 상승 초기 시그널입니다.</li>
+        <li><strong>실적 가속화 확인:</strong> 연간 CAGR보다 최근 분기 YoY가 더 높으면 성장이 가속 중 — 최우선 선별 조건.</li>
+      </ul>
+
+      <h6>⚠️ 주의사항</h6>
+      <ul>
+        <li><strong>부채비율 200% 이하 권장:</strong> 성장을 위해 과도한 레버리지를 쓰면 금리 상승 시 취약합니다.</li>
+        <li><strong>TTM 영업CF > 0 필수:</strong> 이익은 나도 현금이 없는 기업은 흑자도산 위험. 현금 창출력 반드시 확인.</li>
       </ul>
     `,
     cash_div: `
       <h6>💰 현금배당주 (Cash & Dividend) 선별</h6>
       <p>배당만 많이 주는 게 아니라, <strong>실제 현금 창출력</strong>과 <strong>배당 지속 가능성</strong>이 검증된 기업입니다.</p>
+
+      <h6>✅ 진입 조건 (모두 충족 필요)</h6>
       <ul>
-        <li><strong>핵심 지표:</strong> <span class="badge bg-light text-dark border">FCF수익률</span> <span class="badge bg-light text-dark border">배당성향%</span> <span class="badge bg-light text-dark border">ROIC</span> <span class="badge bg-light text-dark border">현금전환율</span></li>
-        <li><strong>진짜 배당주 구별법:</strong>
+        <li>FCF수익률 ≥ 3% (시총 대비 잉여현금흐름 비율)</li>
+        <li>배당수익률 ≥ 1%</li>
+        <li>배당성향 &lt; 80% (EPS 대비 DPS 비율)</li>
+        <li>현금전환율 ≥ 70% (순이익 → 실제 현금 전환율)</li>
+        <li>부채비율 &lt; 120%</li>
+        <li>시총 ≥ 500억</li>
+      </ul>
+
+      <h6>📐 현금배당 점수 구성</h6>
+      <ul>
+        <li><span class="badge bg-primary text-white">FCF수익률</span> × <strong>25%</strong></li>
+        <li><span class="badge bg-light text-dark border">배당수익률</span> × 20%</li>
+        <li><span class="badge bg-light text-dark border">DPS_CAGR</span> × 15% — 배당금 성장률 (복리 배당의 핵심)</li>
+        <li><span class="badge bg-light text-dark border">ROIC</span> × 15%</li>
+        <li><span class="badge bg-light text-dark border">배당성향 역순</span> × 10% · <span class="badge bg-light text-dark border">F스코어</span> × 10% · <span class="badge bg-light text-dark border">부채비율 역순</span> × 5%</li>
+        <li class="text-success"><strong>보너스:</strong> 배당_연속증가 연수 → log₂ 곡선 가산 (최대 +10pt) + 수익동반증가 시 추가 +2pt</li>
+        <li class="text-danger"><strong>패널티:</strong> 배당_경고신호 = 1이면 최종 점수 ×0.7 (30% 감점)</li>
+      </ul>
+
+      <h6>🔑 진짜 배당주 구별법</h6>
+      <ul>
+        <li><strong>배당성향 &lt; 50%:</strong> EPS의 절반 이하를 배당하면 이익 재투자와 배당 삭감 위험 모두 방어됩니다. 80% 초과는 <span class="badge bg-warning text-dark">경고</span> 신호.</li>
+        <li><strong>ROIC ≥ 10%:</strong> 자본 대비 수익률이 높아야 5~10년 뒤에도 배당이 유지됩니다. 기업의 경제적 해자(Moat) 확인 지표.</li>
+        <li><strong>현금전환율 ≥ 70%:</strong> 계산식 = 영업CF / 순이익. 순이익의 70% 이상이 실제 현금으로 들어와야 진짜 배당 재원입니다.</li>
+        <li><strong>DPS_CAGR 확인:</strong> 배당금 자체가 매년 성장하는지 확인하세요. 점수의 15%를 차지하는 중요 지표.</li>
+        <li><strong>배당_경고신호 = 0 필수:</strong> 아래 3가지 중 하나라도 해당하면 경고 플래그 켜짐:
           <ul>
-            <li><strong>배당성향 < 50%:</strong> EPS의 절반 이하를 배당하면 이익 재투자와 배당 삭감 위험 모두 방어됩니다. 80% 초과는 <span class="badge bg-warning text-dark">경고</span> 신호.</li>
-            <li><strong>ROIC ≥ 10%:</strong> 자본 대비 수익률이 높아야 5~10년 뒤에도 배당이 유지됩니다. 해자(Moat) 확인 지표.</li>
-            <li><strong>현금전환율 ≥ 70%:</strong> 순이익의 70% 이상이 실제 현금으로 들어와야 진짜 배당 재원이 됩니다.</li>
-            <li><strong>배당경고 = 0:</strong> 배당성향 > 80%, 배당수익률 > 10% + RS 하위권, 현금전환율 < 70% 중 하나라도 해당하면 경고 플래그가 켜집니다.</li>
-            <li><strong>동반성장 = ✓:</strong> 이익 성장과 배당 성장이 함께 이루어진 종목만이 진정한 복리 배당주입니다.</li>
+            <li>배당성향 > 80%</li>
+            <li>배당수익률 > 10% + RS_등급 &lt; 30 (하위 30%, 주가 붕괴 중 고배당)</li>
+            <li>현금전환율 &lt; 70% (이익이 현금으로 전환 안 됨)</li>
           </ul>
         </li>
+        <li><strong>동반성장(✓) = 복리 배당주:</strong> 순이익 2년↑ + DPS 1년↑ 동시 충족. 이익 성장과 배당 성장이 함께 가는 진정한 복리 배당주.</li>
       </ul>
     `,
     turnaround: `
       <h6>🔄 턴어라운드 (Turnaround) 포착</h6>
       <p>최악의 상황을 지나 실적이 급격히 개선되는 종목을 바닥권에서 잡습니다.</p>
+
+      <h6>✅ 진입 조건</h6>
       <ul>
-        <li><strong>핵심 지표:</strong> <span class="badge bg-light text-dark border">흑자전환</span>, <span class="badge bg-light text-dark border">이익률 변동폭</span>, <span class="badge bg-light text-dark border">괴리율</span></li>
-        <li><strong>주의사항:</strong>
+        <li><strong>흑자전환 OR 이익률 급개선(OPM +5%p↑)</strong> 중 하나 이상</li>
+        <li>TTM 순이익 > 0 & TTM 영업CF > 0 (실제 현금 창출 검증)</li>
+        <li>분기 매출 YoY > −15% (매출 붕괴 기업 제외)</li>
+        <li>이자보상배율 > 1.5 (영업이익이 이자비용의 1.5배 이상)</li>
+        <li>시총 ≥ 300억</li>
+      </ul>
+
+      <h6>📐 턴어라운드 점수 구성</h6>
+      <ul>
+        <li><span class="badge bg-primary text-white">흑자전환</span> × <strong>15%</strong></li>
+        <li><span class="badge bg-primary text-white">퀄리티_턴어라운드</span> × <strong>15%</strong> — 본업 체질 개선 3종 세트</li>
+        <li><span class="badge bg-primary text-white">스마트머니_승률</span> × <strong>15%</strong> — 외인/기관 수급 선행 신호</li>
+        <li><span class="badge bg-light text-dark border">분기매출YoY</span> × 15% · <span class="badge bg-light text-dark border">이익률_변동폭</span> × 10%</li>
+        <li><span class="badge bg-light text-dark border">GPM_변화</span> × 10% · <span class="badge bg-light text-dark border">이자보상배율</span> × 10% · <span class="badge bg-light text-dark border">괴리율</span> × 10%</li>
+      </ul>
+
+      <h6>🔑 핵심 지표 해석</h6>
+      <ul>
+        <li><strong>퀄리티_턴어라운드 (점수 2위 비중):</strong> 다음 3가지를 <em>동시에</em> 충족해야 켜집니다:
           <ul>
-            <li><strong>본업 개선 확인:</strong> 일회성 자산 매각으로 인한 흑자전환은 제외해야 합니다. (영업이익 흑자전환 중요)</li>
-            <li><strong>높은 괴리율:</strong> 실적은 좋아졌는데 주가는 아직 반응하지 않아 괴리율이 높은(저평가된) 종목을 찾으세요.</li>
-            <li><strong>수급 유입:</strong> 기관이나 외국인의 매수세가 들어오기 시작했다면 신뢰도가 높아집니다.</li>
+            <li>매출총이익률(GPM) +2%p 이상 개선 — 본업 원가 경쟁력 회복</li>
+            <li>영업현금흐름 > 0 — 실제 현금 창출</li>
+            <li>ROIC 전년 대비 개선 — 자본 효율성 회복</li>
           </ul>
         </li>
+        <li><strong>이익률_급개선 vs 퀄리티_턴어라운드 구분:</strong>
+          <ul>
+            <li>이익률_급개선: OPM(영업이익률) +5%p↑ → 진입 조건 (큰 폭 실적 개선)</li>
+            <li>퀄리티_턴어라운드: GPM +2%p↑ + CF + ROIC → 점수 가산 (체질 개선 확인)</li>
+          </ul>
+        </li>
+        <li><strong>스마트머니_승률:</strong> 최근 20거래일 중 외인 또는 기관이 순매수한 날의 비율. 0.5 이상이면 수급 유입 신호.</li>
+        <li><strong>VCP_신호 (변동성 수축 패턴):</strong> 가격 CV 축소 + 거래량 축소 + 스마트머니_승률 ≥ 60% 동시 충족 시 켜짐 — 주가 에너지 응축 구간.</li>
+        <li><strong>높은 괴리율:</strong> 실적은 좋아졌는데 주가가 아직 반응하지 않아 S-RIM 적정주가 대비 현저히 저평가된 종목을 찾으세요.</li>
+      </ul>
+
+      <h6>⚠️ 주의사항</h6>
+      <ul>
+        <li><strong>본업 개선 필수 확인:</strong> 일회성 자산 매각으로 인한 흑자전환은 오래가지 않습니다. 영업이익 흑자전환과 퀄리티_턴어라운드 플래그를 함께 확인하세요.</li>
+        <li><strong>이자보상배율 1.5 이상:</strong> 이 미만이면 이자도 못 갚는 기업 — 진입 조건으로 걸러지지만, 1.5~2.0 구간은 여전히 주의가 필요합니다.</li>
       </ul>
     `,
     multi_strategy: `
       <h6>🏆 Multi-Pick (다관왕) 활용</h6>
       <p>5가지 전략 중 <strong>3개 이상의 기준을 동시에 만족</strong>하는 '슈퍼 종목'입니다.</p>
+
+      <h6>📐 종합점수 세부 구성</h6>
+      <p>Multi-Pick은 전략별 점수 대신 <strong>종합점수</strong>로 정렬됩니다.</p>
       <ul>
-        <li><strong>의미:</strong> 성장성, 안정성, 가치, 배당 등 여러 측면에서 결점이 적다는 뜻입니다.</li>
-        <li><strong>활용법:</strong>
+        <li><strong>성장성 (33.3%):</strong> 영업이익CAGR×35% + 매출CAGR×30% + 분기영업이익YoY×25% + 실적가속연속×10%</li>
+        <li><strong>안정성 (33.3%):</strong> ROE×40% + F스코어×35% + FCF수익률×25%</li>
+        <li><strong>가격 (33.3%):</strong> PER역순×40% + 괴리율(S-RIM)×35% + PBR역순×25%</li>
+      </ul>
+
+      <h6>🎯 활용법</h6>
+      <ul>
+        <li><strong>전략수 컬럼:</strong> 3~5까지 가능합니다. 5관왕부터 내림차순 정렬하여 최우선 후보를 확인하세요.</li>
+        <li><strong>전략 조합별 해석:</strong>
           <ul>
-            <li>어떤 전략들이 중복되었는지 확인해보세요. (예: 고성장 + 우량가치 + 시장주도주 = 주가 상승 탄력 최고조)</li>
-            <li>종합점수가 최상위권일 확률이 높으므로, 포트폴리오의 핵심 종목으로 고려해볼 만합니다.</li>
+            <li>🔥주도주 + 🚀고성장 + 💎우량가치 = <strong>성장 + 추세 + 저평가</strong> → 주가 상승 탄력 극대화</li>
+            <li>💎우량가치 + 💰현금배당 + 🔄턴어라운드 = <strong>방어적 저가매수</strong> → 하방 리스크 낮음</li>
+            <li>🔥주도주 + 🚀고성장 + 💰현금배당 = <strong>성장하며 배당도 주는 우량주</strong> → 장기 보유 적합</li>
           </ul>
         </li>
+        <li>종합점수 최상위 + 전략수 4~5개 종목은 포트폴리오의 핵심 비중으로 고려해볼 만합니다.</li>
       </ul>
     `,
     forward_covered: `
       <h6>🔭 Forward 컨센서스 추정치 활용법</h6>
       <p>애널리스트 컨센서스 추정치가 있는 <strong>~535개 커버리지 종목</strong>에 한해 내년도 실적 전망 기준으로 순위를 매깁니다.</p>
+
+      <h6>⚠️ 커버리지 편향 주의</h6>
+      <p>이 탭은 대형·중형주 위주의 애널리스트 커버 종목만 표시됩니다. 소형주·성장 초기 기업은 포함되지 않으며, 기존 5개 전략 탭과 직접 비교하지 마세요.</p>
+
+      <h6>📐 Fwd_모멘텀_점수 구성 (10개 요소)</h6>
+      <p>성장 전망 60% + 재무 안정성 25% + 주주환원 15%의 종합 평가입니다.</p>
       <ul>
-        <li><strong>⚠️ 커버리지 편향 주의:</strong> 이 탭은 대형·중형주 위주의 애널리스트 커버 종목만 표시됩니다. 소형주·성장 초기 기업은 포함되지 않으며, 기존 5개 전략 탭과 직접 비교하지 마세요.</li>
-        <li><strong>Fwd_모멘텀_점수 구성:</strong>
+        <li><strong>[성장 전망]</strong>
           <ul>
-            <li><span class="badge bg-light text-dark border">Fwd_OP성장률</span> × 35% — 영업이익 성장 모멘텀</li>
-            <li><span class="badge bg-light text-dark border">Fwd_ROE%</span> × 25% — 내년 자본수익률</li>
-            <li><span class="badge bg-light text-dark border">Fwd_PER (역순)</span> × 20% — 성장 대비 저평가</li>
-            <li><span class="badge bg-light text-dark border">Fwd_OPM%</span> × 10% — 수익성</li>
-            <li><span class="badge bg-light text-dark border">Fwd_2yr_OP성장</span> × 10% — 2년 성장 지속성</li>
+            <li><span class="badge bg-primary text-white">Fwd_OP성장률</span> × <strong>25%</strong> — 내년 영업이익 성장 모멘텀</li>
+            <li><span class="badge bg-light text-dark border">Fwd_ROE%</span> × 15% — 내년 자본수익률</li>
+            <li><span class="badge bg-light text-dark border">Fwd_PER (역순)</span> × 10% — 내년 이익 대비 저평가</li>
+            <li><span class="badge bg-light text-dark border">Fwd_OPM%</span> × 5% — 내년 영업이익률</li>
+            <li><span class="badge bg-light text-dark border">Fwd_2yr_OP성장</span> × 5% — 2년 성장 지속성</li>
           </ul>
         </li>
+        <li><strong>[재무 안정성]</strong>
+          <ul>
+            <li><span class="badge bg-light text-dark border">이자보상배율</span> × 10% · <span class="badge bg-light text-dark border">부채비율 역순</span> × 10% · <span class="badge bg-light text-dark border">F스코어</span> × 5%</li>
+          </ul>
+        </li>
+        <li><strong>[주주환원]</strong>
+          <ul>
+            <li><span class="badge bg-light text-dark border">배당수익률</span> × 10% · <span class="badge bg-light text-dark border">DPS_CAGR</span> × 5%</li>
+          </ul>
+        </li>
+      </ul>
+
+      <h6>🔑 활용법</h6>
+      <ul>
         <li><strong>추정치 신뢰도:</strong> 애널리스트 수가 많을수록, 최근 발표일에 가까울수록 신뢰도가 높습니다. 단일 애널리스트 추정치는 변동성이 클 수 있습니다.</li>
-        <li><strong>활용법:</strong> 기존 탭에서 발굴한 종목의 Forward 지표를 확인하여 실적 개선 기대감이 주가에 이미 반영되었는지(Fwd_PER 과도한 할증) 교차 검증하세요.</li>
+        <li><strong>교차 검증 활용:</strong> 다른 탭에서 발굴한 종목의 Fwd_PER을 확인하여, 실적 개선 기대감이 이미 주가에 과도하게 반영되었는지 점검하세요.</li>
+        <li><strong>Fwd_2yr_OP성장 활용:</strong> 내년뿐 아니라 내후년까지 성장이 이어지는 종목이 더 신뢰도 있는 성장 스토리를 가집니다.</li>
       </ul>
     `,
     watchlist: `
@@ -229,7 +411,7 @@
       <ul>
         <li>다른 탭에서 <span class="text-warning">☆</span> 버튼을 눌러 추가한 종목들이 여기에 표시됩니다.</li>
         <li>정기적으로 리스트를 점검하여 투자 매력이 떨어진 종목은 제외하고, 새로운 유망 종목으로 교체하세요.</li>
-        <li>'비교하기' 기능을 사용하여 관심 종목들 간의 지표 우열을 가려보세요.</li>
+        <li>'비교하기' 기능으로 관심 종목 간 지표 우열을 가려보세요. <strong>'재무추이' 탭</strong>에서 종목별 연간 실적 추이를 나란히 비교할 수 있습니다.</li>
         <li>관심종목 행의 <span class="text-info">+PF</span> 버튼으로 포트폴리오에 편입할 수 있습니다.</li>
       </ul>
     `,
@@ -240,15 +422,16 @@
         <li><strong>종목 추가:</strong> 상단 '+ 종목 추가' 버튼이나, 관심종목/상세 모달의 '포트폴리오 추가' 버튼을 사용하세요.</li>
         <li><strong>수정/삭제:</strong> 각 행의 ✎(수정) / ✕(삭제) 버튼으로 매수 내역을 관리합니다.</li>
         <li><strong>요약:</strong> 상단 요약 바에서 총평가, 총손익, 섹터 비중을 확인하세요.</li>
+        <li><strong>집중도 관리 팁:</strong> 섹터 비중이 특정 섹터에 30% 이상 몰려 있다면 분산 투자를 고려하세요. 요약 바의 섹터 비중으로 편중도를 확인할 수 있습니다.</li>
       </ul>
     `
   };
 
   // ─── 탭별 기본 컬럼 정의 ─────────────────────────────────────────────
   const COLUMNS = {
-    // 1. 전체 종목 - 균형잡힌 기본 정보 (14개)
+    // 1. 전체 종목 - 균형잡힌 기본 정보 (15개)
     all: [
-      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "시장구분", label: "시장" },
+      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" }, { key: "시장구분", label: "시장" },
       { key: "종가", label: "현재가", fmt: "int" }, { key: "시가총액", label: "시총", fmt: "eok" },
       { key: "PER", label: "PER", fmt: "f2" }, { key: "PBR", label: "PBR", fmt: "f2" },
       { key: "PEG", label: "PEG", fmt: "f2" }, { key: "ROE(%)", label: "ROE", fmt: "f2" },
@@ -256,27 +439,27 @@
       { key: "수급강도", label: "수급", fmt: "f1" }, { key: "거래대금_20일평균", label: "거래(평)", fmt: "eok" },
       { key: "종합점수", label: "점수", fmt: "f1" }
     ],
-    // 2. 시장 주도주 - 수급+모멘텀+실적 (12개)
+    // 2. 시장 주도주 - 수급+모멘텀+실적 (13개)
     leaders: [
-      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "시가총액", label: "시총", fmt: "eok" },
+      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" }, { key: "시가총액", label: "시총", fmt: "eok" },
       { key: "종가", label: "현재가", fmt: "int" }, { key: "시장구분", label: "시장" },
       { key: "수급강도", label: "수급", fmt: "f1" }, { key: "RS_등급", label: "RS등급", fmt: "f1" },
       { key: "스마트머니_승률", label: "SM승률", fmt: "f1" }, { key: "거래대금_증감(%)", label: "거래증감", fmt: "f1" },
       { key: "Q_영업이익_YoY(%)", label: "Q OP YoY", fmt: "f1" }, { key: "52주_최고대비(%)", label: "고가대비", fmt: "f1" },
       { key: "주도주_점수", label: "주도점수", fmt: "f1" }
     ],
-    // 3. 우량가치 - ROE, F-Score, PEG, ROIC (12개)
+    // 3. 우량가치 - ROE, F-Score, PEG, ROIC (13개)
     quality_value: [
-      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "종가", label: "현재가", fmt: "int" },
+      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" }, { key: "종가", label: "현재가", fmt: "int" },
       { key: "시가총액", label: "시총", fmt: "eok" }, { key: "PER", label: "PER", fmt: "f2" },
       { key: "PEG", label: "PEG", fmt: "f2" }, { key: "PBR", label: "PBR", fmt: "f2" },
       { key: "ROE(%)", label: "ROE", fmt: "f2" }, { key: "ROIC(%)", label: "ROIC", fmt: "f1" },
       { key: "F스코어", label: "F-Score", fmt: "int" }, { key: "부채비율(%)", label: "부채%", fmt: "f1" },
       { key: "영업이익률(%)", label: "OPM%", fmt: "f1" }, { key: "우량가치_점수", label: "우량점수", fmt: "f1" }
     ],
-    // 4. 고성장 모멘텀 - CAGR, YoY, 추세, 가속도 (13개)
+    // 4. 고성장 모멘텀 - CAGR, YoY, 추세, 가속도 (14개)
     growth_mom: [
-      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "종가", label: "현재가", fmt: "int" },
+      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" }, { key: "종가", label: "현재가", fmt: "int" },
       { key: "매출_CAGR", label: "매출CAGR", fmt: "f1" }, { key: "영업이익_CAGR", label: "OP CAGR", fmt: "f1" },
       { key: "순이익_CAGR", label: "NP CAGR", fmt: "f1" }, { key: "Q_영업이익_YoY(%)", label: "Q OP YoY", fmt: "f1" },
       { key: "실적가속_연속", label: "실적가속", fmt: "flag" }, { key: "영업이익_가속도", label: "OP가속도", fmt: "f1" },
@@ -284,9 +467,9 @@
       { key: "52주_최고대비(%)", label: "고가대비", fmt: "f1" }, { key: "FCF_CAGR", label: "FCF CAGR", fmt: "f1" },
       { key: "고성장_점수", label: "성장점수", fmt: "f1" }
     ],
-    // 5. 현금배당 - FCF, 배당, 현금흐름 (15개)
+    // 5. 현금배당 - FCF, 배당, 현금흐름 (16개)
     cash_div: [
-      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "종가", label: "현재가", fmt: "int" },
+      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" }, { key: "종가", label: "현재가", fmt: "int" },
       { key: "FCF수익률(%)", label: "FCF%", fmt: "f2" }, { key: "배당수익률(%)", label: "배당%", fmt: "f2" },
       { key: "배당성향(%)", label: "배당성향%", fmt: "f1" }, { key: "배당_경고신호", label: "경고", fmt: "flag" },
       { key: "ROIC(%)", label: "ROIC%", fmt: "f1" }, { key: "DPS_CAGR", label: "DPS CAGR", fmt: "f1" },
@@ -294,9 +477,9 @@
       { key: "부채비율(%)", label: "부채%", fmt: "f1" }, { key: "이익품질_양호", label: "이익품질", fmt: "flag" },
       { key: "배당_수익동반증가", label: "동반성장", fmt: "flag" }, { key: "현금배당_점수", label: "배당점수", fmt: "f1" }
     ],
-    // 6. 턴어라운드 - 전환신호, 이익률, 수급 (12개)
+    // 6. 턴어라운드 - 전환신호, 이익률, 수급 (13개)
     turnaround: [
-      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "종가", label: "현재가", fmt: "int" },
+      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" }, { key: "종가", label: "현재가", fmt: "int" },
       { key: "흑자전환", label: "흑자전환", fmt: "flag" }, { key: "이익률_급개선", label: "OPM급등", fmt: "flag" },
       { key: "이익률_변동폭", label: "OPM변동", fmt: "f1" }, { key: "GPM_변화(pp)", label: "GPM변화", fmt: "f1" },
       { key: "스마트머니_승률", label: "SM승률", fmt: "f1" }, { key: "VCP_신호", label: "VCP", fmt: "flag" },
@@ -304,17 +487,17 @@
       { key: "실적가속_연속", label: "실적가속", fmt: "flag" }, { key: "RSI_14", label: "RSI", fmt: "f1" },
       { key: "턴어라운드_점수", label: "턴점수", fmt: "f1" }
     ],
-    // 7. Multi-Strategy (3관왕) - 5개 전략 점수 (10개)
+    // 7. Multi-Strategy (3관왕) - 5개 전략 점수 (11개)
     multi_strategy: [
-      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "종가", label: "현재가", fmt: "int" },
+      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" }, { key: "종가", label: "현재가", fmt: "int" },
       { key: "전략수", label: "전략수", fmt: "int" }, { key: "종합점수", label: "종합점수", fmt: "f1" },
       { key: "성장성_점수", label: "성장점수", fmt: "f1" }, { key: "안정성_점수", label: "안정점수", fmt: "f1" },
       { key: "가격_점수", label: "가격점수", fmt: "f1" }, { key: "주도주_점수", label: "주도점수", fmt: "f1" },
       { key: "우량가치_점수", label: "우량점수", fmt: "f1" }
     ],
-    // 8. Forward 추정치 - 커버리지 종목 내 모멘텀 (12개)
+    // 8. Forward 추정치 - 커버리지 종목 내 모멘텀 (13개)
     forward_covered: [
-      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" },
+      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" },
       { key: "종가", label: "현재가", fmt: "int" }, { key: "시가총액", label: "시총", fmt: "eok" },
       { key: "Fwd_PER", label: "Fwd PER", fmt: "f2" }, { key: "Fwd_PBR", label: "Fwd PBR", fmt: "f2" },
       { key: "Fwd_ROE(%)", label: "Fwd ROE%", fmt: "f1" }, { key: "Fwd_OPM(%)", label: "Fwd OPM%", fmt: "f1" },
@@ -323,17 +506,18 @@
       { key: "Fwd_2yr_영업이익_성장(%)", label: "2yr OP성장%", fmt: "f1" },
       { key: "Fwd_모멘텀_점수", label: "Fwd점수", fmt: "f1" }
     ],
-    // 9. 관심종목 - 종합 모니터링 (10개)
+    // 9. 관심종목 - 종합 모니터링 (11개)
     watchlist: [
-      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "종가", label: "현재가", fmt: "int" },
+      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" }, { key: "종가", label: "현재가", fmt: "int" },
       { key: "시가총액", label: "시총", fmt: "eok" }, { key: "PER", label: "PER", fmt: "f2" },
       { key: "PBR", label: "PBR", fmt: "f2" }, { key: "ROE(%)", label: "ROE", fmt: "f2" },
       { key: "부채비율(%)", label: "부채%", fmt: "f1" }, { key: "배당수익률(%)", label: "배당%", fmt: "f2" },
       { key: "종합점수", label: "점수", fmt: "f1" }
     ],
-    // 10. 포트폴리오 - 보유종목 관리 (11개)
+    // 10. 포트폴리오 - 보유종목 관리 (12개)
     portfolio: [
       { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" },
+      { key: "종목구분", label: "구분" },
       { key: "현재가", label: "현재가", fmt: "int" }, { key: "수량", label: "수량", fmt: "int" },
       { key: "평균매입가", label: "매입가", fmt: "int" }, { key: "매입금액", label: "매입금액", fmt: "int" },
       { key: "평가금액", label: "평가금액", fmt: "int" }, { key: "수익금액", label: "수익금", fmt: "int" },
@@ -1199,17 +1383,25 @@
     const market = stock["시장구분"] || "";
     const sector = stock["섹터"]     || "";
     const price  = stock["종가"];
+    const isProxy = stock["_proxy"] === true;
+    const proxyName = stock["_proxy_name"] || "";
+    const proxyFrom = stock["_proxy_from"] || "";
 
     const rep = reportMap[code];
     const aiHeaderBadge = rep
       ? `<span class="badge badge-ai ms-2" title="${rep.model}으로 분석됨 · ${rep.date}">AI 분석 완료</span>` : "";
 
+    const proxyBadge = isProxy
+      ? `<div class="alert alert-info py-1 px-2 mt-1 mb-0 small d-inline-block">
+           <strong>우선주</strong> ${proxyName} (${proxyFrom}) → <strong>${name}</strong> (${code}) 보통주 지표 기준
+         </div>` : "";
+
     document.getElementById("detail-title").innerHTML =
-      `<strong>${name}</strong> <span class="text-muted fs-6">${code}</span>
+      `<strong>${isProxy ? proxyName : name}</strong> <span class="text-muted fs-6">${isProxy ? proxyFrom : code}</span>
        <span class="badge ${market === "KOSPI" ? "bg-primary" : "bg-danger"} ms-2">${market}</span>
        ${sector ? `<span class="badge bg-secondary ms-1">${sector}</span>` : ""}
        ${price != null ? `<span class="ms-2 fw-bold">${fmt(price, "int")}원</span>` : ""}
-       ${aiHeaderBadge}`;
+       ${aiHeaderBadge}${proxyBadge}`;
 
     const btnWD = document.getElementById("btn-watch-detail");
     if (btnWD) { btnWD.dataset.code = code; updateAllStarButtons(); }
@@ -1235,25 +1427,15 @@
     }).join("");
 
     // 분석 버튼에 code 설정
-    const geminiBtn = document.getElementById("btn-analysis-gemini");
     const claudeBtn = document.getElementById("btn-analysis-claude");
-    geminiBtn.dataset.code = code;
     claudeBtn.dataset.code = code;
 
     // 보고서 캐시 상태를 버튼에 반영
-    geminiBtn.classList.remove("btn-success", "has-report");
     claudeBtn.classList.remove("has-report");
-    geminiBtn.innerHTML = "Gemini 분석 (무료)";
-    claudeBtn.innerHTML = "Claude 분석 (프리미엄)";
+    claudeBtn.innerHTML = "🤖 Claude AI 분석";
     if (rep) {
-      const isGemini = rep.model.toLowerCase().includes("gemini");
-      if (isGemini) {
-        geminiBtn.innerHTML = "✓ Gemini 분석 (캐시됨)";
-        geminiBtn.classList.add("btn-success");
-      } else {
-        claudeBtn.innerHTML = "✓ Claude 분석 (캐시됨)";
-        claudeBtn.classList.add("has-report");
-      }
+      claudeBtn.innerHTML = "✓ Claude AI 분석 (캐시됨)";
+      claudeBtn.classList.add("has-report");
     }
 
     // 점수 브레이크다운 렌더링
@@ -1454,17 +1636,81 @@
   }
 
   // ─── AI 분석 ─────────────────────────────────────────────────────────
+  let _analysisInProgress = false;
+
+  function _setAnalysisLock(locked) {
+    _analysisInProgress = locked;
+    const analysisBtn = document.getElementById("btn-analysis-claude");
+    const regenBtn = document.getElementById("btn-regenerate");
+    if (analysisBtn) { analysisBtn.disabled = locked; }
+    if (regenBtn) { regenBtn.disabled = locked; }
+  }
+
+  async function loadReportHistory(code) {
+    const sel = document.getElementById("report-history-select");
+    sel.innerHTML = '<option value="">이전 보고서</option>';
+    sel.style.display = "none";
+    try {
+      const res = await fetch(`/api/stocks/${code}/analysis/history`);
+      if (!res.ok) return;
+      const list = await res.json();
+      if (!list.length) return;
+      list.forEach(h => {
+        const opt = document.createElement("option");
+        opt.value = h.id;
+        opt.textContent = h.generated_date;
+        sel.appendChild(opt);
+      });
+      sel.style.display = "";
+    } catch { /* ignore */ }
+  }
+
+  async function showHistoryReport(historyId, code) {
+    if (!historyId) return;
+    const diffArea = document.getElementById("report-diff-area");
+    const contentEl = document.getElementById("report-content");
+    const metaEl = document.getElementById("report-meta");
+    diffArea.style.display = "none";
+    diffArea.innerHTML = "";
+    contentEl.innerHTML = '<div class="text-center py-3"><div class="spinner-border spinner-border-sm"></div></div>';
+    try {
+      const res = await fetch(`/api/stocks/analysis/history/${historyId}`);
+      if (!res.ok) throw new Error("조회 실패");
+      const data = await res.json();
+      contentEl.innerHTML =
+        `<div class="history-banner mb-3">
+          <span>📄 이전 보고서를 보고 있습니다 (${data.generated_date})</span>
+          <button class="btn btn-sm btn-outline-primary" id="btn-back-to-current">최신 보고서로 돌아가기</button>
+        </div>` + (data.report_html || "");
+      metaEl.textContent = `${data.model || ""} · ${data.generated_date} (이전 보고서)`;
+      document.getElementById("btn-back-to-current").addEventListener("click", () => {
+        document.getElementById("report-history-select").value = "";
+        requestAnalysis(code, "claude");
+      });
+    } catch (e) {
+      contentEl.innerHTML = `<div class="alert alert-danger">이전 보고서 조회 실패: ${e.message}</div>`;
+    }
+  }
+
   async function requestAnalysis(code, mode) {
+    if (_analysisInProgress) {
+      alert("AI 분석이 이미 진행 중입니다. 완료 후 다시 시도해주세요.");
+      return;
+    }
+    _setAnalysisLock(true);
+
     const name = (currentDetailData && currentDetailData["종목명"]) || code;
     const reportModal = new bootstrap.Modal(document.getElementById("report-modal"));
     reportModal.show();
 
+    const diffArea = document.getElementById("report-diff-area");
+    diffArea.style.display = "none";
+    diffArea.innerHTML = "";
     document.getElementById("report-title").textContent   = `AI 분석 보고서 — ${name}`;
     document.getElementById("report-loading").style.display = "";
     document.getElementById("report-content").innerHTML   = "";
     document.getElementById("report-meta").textContent    = "";
-    document.getElementById("report-loading-text").textContent =
-      mode === "gemini" ? "Gemini로 분석 중 (Google Search 포함)..." : "Claude로 심층 분석 중...";
+    document.getElementById("report-loading-text").textContent = "Claude로 심층 분석 중...";
 
     try {
       // 캐시 확인
@@ -1482,7 +1728,7 @@
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 360000);
         const loadingText = document.getElementById("report-loading-text");
-        const baseMsg = mode === "gemini" ? "Gemini로 분석 중 (Google Search 포함)" : "Claude로 심층 분석 중";
+        const baseMsg = "Claude로 심층 분석 중";
         let elapsed = 0;
         const timerInterval = setInterval(() => {
           elapsed++;
@@ -1507,6 +1753,27 @@
         document.getElementById("report-content").innerHTML =
           `<div class="alert alert-danger"><strong>오류:</strong> ${data.error}</div>`;
       } else {
+        // diff 요약 표시 (재생성 시 서버가 diff_html을 반환)
+        if (data.diff_html) {
+          diffArea.innerHTML =
+            `<div class="diff-header" id="diff-toggle-header">
+              <h6>📊 이전 보고서 대비 변경점</h6>
+              <span class="diff-toggle">접기 ▲</span>
+            </div>
+            <div id="diff-body">${data.diff_html}</div>`;
+          diffArea.style.display = "";
+          document.getElementById("diff-toggle-header").addEventListener("click", () => {
+            const body = document.getElementById("diff-body");
+            const toggle = diffArea.querySelector(".diff-toggle");
+            if (body.style.display === "none") {
+              body.style.display = "";
+              toggle.textContent = "접기 ▲";
+            } else {
+              body.style.display = "none";
+              toggle.textContent = "펼치기 ▼";
+            }
+          });
+        }
         document.getElementById("report-content").innerHTML = data.report_html || "";
         document.getElementById("report-meta").textContent  =
           `${data.model || ""} · ${data.generated_date || ""}`;
@@ -1518,6 +1785,8 @@
           nameCell.insertAdjacentHTML("beforeend",
             ` <span class="badge badge-ai" title="${data.model} · ${data.generated_date}">AI</span>`);
         }
+        // 히스토리 드롭다운 로드
+        loadReportHistory(code);
       }
       document.getElementById("btn-regenerate").dataset.code = code;
       document.getElementById("btn-regenerate").dataset.mode = mode;
@@ -1526,6 +1795,8 @@
       const msg = e.name === "AbortError" ? "분석 시간이 초과되었습니다. 다시 시도해주세요." : e.message;
       document.getElementById("report-content").innerHTML =
         `<div class="alert alert-danger">오류: ${msg}</div>`;
+    } finally {
+      _setAnalysisLock(false);
     }
   }
 
@@ -2055,6 +2326,13 @@
       return;
     }
 
+    const _gbnBadge = gbn => {
+      if (!gbn || gbn === "보통주") return "";
+      const map = { "ETF": "primary", "우선주": "secondary", "리츠": "success", "스팩": "warning" };
+      const color = map[gbn] || "dark";
+      return `<span class="badge bg-${color}" style="font-size:.65rem;">${gbn}</span>`;
+    };
+
     tbodyEl.innerHTML = items.map(e => {
       const plClass = (e["수익률"] || 0) >= 0 ? "val-pos" : "val-neg";
       const actionBtns = `<td class="text-center p-1">
@@ -2064,7 +2342,10 @@
       const cells = cols.map(c => {
         let cls = "";
         if (c.key === "수익률" || c.key === "수익금액") cls = plClass;
-        return `<td class="${cls}">${fmt(e[c.key], c.fmt)}</td>`;
+        if (c.key === "종목구분") return `<td>${_gbnBadge(e["종목구분"])}</td>`;
+        const rep = (c.key === "종목명") ? reportMap[e["종목코드"]] : null;
+        const aiBadge = rep ? ` <span class="badge badge-ai" title="${rep.model} · ${rep.date}">AI</span>` : "";
+        return `<td class="${cls}">${fmt(e[c.key], c.fmt)}${aiBadge}</td>`;
       }).join("");
       return `<tr data-code="${e["종목코드"]}">${actionBtns}${cells}</tr>`;
     }).join("");
@@ -2115,6 +2396,8 @@
     document.getElementById("pf-price").value = "";
     document.getElementById("pf-date").value = new Date().toISOString().slice(0, 10);
     document.getElementById("pf-memo").value = "";
+    const noteEl = document.getElementById("pf-stock-note");
+    if (noteEl) noteEl.innerHTML = "";
     document.getElementById("portfolio-modal-title").textContent = "포트폴리오 추가";
     new bootstrap.Modal(document.getElementById("portfolio-modal")).show();
   }
@@ -2130,6 +2413,14 @@
     document.getElementById("pf-price").value = entry["평균매입가"];
     document.getElementById("pf-date").value = entry["매입일"] || "";
     document.getElementById("pf-memo").value = entry["메모"] || "";
+    const noteEl = document.getElementById("pf-stock-note");
+    if (noteEl) {
+      const gbn = entry["종목구분"] || "";
+      if (gbn === "ETF") noteEl.innerHTML = '<span class="badge bg-primary me-1">ETF</span><span class="text-muted small">재무지표는 제공되지 않습니다.</span>';
+      else if (gbn === "우선주") noteEl.innerHTML = '<span class="badge bg-secondary me-1">우선주</span>';
+      else if (gbn === "리츠") noteEl.innerHTML = '<span class="badge bg-success me-1">리츠</span>';
+      else noteEl.innerHTML = "";
+    }
     document.getElementById("portfolio-modal-title").textContent = "포트폴리오 수정";
     new bootstrap.Modal(document.getElementById("portfolio-modal")).show();
   }
@@ -2265,21 +2556,148 @@
     openPortfolioAdd("", "");
   });
 
-  // 포트폴리오 모달: 종목코드 입력 시 종목명 자동 조회
+  // 포트폴리오 모달: 종목코드 입력 시 종목명/종목구분 자동 조회
   document.getElementById("pf-code")?.addEventListener("blur", async function () {
     const raw = this.value.trim();
     if (raw.length === 0 || raw.length > 6) return;
     const code = raw.padStart(6, "0");
     if (code === "000000") return;
+    const noteEl = document.getElementById("pf-stock-note");
     try {
-      const res = await fetch(`/api/stocks/${code}`);
+      const res = await fetch(`/api/stock-info/${code}`);
       if (res.ok) {
         const data = await res.json();
         document.getElementById("pf-stock-name").textContent = data["종목명"] || "";
+        if (noteEl) {
+          const gbn = data["종목구분"] || "";
+          if (gbn === "ETF") {
+            noteEl.innerHTML = '<span class="badge bg-primary me-1">ETF</span><span class="text-muted small">재무지표(PER/ROE 등)는 제공되지 않습니다.</span>';
+          } else if (gbn === "우선주") {
+            noteEl.innerHTML = '<span class="badge bg-secondary me-1">우선주</span><span class="text-muted small">재무지표는 보통주 기준으로 제공됩니다.</span>';
+          } else if (gbn === "리츠") {
+            noteEl.innerHTML = '<span class="badge bg-success me-1">리츠</span><span class="text-muted small">재무지표는 제공되지 않습니다.</span>';
+          } else {
+            noteEl.innerHTML = "";
+          }
+        }
       } else {
         document.getElementById("pf-stock-name").textContent = "";
+        if (noteEl) noteEl.innerHTML = '<span class="text-danger small">종목을 찾을 수 없습니다. 파이프라인 실행 후 재시도하세요.</span>';
       }
     } catch (e) { /* ignore */ }
+  });
+
+  // ─── 포트폴리오 AI 분석 ────────────────────────────────────────────
+  let _pfAnalysisInProgress = false;
+
+  async function requestPortfolioAnalysis(forceRegenerate) {
+    if (_pfAnalysisInProgress) {
+      alert("포트폴리오 AI 분석이 이미 진행 중입니다. 완료 후 다시 시도해주세요.");
+      return;
+    }
+    _pfAnalysisInProgress = true;
+    const pfAnalysisBtn = document.getElementById("btn-portfolio-analysis");
+    const pfReanalyzeBtn = document.getElementById("btn-pf-reanalyze");
+    if (pfAnalysisBtn) pfAnalysisBtn.disabled = true;
+    if (pfReanalyzeBtn) pfReanalyzeBtn.disabled = true;
+
+    const modalEl = document.getElementById("portfolio-report-modal");
+    const reportModal = bootstrap.Modal.getOrCreateInstance(modalEl);
+    reportModal.show();
+
+    const loadingEl   = document.getElementById("pf-report-loading");
+    const contentEl   = document.getElementById("pf-report-content");
+    const metaEl      = document.getElementById("pf-report-meta");
+    const staleBanner = document.getElementById("pf-report-stale-banner");
+    const loadingText = document.getElementById("pf-report-loading-text");
+
+    loadingEl.style.display = "";
+    contentEl.innerHTML = "";
+    metaEl.textContent  = "";
+    staleBanner.style.display = "none";
+
+    try {
+      let data;
+
+      if (!forceRegenerate) {
+        const getRes = await fetch("/api/portfolio/analysis");
+        if (getRes.ok) {
+          const cached = await getRes.json();
+          if (cached.stale) {
+            loadingEl.style.display = "none";
+            staleBanner.style.display = "flex";
+            contentEl.innerHTML = cached.report_html || "";
+            metaEl.textContent = (cached.model || "") + " \u00b7 " + (cached.generated_date || "") + " (\uc774\uc804 \ubd84\uc11d)";
+            return;
+          }
+          data = cached;
+        }
+      }
+
+      if (!data) {
+        loadingText.textContent = "\ud3ec\ud2b8\ud3f4\ub9ac\uc624 AI \ubd84\uc11d \uc911...";
+        let elapsed = 0;
+        const timerInterval = setInterval(() => {
+          elapsed++;
+          loadingText.textContent = "\ud3ec\ud2b8\ud3f4\ub9ac\uc624 AI \ubd84\uc11d \uc911... (" + elapsed + "\ucd08)";
+        }, 1000);
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 600000);
+
+        try {
+          const postRes = await fetch("/api/portfolio/analysis", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            signal: controller.signal,
+          });
+          data = await postRes.json();
+        } finally {
+          clearInterval(timerInterval);
+          clearTimeout(timeoutId);
+        }
+      }
+
+      loadingEl.style.display = "none";
+      staleBanner.style.display = "none";
+
+      if (data.error) {
+        contentEl.innerHTML = '<div class="alert alert-danger"><strong>\uc624\ub958:</strong> ' + data.error + '</div>';
+      } else {
+        contentEl.innerHTML = data.report_html || "";
+        metaEl.textContent = (data.model || "") + " \u00b7 " + (data.generated_date || "");
+      }
+    } catch (e) {
+      loadingEl.style.display = "none";
+      const msg = e.name === "AbortError"
+        ? "\ubd84\uc11d \uc2dc\uac04\uc774 \ucd08\uacfc\ub418\uc5c8\uc2b5\ub2c8\ub2e4. \ub2e4\uc2dc \uc2dc\ub3c4\ud574\uc8fc\uc138\uc694."
+        : e.message;
+      contentEl.innerHTML = '<div class="alert alert-danger">\uc624\ub958: ' + msg + '</div>';
+    } finally {
+      _pfAnalysisInProgress = false;
+      if (pfAnalysisBtn) pfAnalysisBtn.disabled = false;
+      if (pfReanalyzeBtn) pfReanalyzeBtn.disabled = false;
+    }
+  }
+
+  document.getElementById("btn-portfolio-analysis")?.addEventListener("click", () => {
+    if (!portfolioData || !portfolioData.items || !portfolioData.items.length) {
+      alert("\ud3ec\ud2b8\ud3f4\ub9ac\uc624\uac00 \ube44\uc5b4 \uc788\uc2b5\ub2c8\ub2e4. \uc885\ubaa9\uc744 \uba3c\uc800 \ucd94\uac00\ud558\uc138\uc694.");
+      return;
+    }
+    requestPortfolioAnalysis(false);
+  });
+
+  document.getElementById("btn-pf-regenerate")?.addEventListener("click", () => {
+    requestPortfolioAnalysis(true);
+  });
+
+  document.getElementById("btn-pf-reanalyze")?.addEventListener("click", () => {
+    requestPortfolioAnalysis(true);
+  });
+
+  document.getElementById("btn-pf-pdf")?.addEventListener("click", () => {
+    window.print();
   });
 
   // 재무 차트 연간/분기 토글
@@ -2293,11 +2711,15 @@
   });
 
   // AI 분석 버튼
-  document.getElementById("btn-analysis-gemini").addEventListener("click", function () {
-    requestAnalysis(this.dataset.code || currentDetailCode, "gemini");
-  });
   document.getElementById("btn-analysis-claude").addEventListener("click", function () {
     requestAnalysis(this.dataset.code || currentDetailCode, "claude");
+  });
+
+  // 이전 보고서 선택
+  document.getElementById("report-history-select").addEventListener("change", function () {
+    const historyId = this.value;
+    const code = document.getElementById("btn-regenerate").dataset.code;
+    if (historyId && code) showHistoryReport(historyId, code);
   });
 
   // 보고서 재생성 / PDF
@@ -2424,10 +2846,10 @@
   loadTabCounts();
   loadSectorOptions();
   loadDataInfo();
-  loadReportMap();
   loadPortfolio();
-  loadStocks();
   updateWatchlistCount();
+  // reportMap을 먼저 로드한 뒤 테이블 렌더 → AI 배지 누락 방지
+  loadReportMap().then(() => loadStocks());
 
   const initDesc = STRATEGY_DESCRIPTIONS.all;
   document.getElementById("strategy-desc").innerHTML =

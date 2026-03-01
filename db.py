@@ -119,6 +119,35 @@ _SCHEMA_STATEMENTS = [
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 )""",
+    """CREATE TABLE IF NOT EXISTS price_supplement (
+    종목코드      TEXT PRIMARY KEY,
+    종목명        TEXT,
+    종목구분      TEXT,
+    시장구분      TEXT,
+    현재가        DOUBLE,
+    전일대비      DOUBLE,
+    등락률        DOUBLE,
+    updated_at    TEXT
+)""",
+    """CREATE TABLE IF NOT EXISTS analysis_reports_history (
+    id             INTEGER PRIMARY KEY,
+    종목코드       TEXT NOT NULL,
+    종목명         TEXT,
+    report_html    TEXT,
+    scores_json    TEXT,
+    model_used     TEXT,
+    generated_date TEXT NOT NULL
+)""",
+    "CREATE INDEX IF NOT EXISTS idx_history_code ON analysis_reports_history (종목코드, generated_date DESC)",
+    """CREATE SEQUENCE IF NOT EXISTS seq_report_history START 1""",
+    """CREATE TABLE IF NOT EXISTS portfolio_analysis (
+    id              INTEGER PRIMARY KEY DEFAULT 1,
+    report_html     TEXT,
+    scores_json     TEXT,
+    portfolio_hash  TEXT,
+    model_used      TEXT,
+    generated_date  TEXT NOT NULL
+)""",
     """CREATE TABLE IF NOT EXISTS dashboard_result (
     종목코드      TEXT PRIMARY KEY,
     종목명        TEXT,
@@ -359,13 +388,29 @@ def load_dashboard_prev() -> pd.DataFrame:
 def save_report(code: str, name: str, html: str, scores_json: str,
                  model: str, date: str):
     with get_conn() as conn:
+        # 기존 보고서가 있으면 히스토리에 보관
+        cur = conn.execute(
+            "SELECT * FROM analysis_reports WHERE 종목코드 = ?", [code]
+        )
+        old = cur.fetchone()
+        if old is not None:
+            old_cols = [d[0] for d in cur.description]
+            old_dict = dict(zip(old_cols, old))
+            conn.execute(
+                """INSERT INTO analysis_reports_history
+                   (id, 종목코드, 종목명, report_html, scores_json, model_used, generated_date)
+                   VALUES (nextval('seq_report_history'), ?, ?, ?, ?, ?, ?)""",
+                [old_dict["종목코드"], old_dict.get("종목명", ""),
+                 old_dict.get("report_html", ""), old_dict.get("scores_json", ""),
+                 old_dict.get("model_used", ""), old_dict.get("generated_date", "")],
+            )
         conn.execute(
             """INSERT OR REPLACE INTO analysis_reports
                (종목코드, 종목명, report_html, scores_json, model_used, generated_date)
                VALUES (?, ?, ?, ?, ?, ?)""",
             [code, name, html, scores_json, model, date],
         )
-    log.info("보고서 저장: %s %s", code, name)
+    log.info("보고서 저장: %s %s (이전 버전 보관)", code, name)
 
 
 def load_report(code: str) -> dict | None:
@@ -400,6 +445,41 @@ def delete_report(code: str):
             "DELETE FROM analysis_reports WHERE 종목코드 = ?",
             [code.zfill(6)],
         )
+
+
+def list_report_history(code: str) -> list[dict]:
+    """특정 종목의 이전 분석 보고서 목록 (최신순, 최대 10건)."""
+    with get_conn() as conn:
+        try:
+            cur = conn.execute(
+                """SELECT id, 종목코드, 종목명, model_used, generated_date
+                   FROM analysis_reports_history
+                   WHERE 종목코드 = ?
+                   ORDER BY generated_date DESC
+                   LIMIT 10""",
+                [code.zfill(6)],
+            )
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+        except Exception:
+            return []
+
+
+def load_report_history(history_id: int) -> dict | None:
+    """히스토리 ID로 이전 보고서 전체 내용 조회."""
+    with get_conn() as conn:
+        try:
+            cur = conn.execute(
+                "SELECT * FROM analysis_reports_history WHERE id = ?",
+                [history_id],
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            cols = [d[0] for d in cur.description]
+            return dict(zip(cols, row))
+        except Exception:
+            return None
 
 
 def load_stock_financials(code: str, period: str = "annual") -> pd.DataFrame:
@@ -468,6 +548,92 @@ def delete_portfolio_item(code: str):
     with get_conn() as conn:
         conn.execute("DELETE FROM portfolio WHERE 종목코드 = ?", [code])
     log.info("포트폴리오 삭제: %s", code)
+
+
+def save_portfolio_analysis(html: str, scores_json: str, portfolio_hash: str,
+                            model: str, date: str):
+    """포트폴리오 분석 보고서 저장 (1건만 유지)"""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM portfolio_analysis")
+        conn.execute(
+            """INSERT INTO portfolio_analysis
+               (id, report_html, scores_json, portfolio_hash, model_used, generated_date)
+               VALUES (1, ?, ?, ?, ?, ?)""",
+            [html, scores_json, portfolio_hash, model, date],
+        )
+    log.info("포트폴리오 분석 보고서 저장 완료 (model=%s)", model)
+
+
+def load_portfolio_analysis() -> dict | None:
+    """포트폴리오 분석 보고서 조회"""
+    with get_conn() as conn:
+        try:
+            cur = conn.execute("SELECT * FROM portfolio_analysis WHERE id = 1")
+            row = cur.fetchone()
+            if row is None:
+                return None
+            cols = [d[0] for d in cur.description]
+            return dict(zip(cols, row))
+        except Exception:
+            return None
+
+
+def upsert_price_supplement(records: list[dict]):
+    """ETF/우선주/리츠 현재가 보조 테이블 upsert"""
+    if not records:
+        return
+    from datetime import datetime
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_conn() as conn:
+        for r in records:
+            conn.execute(
+                """INSERT OR REPLACE INTO price_supplement
+                   (종목코드, 종목명, 종목구분, 시장구분, 현재가, 전일대비, 등락률, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    str(r.get("종목코드", "")).zfill(6),
+                    r.get("종목명"),
+                    r.get("종목구분"),
+                    r.get("시장구분"),
+                    r.get("현재가"),
+                    r.get("전일대비"),
+                    r.get("등락률"),
+                    now,
+                ],
+            )
+    log.info("price_supplement upsert: %d건", len(records))
+
+
+def load_price_supplement() -> dict:
+    """price_supplement 전체를 {종목코드: row_dict} 형태로 반환"""
+    with get_conn() as conn:
+        try:
+            cur = conn.execute("SELECT * FROM price_supplement")
+            cols = [d[0] for d in cur.description]
+            return {row[0]: dict(zip(cols, row)) for row in cur.fetchall()}
+        except Exception:
+            return {}
+
+
+def get_stock_info_from_master(code: str) -> dict | None:
+    """master 테이블에서 종목명/종목구분/시장구분 조회"""
+    code = code.zfill(6)
+    with get_conn() as conn:
+        try:
+            cur = conn.execute(
+                """SELECT 종목명, 종목구분, 시장구분
+                   FROM master
+                   WHERE 종목코드 = ?
+                   ORDER BY collected_date DESC
+                   LIMIT 1""",
+                [code],
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return {"종목명": row[0], "종목구분": row[1], "시장구분": row[2]}
+        except Exception:
+            return None
 
 
 def get_data_status() -> dict:

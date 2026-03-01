@@ -578,8 +578,12 @@ def analyze_one_stock(ticker, ind_grp, fs_grp):
             res["이자보상배율"] = 99.0 if (pd.notna(ttm_interest) and ttm_interest == 0) else np.nan
 
         dps_s = find_account_value(ind_grp[ind_grp["지표구분"]=="DPS"], "배당금")
-        res["DPS_최근"] = dps_s[max(dps_s.keys())] if dps_s else np.nan
-        res["DPS_CAGR"], res["배당_연속증가"] = calc_cagr(dps_s), count_consecutive_growth(dps_s)
+        # 미래 날짜 및 분기 기준일 제거: 연말(12,8,11월 등 결산월) + 오늘 이전만 사용
+        today_str = pd.Timestamp.today().strftime("%Y-%m-%d")
+        valid_dps_keys = [k for k in dps_s if str(k) <= today_str and pd.Timestamp(k).month not in (3, 6, 9)]
+        annual_dps_s = {k: dps_s[k] for k in valid_dps_keys}
+        res["DPS_최근"] = annual_dps_s[max(annual_dps_s.keys())] if annual_dps_s else np.nan
+        res["DPS_CAGR"], res["배당_연속증가"] = calc_cagr(annual_dps_s), count_consecutive_growth(annual_dps_s)
         res["배당_수익동반증가"] = 1 if res["순이익_연속성장"] >= 2 and res["배당_연속증가"] >= 1 else 0
 
         # ── Forward 컨센서스 추정치 ──────────────────────────────────────────
@@ -1020,6 +1024,17 @@ def calc_strategy_scores(df):
     else:
         df["_순이익_CAGR_adj"] = df.get("순이익_CAGR", pd.Series(np.nan, index=df.index))
 
+    # ── 성장률 Winsorization: 극단값(소형주 base effect 등)이 백분위 왜곡 방지 ──
+    # PEG 계산은 별도로 100% 캡 적용(line ~688). 여기선 스코어링용 캡 처리.
+    _CAGR_CAP = 150  # % 상한 — 150% 초과 성장은 일회성/소형주 base effect로 간주
+    for _gcol in ["매출_CAGR", "영업이익_CAGR", "순이익_CAGR"]:
+        if _gcol in df.columns:
+            df[_gcol] = df[_gcol].clip(upper=_CAGR_CAP)
+    _YOY_CAP = 300  # 분기 YoY는 베이스가 더 작아 상한을 넓게
+    for _gcol in ["Q_매출_YoY(%)", "Q_영업이익_YoY(%)", "Q_순이익_YoY(%)"]:
+        if _gcol in df.columns:
+            df[_gcol] = df[_gcol].clip(upper=_YOY_CAP)
+
     # NaN=0점: PER/PBR/PEG (낮을수록 좋은 지표, NaN=적자/음자본 → 최하위)
     # NaN=0점: ROE, FCF수익률 (데이터 없으면 점수 불허)
     S_PER_inv = get_rank("PER", False, zero_if_nan=True)
@@ -1043,7 +1058,9 @@ def calc_strategy_scores(df):
     # Q_영업이익_YoY(20%) + 실적가속_연속(20%) + 영업이익_CAGR(15%) + RS_등급(25%) + PEG역순(20%)
     df["고성장_점수"] = (S_QOpYoY*0.20 + S_Accel*0.20 + S_OpCAGR*0.15 + S_RS*0.25 + S_PEG_inv*0.20)
     # 현금배당: FCF(25%) + 배당수익률(20%) + DPS성장(15%) + ROIC해자(15%) + 배당성향역순(10%) + F스코어(10%) + 부채비율(5%)
-    # + 배당_수익동반증가 보너스(최대+5) × 경고신호 페널티 승수(×0.7)
+    # + 배당연속증가 보너스(로그 스케일, 최대+10) + 수익동반증가 추가보너스(+2) × 경고신호 페널티 승수(×0.7)
+    # 기존: 배당_수익동반증가 binary * 5 → 1년=10년 동일 +5점 문제
+    # 개선: log2(연수+1)*3 → 1년=+2.1, 3년=+4.5, 5년=+5.6, 10년=+7.5, 상한+10
     S_PayoutInv = get_rank("배당성향(%)", asc=False, zero_if_nan=False)  # 낮을수록 good
     _raw_div = (
         S_FCF * 0.25
@@ -1054,7 +1071,9 @@ def calc_strategy_scores(df):
         + get_rank("F스코어") * 0.10
         + get_rank("부채비율(%)", False) * 0.05
     )
-    _div_bonus = df.get("배당_수익동반증가", pd.Series(0, index=df.index)).fillna(0) * 5
+    _consec = df.get("배당_연속증가", pd.Series(0, index=df.index)).fillna(0).clip(lower=0)
+    _div_bonus = np.minimum(np.log2(_consec.where(_consec > 0, np.nan) + 1) * 3, 10).fillna(0)
+    _div_bonus += df.get("배당_수익동반증가", pd.Series(0, index=df.index)).fillna(0) * 2
     _div_penalty = np.where(df["배당_경고신호"] == 1, 0.7, 1.0)
     df["현금배당_점수"] = (_raw_div + _div_bonus) * _div_penalty
     # 턴어라운드 (Grand Master 개편): 이익률변동폭(10%) + 흑자전환(15%) + 스마트머니(15%)

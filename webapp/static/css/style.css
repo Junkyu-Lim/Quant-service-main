@@ -447,3 +447,97 @@ tr.row-new { background-color: rgba(25, 135, 84, 0.04) !important; }
   .compare-table { font-size: .72rem; }
   #compare-category-tabs .nav-link { font-size: .7rem; padding: 4px 8px; }
 }
+
+/* ── Portfolio Analysis Report ── */
+.portfolio-analysis .pf-action-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.portfolio-analysis .val-pos { color: #1e8449; font-weight: 600; }
+.portfolio-analysis .val-neg { color: #c0392b; font-weight: 600; }
+
+.pf-risk-item, .pf-catalyst-item {
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+.pf-risk-item:last-child, .pf-catalyst-item:last-child {
+  border-bottom: none;
+}
+.pf-severity-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 600;
+  margin-right: 6px;
+}
+.pf-theme-item {
+  padding: 8px 12px;
+  background: #f8f9fa;
+  border-radius: 6px;
+  margin-bottom: 8px;
+}
+#btn-portfolio-analysis:hover {
+  background: #6f42c1;
+  color: #fff;
+}
+
+/* ─── Report Diff Summary ─── */
+.diff-summary {
+  border: 1px solid #dee2e6;
+  border-left: 4px solid #0d6efd;
+  border-radius: 6px;
+  padding: 12px 16px;
+  background: #f0f4ff;
+}
+.diff-summary .diff-item {
+  padding: 4px 0;
+  font-size: 0.9rem;
+}
+.diff-summary .diff-item + .diff-item {
+  border-top: 1px solid #dee2e6;
+  margin-top: 4px;
+  padding-top: 8px;
+}
+.diff-summary .diff-grade {
+  font-size: 1rem;
+}
+.diff-summary ul {
+  padding-left: 1.2rem;
+  margin-top: 4px;
+}
+.diff-summary ul li {
+  font-size: 0.85rem;
+}
+.diff-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+}
+.diff-header h6 {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #0d6efd;
+}
+.diff-header .diff-toggle {
+  font-size: 0.75rem;
+  color: #6c757d;
+}
+/* History viewing banner */
+.history-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: #fff3cd;
+  border: 1px solid #ffc107;
+  border-radius: 6px;
+  font-size: 0.85rem;
+}

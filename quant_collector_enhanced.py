@@ -174,9 +174,20 @@ def collect_master() -> pd.DataFrame:
 
     name = df["종목명"].fillna("")
     code = df["종목코드"].fillna("")
+    # ETF 판별: 종목명에 ETF 운용사 브랜드명 포함 여부로 구분
+    _etf_pattern = (
+        r"KODEX|TIGER|KBSTAR|ARIRANG|KOSEF|HANARO|SMART|FOCUS|TREX|SOL|ACE|PLUS|"
+        r"파워|마이티|히어로즈|네비게이터|킨덱스|퀀트"
+    )
+    is_etf = name.str.contains(_etf_pattern, case=False, regex=True, na=False)
     df["종목구분"] = np.select(
-        [name.str.contains("스팩"), code.str[-1] != "0", name.str.endswith("리츠")],
-        ["스팩", "우선주", "리츠"],
+        [
+            name.str.contains("스팩", na=False),
+            is_etf,
+            name.str.endswith("리츠", na=False),
+            code.str[-1] != "0",
+        ],
+        ["스팩", "ETF", "리츠", "우선주"],
         default="보통주",
     )
     log.info(f"  → 전체 {len(df)}개 종목 ({df['종목구분'].value_counts().to_dict()})")
@@ -693,10 +704,10 @@ def fetch_indicators(ticker: str) -> list[dict]:
         is_quarterly = bool(months) and any(mo in (3, 6, 9) for mo in months)
 
         if is_annual and not highlight_annual:
-            rows += _extract_indicator_rows(t, ticker, "HIGHLIGHT", freq="y")
+            rows += _extract_indicator_rows(t.copy(), ticker, "HIGHLIGHT", freq="y")
             highlight_annual = True
         elif is_quarterly and not highlight_quarterly:
-            rows += _extract_indicator_rows(t, ticker, "HIGHLIGHT", freq="q")
+            rows += _extract_indicator_rows(t.copy(), ticker, "HIGHLIGHT", freq="q")
             highlight_quarterly = True
 
         if highlight_annual and highlight_quarterly:
@@ -717,9 +728,29 @@ def fetch_indicators(ticker: str) -> list[dict]:
         for col_name, val in row_data.items():
             if col_name == t.columns[0]:
                 continue
+            
+            # 1) Only use Annual columns for historical DPS
+            col_str = str(col_name)
+            if "Annual" not in col_str:
+                continue
+                
+            # 2) Exclude Estimates/Preliminary values which are often incomplete
+            if "(E)" in col_str or "(P)" in col_str:
+                continue
+
             biz_date, _ = parse_period(col_name)
             if biz_date is None:
                 continue
+
+            # 3) Exclude future dates (결산 미완료 예비치 방지)
+            if biz_date > pd.Timestamp.today():
+                continue
+
+            # 4) Exclude non-year-end months (분기 DPS 방지: 12월 결산 외 특수 결산은 허용)
+            # Annual 컬럼이어도 분기 날짜(3,6,9월)가 생성될 경우 제외
+            if biz_date.month in (3, 6, 9):
+                continue
+
             v = safe_float(val)
             if v is not None:
                 rows.append({
@@ -1095,11 +1126,99 @@ def run_full(test_mode: bool = False, skip_price_history: bool = False, skip_inv
         else:
             log.warning("⚠️ 투자자 매매동향 데이터 없음")
 
+    # ── 9) ETF/우선주 보조 가격 수집 ──
+    _progress("ETF/우선주 가격 수집 중", 47)
+    try:
+        collect_supplement_prices()
+    except Exception as e:
+        log.warning(f"⚠️ ETF/우선주 가격 수집 실패 (무시): {e}")
+
     _progress("데이터 수집 완료", 48)
 
     elapsed = datetime.now() - start
     log.info(f"🎉 전체 수집 완료 (소요: {elapsed})")
     log.info(f"📁 DB: {_db.config.DB_PATH}")
+
+
+def collect_supplement_prices():
+    """포트폴리오에 있는 ETF/우선주/리츠 종목의 현재가를 FinanceDataReader로 수집하여
+    price_supplement 테이블에 저장한다."""
+    import FinanceDataReader as fdr
+    import db as _db
+
+    # 포트폴리오에서 종목코드 목록 확보
+    portfolio = _db.load_portfolio()
+    if not portfolio:
+        log.info("포트폴리오 비어 있음 — supplement 수집 건너뜀")
+        return
+
+    portfolio_codes = [str(p["종목코드"]).zfill(6) for p in portfolio]
+
+    # master 테이블에서 종목구분 확인
+    master = _db.load_latest("master")
+    if master.empty:
+        log.warning("master 테이블 없음 — supplement 수집 건너뜀")
+        return
+    if "종목코드" in master.columns:
+        master["종목코드"] = master["종목코드"].astype(str).str.zfill(6)
+
+    # 포트폴리오 종목 중 dashboard_result에 없는 종목 = 보완 수집 대상
+    # (ETF, 우선주, 리츠 또는 수집 안 된 보통주)
+    dr = _db.load_dashboard()
+    dr_codes: set = set()
+    if not dr.empty and "종목코드" in dr.columns:
+        dr_codes = set(dr["종목코드"].astype(str).str.zfill(6))
+
+    # dashboard_result에 없는 포트폴리오 종목만 대상
+    supp_codes = [c for c in portfolio_codes if c not in dr_codes]
+    if not supp_codes:
+        log.info("모든 포트폴리오 종목이 dashboard_result에 있음 — supplement 수집 건너뜀")
+        return
+
+    log.info(f"💹 보조 가격 수집 대상: {supp_codes}")
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    yesterday = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")  # 7일 여유
+
+    records = []
+    for code in supp_codes:
+        try:
+            df_price = fdr.DataReader(code, yesterday, today)
+            if df_price.empty:
+                log.warning(f"  {code}: 가격 데이터 없음")
+                continue
+            last_row = df_price.iloc[-1]
+            close = float(last_row.get("Close", last_row.get("종가", 0)) or 0)
+            if close == 0:
+                log.warning(f"  {code}: 종가 0 — 건너뜀")
+                continue
+
+            prev_close = float(df_price.iloc[-2].get("Close", df_price.iloc[-2].get("종가", close)) or close) if len(df_price) >= 2 else close
+            change = close - prev_close
+            change_pct = (change / prev_close * 100) if prev_close else 0
+
+            # master에서 종목명/종목구분/시장구분 조회
+            m_row = master[master["종목코드"] == code]
+            name = m_row.iloc[0]["종목명"] if not m_row.empty else code
+            gbn = m_row.iloc[0]["종목구분"] if not m_row.empty else "기타"
+            mkt = m_row.iloc[0]["시장구분"] if not m_row.empty else ""
+
+            records.append({
+                "종목코드": code,
+                "종목명": name,
+                "종목구분": gbn,
+                "시장구분": mkt,
+                "현재가": close,
+                "전일대비": round(change, 2),
+                "등락률": round(change_pct, 2),
+            })
+            log.info(f"  {code} {name}: {close:,.0f}원 ({change_pct:+.2f}%)")
+        except Exception as e:
+            log.warning(f"  {code} 가격 수집 실패: {e}")
+
+    if records:
+        _db.upsert_price_supplement(records)
+        log.info(f"✅ price_supplement 저장: {len(records)}건")
 
 
 def main():

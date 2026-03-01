@@ -16,7 +16,7 @@ from flask_cors import CORS
 
 import config
 import db as _db
-from analysis.claude_analyzer import generate_report
+from analysis.claude_analyzer import generate_report, generate_portfolio_report, generate_diff_summary
 
 log = logging.getLogger(__name__)
 
@@ -185,7 +185,18 @@ def api_stocks():
 def api_stock_detail(code: str):
     df = _load_data()
     if df.empty: return jsonify({"error": "No data"}), 404
-    row = df[df["종목코드"] == code.zfill(6)]
+    code = code.zfill(6)
+    row = df[df["종목코드"] == code]
+    if row.empty and code[-1] != "0":
+        # 우선주 → 보통주 프록시: 마지막 자리를 0으로 변환하여 재조회
+        common_code = code[:-1] + "0"
+        row = df[df["종목코드"] == common_code]
+        if not row.empty:
+            result = {c: _safe_val(row.iloc[0].get(c)) for c in df.columns}
+            result["_proxy"] = True
+            result["_proxy_from"] = code
+            result["_proxy_name"] = _get_stock_name(code)
+            return jsonify(result)
     if row.empty: return jsonify({"error": "Stock not found"}), 404
     return jsonify({c: _safe_val(row.iloc[0].get(c)) for c in df.columns})
 
@@ -257,7 +268,12 @@ def api_batch_changes():
 @app.route("/api/stocks/<code>/financials")
 def api_stock_financials(code: str):
     period = request.args.get("period", "annual")  # "annual" | "quarter"
+    code = code.zfill(6)
     df = _db.load_stock_financials(code, period=period)
+    # 우선주 → 보통주 재무 데이터 프록시
+    if df.empty and code[-1] != "0":
+        common_code = code[:-1] + "0"
+        df = _db.load_stock_financials(common_code, period=period)
     if df.empty: return jsonify({"years": [], "series": []})
     if period == "quarter":
         # 기준일 YYYYMM → "YYYYQN" 레이블
@@ -356,13 +372,12 @@ def api_stock_analysis(code: str):
         row = _db.load_report(code)
         if row is None:
             return jsonify({"error": "No report"}), 404
-        mode_hint = "gemini" if "Gemini" in (row.get("model_used") or "") else "claude"
         return jsonify({
             "report_html": row.get("report_html", ""),
             "scores": json.loads(row.get("scores_json") or "{}"),
             "model": row.get("model_used", ""),
             "generated_date": row.get("generated_date", ""),
-            "mode": mode_hint,
+            "mode": "claude",
         })
     # POST – generate new report
     df = _load_data()
@@ -371,11 +386,14 @@ def api_stock_analysis(code: str):
     rows = df[df["종목코드"] == code]
     if rows.empty:
         return jsonify({"error": "Stock not found"}), 404
-    body = request.get_json(silent=True) or {}
-    mode = body.get("mode", "gemini")
     stock = {c: _safe_val(rows.iloc[0].get(c)) for c in df.columns}
+
+    # 이전 보고서 scores 보관 (diff용)
+    prev_row = _db.load_report(code)
+    prev_scores_json = prev_row.get("scores_json") if prev_row else None
+
     try:
-        result = generate_report(stock, mode=mode)
+        result = generate_report(stock)
         if "error" not in result:
             _db.save_report(
                 code=code,
@@ -385,6 +403,11 @@ def api_stock_analysis(code: str):
                 model=result.get("model", ""),
                 date=result.get("generated_date", ""),
             )
+            # 이전 보고서와 비교하여 diff 요약 생성
+            if prev_scores_json:
+                result["diff_html"] = generate_diff_summary(
+                    prev_scores_json, result.get("scores", {})
+                )
         return jsonify(result)
     except Exception as e:
         log.exception("Analysis failed for %s", code)
@@ -392,26 +415,35 @@ def api_stock_analysis(code: str):
         err_str = str(e)
         if "Timeout" in err_name or "timeout" in err_str.lower():
             return jsonify({"error": "분석 시간이 초과되었습니다. 잠시 후 다시 시도해주세요."}), 504
-        if "쿼터를 초과" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-            return jsonify({"error": err_str}), 429
         return jsonify({"error": err_str}), 500
+
+
+@app.route("/api/stocks/<code>/analysis/history")
+def api_stock_analysis_history(code: str):
+    """특정 종목의 이전 분석 보고서 목록."""
+    code = code.zfill(6)
+    return jsonify(_db.list_report_history(code))
+
+
+@app.route("/api/stocks/analysis/history/<int:history_id>")
+def api_stock_analysis_history_detail(history_id: int):
+    """히스토리 ID로 이전 보고서 상세 조회."""
+    row = _db.load_report_history(history_id)
+    if row is None:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify({
+        "id": row["id"],
+        "report_html": row.get("report_html", ""),
+        "scores": json.loads(row.get("scores_json") or "{}"),
+        "model": row.get("model_used", ""),
+        "generated_date": row.get("generated_date", ""),
+    })
 
 
 # ── Portfolio API ──────────────────────────────────────────────────────
 
-@app.route("/api/portfolio", methods=["GET"])
-def api_portfolio():
-    """포트폴리오 목록 + 현재가/수익률/비중 계산"""
-    entries = _db.load_portfolio()
-    if not entries:
-        return jsonify({
-            "items": [],
-            "summary": {"총매입금액": 0, "총평가금액": 0, "총수익금액": 0,
-                         "총수익률": 0, "종목수": 0},
-            "섹터별": [],
-        })
-
-    df = _load_data()
+def _build_portfolio_response(entries, df, supp):
+    """포트폴리오 항목 리스트를 현재가/수익률/비중 계산 결과로 변환."""
     items = []
     for e in entries:
         code = e["종목코드"]
@@ -419,12 +451,13 @@ def api_portfolio():
         avg_price = e.get("평균매입가", 0) or 0
         buy_amount = qty * avg_price
 
-        # dashboard_result 에서 현재가/섹터 등 조회
+        # dashboard_result 에서 현재가/섹터 등 조회 (보통주)
         cur_price = None
         stock_name = code
         sector = None
         per = None
         score = None
+        stock_type = None
         if not df.empty:
             row = df[df["종목코드"] == code]
             if not row.empty:
@@ -434,6 +467,19 @@ def api_portfolio():
                 sector = r.get("섹터")
                 per = _safe_val(r.get("PER"))
                 score = _safe_val(r.get("종합점수"))
+                stock_type = r.get("종목구분")
+
+        # dashboard_result에 없는 경우 price_supplement(ETF/우선주/리츠) 조회
+        if cur_price is None and code in supp:
+            s = supp[code]
+            cur_price = s.get("현재가")
+            if stock_name == code:
+                stock_name = s.get("종목명") or code
+            stock_type = s.get("종목구분")
+
+        # ETF 메타데이터에서 섹터 보충
+        if sector is None and code in config.ETF_METADATA:
+            sector = config.ETF_METADATA[code].get("sector")
 
         eval_amount = (qty * cur_price) if cur_price else None
         profit = (eval_amount - buy_amount) if eval_amount else None
@@ -442,6 +488,7 @@ def api_portfolio():
         items.append({
             "종목코드": code,
             "종목명": stock_name,
+            "종목구분": stock_type,
             "수량": qty,
             "평균매입가": avg_price,
             "현재가": cur_price,
@@ -480,7 +527,7 @@ def api_portfolio():
         key=lambda x: x["비중"], reverse=True,
     )
 
-    return jsonify({
+    return {
         "items": items,
         "summary": {
             "총매입금액": round(total_buy),
@@ -490,7 +537,24 @@ def api_portfolio():
             "종목수": len(items),
         },
         "섹터별": sector_list,
-    })
+    }
+
+
+@app.route("/api/portfolio", methods=["GET"])
+def api_portfolio():
+    """포트폴리오 목록 + 현재가/수익률/비중 계산"""
+    entries = _db.load_portfolio()
+    if not entries:
+        return jsonify({
+            "items": [],
+            "summary": {"총매입금액": 0, "총평가금액": 0, "총수익금액": 0,
+                         "총수익률": 0, "종목수": 0},
+            "섹터별": [],
+        })
+
+    df = _load_data()
+    supp = _db.load_price_supplement()
+    return jsonify(_build_portfolio_response(entries, df, supp))
 
 
 @app.route("/api/portfolio", methods=["POST"])
@@ -537,6 +601,168 @@ def api_portfolio_delete(code: str):
     """포트폴리오에서 종목 삭제"""
     _db.delete_portfolio_item(code)
     return jsonify({"status": "ok"})
+
+
+# ── Portfolio AI Analysis ─────────────────────────────────────────────
+
+def _portfolio_hash(entries: list[dict]) -> str:
+    """포트폴리오 구성의 해시 생성 (캐시 무효화 판단용)"""
+    import hashlib
+    parts = sorted(
+        f"{e['종목코드']}:{e.get('수량', 0)}:{e.get('평균매입가', 0)}"
+        for e in entries
+    )
+    return hashlib.md5("|".join(parts).encode()).hexdigest()
+
+
+@app.route("/api/portfolio/analysis", methods=["GET"])
+def api_portfolio_analysis_get():
+    """포트폴리오 분석 보고서 조회 (캐시)"""
+    row = _db.load_portfolio_analysis()
+    if row is None:
+        return jsonify({"error": "No report"}), 404
+
+    # 캐시 유효성 확인
+    entries = _db.load_portfolio()
+    current_hash = _portfolio_hash(entries) if entries else ""
+    if row.get("portfolio_hash") != current_hash:
+        return jsonify({
+            "stale": True,
+            "report_html": row.get("report_html", ""),
+            "scores": json.loads(row.get("scores_json") or "{}"),
+            "model": row.get("model_used", ""),
+            "generated_date": row.get("generated_date", ""),
+            "message": "포트폴리오가 변경되어 재분석이 필요합니다.",
+        })
+
+    return jsonify({
+        "report_html": row.get("report_html", ""),
+        "scores": json.loads(row.get("scores_json") or "{}"),
+        "model": row.get("model_used", ""),
+        "generated_date": row.get("generated_date", ""),
+    })
+
+
+@app.route("/api/portfolio/analysis", methods=["POST"])
+def api_portfolio_analysis_post():
+    """포트폴리오 분석 보고서 생성"""
+    entries = _db.load_portfolio()
+    if not entries:
+        return jsonify({"error": "포트폴리오가 비어 있습니다."}), 400
+
+    df = _load_data()
+    supp = _db.load_price_supplement()
+    portfolio_res = _build_portfolio_response(entries, df, supp)
+    portfolio_items = portfolio_res["items"]
+
+    # 종목별 정량 데이터 수집
+    stock_data = {}
+    for item in portfolio_items:
+        code = item["종목코드"]
+        if not df.empty:
+            rows = df[df["종목코드"] == code]
+            if not rows.empty:
+                stock_data[code] = {c: _safe_val(rows.iloc[0].get(c)) for c in df.columns}
+
+    # 기존 AI 분석 보고서 수집
+    ai_reports = {}
+    for item in portfolio_items:
+        code = item["종목코드"]
+        report_row = _db.load_report(code)
+        if report_row and report_row.get("scores_json"):
+            try:
+                ai_reports[code] = json.loads(report_row["scores_json"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    try:
+        result = generate_portfolio_report(portfolio_items, stock_data, ai_reports)
+        if "error" not in result:
+            _db.save_portfolio_analysis(
+                html=result.get("report_html", ""),
+                scores_json=json.dumps(result.get("scores", {}), ensure_ascii=False),
+                portfolio_hash=_portfolio_hash(entries),
+                model=result.get("model", ""),
+                date=result.get("generated_date", ""),
+            )
+        return jsonify(result)
+    except Exception as e:
+        log.exception("Portfolio analysis failed")
+        err_name = type(e).__name__
+        err_str = str(e)
+        if "Timeout" in err_name or "timeout" in err_str.lower():
+            return jsonify({"error": "분석 시간이 초과되었습니다. 잠시 후 다시 시도해주세요."}), 504
+        return jsonify({"error": err_str}), 500
+
+
+@app.route("/api/stock-info/<code>", methods=["GET"])
+def api_stock_info(code: str):
+    """종목코드로 종목명/종목구분/시장구분 조회 (포트폴리오 추가 모달에서 사용)"""
+    code = code.zfill(6)
+    # 1) dashboard_result에서 먼저 조회 (가장 최신 정보)
+    df = _load_data()
+    if not df.empty:
+        row = df[df["종목코드"] == code]
+        if not row.empty:
+            r = row.iloc[0]
+            return jsonify({
+                "종목코드": code,
+                "종목명": r.get("종목명", code),
+                "종목구분": r.get("종목구분", "보통주"),
+                "시장구분": r.get("시장구분", ""),
+                "섹터": r.get("섹터"),
+            })
+    # 2) price_supplement에서 조회 (ETF/우선주)
+    supp = _db.load_price_supplement()
+    if code in supp:
+        s = supp[code]
+        return jsonify({
+            "종목코드": code,
+            "종목명": s.get("종목명", code),
+            "종목구분": s.get("종목구분", "기타"),
+            "시장구분": s.get("시장구분", ""),
+            "섹터": None,
+        })
+    # 3) master 테이블에서 조회
+    info = _db.get_stock_info_from_master(code)
+    if info:
+        return jsonify({
+            "종목코드": code,
+            "종목명": info["종목명"],
+            "종목구분": info["종목구분"],
+            "시장구분": info["시장구분"],
+            "섹터": None,
+        })
+    # 4) FDR DataReader로 가격 조회 가능 여부 확인 (ETF/우선주 등 master에 없는 종목 fallback)
+    try:
+        import FinanceDataReader as fdr
+        from datetime import datetime, timedelta
+        yesterday = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%Y-%m-%d")
+        df_price = fdr.DataReader(code, yesterday, today)
+        if not df_price.empty:
+            # 가격 조회 성공 → 종목명은 코드로 대체, 종목구분은 미상
+            return jsonify({
+                "종목코드": code,
+                "종목명": code,  # 종목명 불명 시 코드로 표시
+                "종목구분": "기타",
+                "시장구분": "",
+                "섹터": None,
+            })
+    except Exception as e:
+        log.warning(f"FDR 가격 조회 실패 ({code}): {e}")
+    return jsonify({"error": "종목을 찾을 수 없습니다."}), 404
+
+
+def _get_stock_name(code: str) -> str:
+    """종목코드로 종목명 조회 (price_supplement → master 순 fallback)."""
+    supp = _db.load_price_supplement()
+    if code in supp:
+        return supp[code].get("종목명") or code
+    info = _db.get_stock_info_from_master(code)
+    if info:
+        return info.get("종목명") or code
+    return code
 
 
 def _apply_screen_filter(df: pd.DataFrame, name: str) -> pd.DataFrame:
