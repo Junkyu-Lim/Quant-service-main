@@ -8,9 +8,19 @@ Pat Dorsey, Peter Lynch, André Kostolany)의 핵심 철학을 기반으로
 
 import json
 import logging
+import sys
+import os
+import time
 from datetime import datetime
 
 import anthropic
+import httpx
+import numpy as np
+import pandas as pd
+
+# db.py는 루트에 있으므로 sys.path 추가
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import db as _db
 
 import config
 
@@ -95,6 +105,14 @@ SYSTEM_PROMPT = """\
    - 코스톨라니 달걀 모형의 현재 위치
    - 역발상 투자 기회, 유동성/수급 분석
    - 인내심 필요 정도
+
+## 최신 정보 활용 (웹 검색)
+- web_search 도구를 활용하여 분석 대상 기업의 최신 뉴스·공시·실적발표·산업 동향을 반드시 확인하세요
+- **검색은 최대 2회**로 제한됩니다. 효율적으로 사용하세요:
+  - 1차 검색: "{종목명} 최신 실적 공시 뉴스 {현재연도}" — 기업 고유 이슈 파악
+  - 2차 검색(필요시): "{산업명} 시장 전망 동향 {현재연도}" — 산업 레벨 트렌드 보완
+- 검색 결과를 Stage 1(거시환경), Stage 5(전망/촉매), Stage 8(액션 플랜)에 적극 반영하세요
+- 검색으로 확인한 최신 정보는 분석 근거에 구체적으로 인용하세요 (예: "2026년 1분기 실적 발표에 따르면...")
 """
 
 USER_PROMPT_TEMPLATE = """\
@@ -282,13 +300,92 @@ def format_quant_data(stock: dict) -> str:
 
 
 def _parse_json_response(raw_text: str) -> dict:
-    """AI 응답에서 JSON을 파싱합니다. ```json 블록을 자동 제거합니다."""
+    """AI 응답에서 JSON을 파싱합니다. ```json 블록 자동 제거 + 잘린 JSON 복원."""
     json_str = raw_text
     if "```json" in json_str:
         json_str = json_str.split("```json", 1)[1]
     if "```" in json_str:
         json_str = json_str.split("```", 1)[0]
-    return json.loads(json_str.strip())
+    json_str = json_str.strip()
+
+    try:
+        return json.loads(json_str)
+    except json.JSONDecodeError:
+        # 잘린 JSON 복원 시도: 닫히지 않은 괄호를 닫아본다
+        repaired = _try_repair_json(json_str)
+        return json.loads(repaired)
+
+
+def _try_repair_json(s: str) -> str:
+    """잘린 JSON 문자열을 복원 시도 (닫히지 않은 브래킷/따옴표 처리)."""
+    import re
+
+    # 1) 열린 문자열 닫기
+    in_string = False
+    escaped = False
+    for ch in s:
+        if escaped:
+            escaped = False
+            continue
+        if ch == '\\':
+            escaped = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+    if in_string:
+        s += '"'
+
+    # 2) 후행 콤마 제거 (}, ] 앞의 콤마 및 문자열 끝의 콤마)
+    s = re.sub(r',\s*([}\]])', r'\1', s)
+    s = s.rstrip().rstrip(',')
+
+    # 3) 불완전한 키-값 쌍 처리: 끝이 "key": 로 끝나면 null 추가
+    s = re.sub(r':\s*$', ': null', s)
+    # "key" 만 있고 : 가 없는 경우 제거
+    s = re.sub(r',\s*"[^"]*"\s*$', '', s)
+
+    # 4) 닫히지 않은 괄호 닫기
+    stack = []
+    in_str = False
+    esc = False
+    for ch in s:
+        if esc:
+            esc = False
+            continue
+        if ch == '\\':
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch in ('{', '['):
+            stack.append(ch)
+        elif ch == '}' and stack and stack[-1] == '{':
+            stack.pop()
+        elif ch == ']' and stack and stack[-1] == '[':
+            stack.pop()
+
+    for bracket in reversed(stack):
+        s += ']' if bracket == '[' else '}'
+
+    return s
+
+
+def _call_with_retry(client, *, max_retries: int = 5, **kwargs):
+    """Anthropic API 호출 + 과부하(529)/서버오류(5xx) 시 자동 재시도."""
+    for attempt in range(1, max_retries + 1):
+        try:
+            return client.messages.create(**kwargs)
+        except anthropic.APIStatusError as e:
+            if e.status_code in (429, 529, 500, 502, 503) and attempt < max_retries:
+                wait = min(2 ** attempt * 3, 60)  # 6s, 12s, 24s, 48s
+                log.warning("API 오류 %d (attempt %d/%d), %ds 후 재시도: %s",
+                            e.status_code, attempt, max_retries, wait, str(e)[:100])
+                time.sleep(wait)
+            else:
+                raise
 
 
 # ─────────────────────────────────────────
@@ -327,21 +424,51 @@ def generate_report(stock: dict, mode: str = "claude") -> dict:
         qualitative_section="",
     )
 
-    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY, timeout=300.0)
-    message = client.messages.create(
-        model=config.ANALYSIS_MODEL,
-        max_tokens=16384,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_prompt}],
+    client = anthropic.Anthropic(
+        api_key=config.ANTHROPIC_API_KEY,
+        timeout=httpx.Timeout(300.0, connect=30.0),
     )
 
-    raw_text = message.content[0].text.strip()
+    log.info("종목 AI 분석 시작 (%s %s, model=%s, web_search max_uses=2)", code, name, config.ANALYSIS_MODEL)
+    message = _call_with_retry(
+        client, model=config.ANALYSIS_MODEL, max_tokens=16384,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_prompt}],
+        tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 2}],
+    )
+
+    block_types = [getattr(b, "type", "?") for b in message.content]
+    log.info("종목 AI 분석 완료 (%s %s, stop_reason=%s, blocks=%s)",
+             code, name, message.stop_reason, block_types)
+
+    # content 배열에서 text 블록만 추출 (web_search_tool_result 등 다른 블록 무시)
+    raw_text = ""
+    for block in message.content:
+        if hasattr(block, "type") and block.type == "text":
+            raw_text += block.text
+    raw_text = raw_text.strip()
+
+    if not raw_text:
+        log.error("종목 분석: text 블록 없음 (%s %s, stop_reason=%s, blocks=%s)",
+                  code, name, message.stop_reason, block_types)
+        return {
+            "scores": {},
+            "report_html": "<p>오류: 모델 응답에 텍스트가 없습니다. 잠시 후 다시 시도해주세요.</p>",
+            "error": f"빈 응답 (stop_reason={message.stop_reason})",
+            "model": config.ANALYSIS_MODEL,
+            "generated_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "mode": "claude",
+        }
+
+    if message.stop_reason == "max_tokens":
+        log.warning("종목 분석 max_tokens 도달 (%s %s, len=%d)", code, name, len(raw_text))
 
     try:
         scores = _parse_json_response(raw_text)
     except json.JSONDecodeError as e:
         log.error("Claude JSON 파싱 실패 (%s %s): %s", code, name, str(e)[:100])
-        log.debug("시도한 JSON: %s", raw_text[:200])
+        log.debug("시도한 JSON (첫 500자): %s", raw_text[:500])
+        log.debug("시도한 JSON (끝 200자): %s", raw_text[-200:])
         return {
             "scores": {},
             "report_html": "<p>오류: JSON 파싱 실패</p>",
@@ -738,6 +865,50 @@ def render_html(code: str, name: str, market: str, stock: dict,
 
 
 # ─────────────────────────────────────────
+# 상관관계 계산
+# ─────────────────────────────────────────
+
+def compute_correlation_matrix(codes: list[str], names: dict[str, str],
+                                n_days: int = 250) -> dict | None:
+    """종목 리스트의 가격 상관관계 행렬 계산.
+
+    Returns:
+        {"matrix": [[float]], "codes": [str], "names": [str]} 또는 None (데이터 부족)
+    """
+    try:
+        price_df = _db.load_price_history_multi(codes, n_days=n_days)
+    except Exception as e:
+        log.warning("price_history 로드 실패: %s", e)
+        return None
+
+    if price_df.empty or price_df.shape[1] < 2:
+        return None
+
+    # 60 거래일 미만 종목 제거
+    valid_cols = [c for c in price_df.columns if price_df[c].notna().sum() >= 60]
+    if len(valid_cols) < 2:
+        return None
+
+    price_df = price_df[valid_cols]
+    returns = price_df.pct_change().dropna(how="all")
+    corr = returns.corr().round(2)
+
+    valid_codes = list(corr.columns)
+    matrix = corr.values.tolist()
+
+    # NaN → None 처리
+    clean_matrix = []
+    for row in matrix:
+        clean_matrix.append([None if (isinstance(v, float) and np.isnan(v)) else v for v in row])
+
+    return {
+        "matrix": clean_matrix,
+        "codes": valid_codes,
+        "names": [names.get(c, c) for c in valid_codes],
+    }
+
+
+# ─────────────────────────────────────────
 # 포트폴리오 AI 종합 분석
 # ─────────────────────────────────────────
 
@@ -755,6 +926,13 @@ PORTFOLIO_SYSTEM_PROMPT = """\
 - 각 종목에 대해 BUY_MORE / HOLD / TRIM / SELL 중 하나를 권고
 - 현재 비중 vs 권장 비중 제시
 - 정량 데이터와 기존 AI 분석을 종합하여 근거 제시
+- **구체적 매매 수량 산출** (보유수량, 평균매입가, 현재가, 총평가금액 기반):
+  - BUY_MORE: 추가 매수할 주수(target_shares), 매수 목표가 범위(target_price_low ~ target_price_high), 예상 매수금액(estimated_amount)
+  - TRIM: 매도할 주수(target_shares), 매도 목표가 범위, 예상 매도금액
+  - SELL: 전량 매도 주수(=보유수량), 매도 목표가 범위, 예상 매도금액
+  - HOLD: target_shares=0, 가격 범위는 현재가 ±5% 내외 감시 범위
+  - target_shares 산출식: abs(총평가금액 × (권장비중 - 현재비중) / 100) ÷ 목표가 중간값, 정수 반올림
+  - estimated_amount = target_shares × 목표가 중간값
 
 ### 3. 섹터 집중도 분석
 - 섹터별 비중 분포의 적절성 평가
@@ -764,16 +942,29 @@ PORTFOLIO_SYSTEM_PROMPT = """\
 ### 4. 포트폴리오 리스크 & 촉매
 - 포트폴리오 전체 관점에서의 주요 리스크 (상관관계, 동일 리스크 노출 등)
 - 포트폴리오 전체 관점에서의 상승 촉매
+- **상관관계 행렬 데이터가 제공된 경우**: 수치를 기반으로 고상관 페어(상관계수 0.7 이상)를 구체적으로 식별하고, 분산 효과 부족 구간 지적
+- 상관관계 데이터가 없는 경우: 섹터/밸류체인 기반 정성적 판단으로 대체
 
 ### 5. 보완 제안
 - 포트폴리오에 부족한 섹터/테마/스타일 식별
 - 추가 편입 후보 테마 제안 (종목 추천 아님, 테마/섹터 수준)
 
+### 6. 관심종목 편입 권고 (관심종목 데이터가 있는 경우)
+- 관심종목 중 포트폴리오에 추가하면 좋을 종목 식별
+- 각 관심종목에 대해 ADD(편입 권고) / WATCH(관찰 지속) / SKIP(제외 권고) 판정
+- ADD 종목: 권장 비중, 매수 주수, 목표가 범위, 예상 금액 제시
+- 기존 포트폴리오와의 섹터 분산 효과, 성장성 보완 효과, 상관관계 고려
+
+### 7. 리밸런싱 실행 계획
+- 가장 시급한 액션 1-3개 우선순위 제시
+- 실행 순서 및 권장 시기 (즉시/이번 달/이번 분기/불필요)
+
 ## 분석 지침
 - 포트폴리오 비중이 높은 종목에 더 주의를 기울이세요
 - 종목 간 상관관계와 중복 리스크를 식별하세요
-- 데이터가 없는 종목(ETF, 우선주 등)은 비중 분석에만 포함하세요
+- 데이터가 없는 종목(ETF, 우선주 등)은 비중 분석에만 포함하세요 (비중=None인 종목은 현재가 없음)
 - 6대 투자 거장(Buffett, Damodaran, Fisher, Dorsey, Lynch, Kostolany)의 관점이 기존 분석에 포함되어 있으면 이를 종합적으로 활용하세요
+- 관심종목이 없으면 watchlist_recommendations는 빈 배열로 출력하세요
 - 한국어로 분석하세요
 """
 
@@ -790,6 +981,8 @@ PORTFOLIO_USER_PROMPT_TEMPLATE = """\
 
 {per_stock_sections}
 
+{watchlist_section}
+{correlation_section}
 ## 출력 형식
 
 반드시 아래 JSON 형식으로만 응답하세요. JSON 외 다른 텍스트는 절대 포함하지 마세요.
@@ -811,6 +1004,10 @@ PORTFOLIO_USER_PROMPT_TEMPLATE = """\
       "action": "BUY_MORE|HOLD|TRIM|SELL",
       "current_weight": 0.0,
       "recommended_weight": 0.0,
+      "target_shares": 0,
+      "target_price_low": 0,
+      "target_price_high": 0,
+      "estimated_amount": 0,
       "rationale": "2-3문장 근거"
     }}
   ],
@@ -824,7 +1021,8 @@ PORTFOLIO_USER_PROMPT_TEMPLATE = """\
     {{
       "risk": "리스크 설명",
       "severity": "high|medium|low",
-      "affected_stocks": ["종목코드"]
+      "affected_stocks": ["종목코드"],
+      "correlation_note": "상관관계 관련 메모 (해당시)"
     }}
   ],
   "portfolio_catalysts": [
@@ -840,6 +1038,25 @@ PORTFOLIO_USER_PROMPT_TEMPLATE = """\
       "reason": "왜 추가가 필요한지 1-2문장"
     }}
   ],
+  "watchlist_recommendations": [
+    {{
+      "code": "종목코드",
+      "name": "종목명",
+      "action": "ADD|WATCH|SKIP",
+      "recommended_weight": 0.0,
+      "target_shares": 0,
+      "target_price_low": 0,
+      "target_price_high": 0,
+      "estimated_amount": 0,
+      "rationale": "2-3문장 근거",
+      "synergy": "포트폴리오 시너지/보완 효과 설명"
+    }}
+  ],
+  "rebalancing_plan": {{
+    "urgency": "immediate|monthly|quarterly|none",
+    "priority_actions": ["가장 먼저 실행할 액션 1", "액션 2"],
+    "execution_note": "실행 순서 및 권장 시기 2-3문장"
+  }},
   "summary": "5-7문장 종합 포트폴리오 전략 의견"
 }}
 ```
@@ -884,10 +1101,10 @@ def format_portfolio_stock(stock: dict, portfolio_item: dict,
         lines.append(f"- 요약: {ai_report.get('summary', 'N/A')}")
         risks = ai_report.get("risks", [])
         if risks:
-            lines.append(f"- 리스크: {', '.join(str(r) for r in risks[:3])}")
+            lines.append(f"- 리스크: {', '.join(str(r) for r in risks)}")
         catalysts = ai_report.get("catalysts", [])
         if catalysts:
-            lines.append(f"- 촉매: {', '.join(str(c) for c in catalysts[:3])}")
+            lines.append(f"- 촉매: {', '.join(str(c) for c in catalysts)}")
         # 거장 점수 요약
         masters = ai_report.get("stage7_masters", {})
         if masters:
@@ -903,7 +1120,9 @@ def format_portfolio_stock(stock: dict, portfolio_item: dict,
 
 def generate_portfolio_report(portfolio_items: list[dict],
                               stock_data: dict[str, dict],
-                              ai_reports: dict[str, dict]) -> dict:
+                              ai_reports: dict[str, dict],
+                              watchlist_data: dict[str, dict] | None = None,
+                              correlation_data: dict | None = None) -> dict:
     """
     포트폴리오 전체 분석 보고서 생성 (Claude API).
 
@@ -911,6 +1130,7 @@ def generate_portfolio_report(portfolio_items: list[dict],
         portfolio_items: api_portfolio() 결과의 items 리스트
         stock_data: {종목코드: dashboard_result row dict}
         ai_reports: {종목코드: scores dict (parsed JSON)}
+        watchlist_data: {종목코드: dashboard_result row dict} — 관심종목 데이터 (옵션)
 
     Returns:
         { "scores": {...}, "report_html": "...", "model": "...",
@@ -935,6 +1155,18 @@ def generate_portfolio_report(portfolio_items: list[dict],
                 format_portfolio_stock({}, item, ai)
             )
 
+    # 관심종목 섹션 빌드
+    watchlist_section = ""
+    if watchlist_data:
+        wl_lines = ["\n## 관심종목 (워치리스트) 데이터\n"]
+        wl_lines.append("포트폴리오에 없는 관심종목입니다. 편입 여부를 검토해주세요.\n")
+        for code, stock in watchlist_data.items():
+            name = stock.get("종목명", code)
+            wl_lines.append(f"\n### [관심] {name} ({code})")
+            wl_lines.append(f"- 섹터: {stock.get('섹터') or 'N/A'}")
+            wl_lines.append(format_quant_data(stock))
+        watchlist_section = "\n".join(wl_lines) + "\n"
+
     # 요약 통계
     total_eval = sum(i.get("평가금액", 0) or 0 for i in portfolio_items)
     total_buy = sum(i.get("매입금액", 0) or 0 for i in portfolio_items)
@@ -949,54 +1181,117 @@ def generate_portfolio_report(portfolio_items: list[dict],
         sorted(sector_map.items(), key=lambda x: -x[1])
     ) if total_eval else "N/A"
 
+    # 상관관계 섹션 빌드
+    correlation_section = ""
+    if correlation_data and correlation_data.get("matrix"):
+        codes_list = correlation_data["codes"]
+        names_list = correlation_data["names"]
+        matrix = correlation_data["matrix"]
+        corr_lines = ["\n## 종목 간 가격 상관관계 행렬 (최근 250 거래일 일별 수익률 기준)\n"]
+        header = "종목\t" + "\t".join(names_list)
+        corr_lines.append(header)
+        for i, name in enumerate(names_list):
+            row_vals = []
+            for j, v in enumerate(matrix[i]):
+                if v is None:
+                    row_vals.append("N/A")
+                elif i == j:
+                    row_vals.append("1.00")
+                else:
+                    row_vals.append(f"{v:.2f}")
+            corr_lines.append(f"{name}\t" + "\t".join(row_vals))
+        corr_lines.append("\n※ 0.7 이상: 고상관(빨강), 0.3~0.7: 중간, -0.3~0.3: 낮음, -0.3 미만: 역상관")
+        correlation_section = "\n".join(corr_lines) + "\n"
+
     user_prompt = PORTFOLIO_USER_PROMPT_TEMPLATE.format(
         stock_count=len(portfolio_items),
         total_eval=f"{round(total_eval):,}",
         total_return=f"{total_return:.2f}",
         sector_distribution=sector_dist,
         per_stock_sections="\n".join(per_stock_parts),
+        watchlist_section=watchlist_section,
+        correlation_section=correlation_section,
     )
 
-    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY, timeout=600.0)
-    message = client.messages.create(
-        model=config.ANALYSIS_MODEL,
-        max_tokens=16384,
+    client = anthropic.Anthropic(
+        api_key=config.ANTHROPIC_API_KEY,
+        timeout=httpx.Timeout(600.0, connect=30.0),
+    )
+
+    log.info("포트폴리오 AI 분석 시작 (model=%s)", config.PORTFOLIO_MODEL)
+    message = _call_with_retry(
+        client, model=config.PORTFOLIO_MODEL, max_tokens=32768,
         system=PORTFOLIO_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
     )
+    block_types = [getattr(b, "type", "?") for b in message.content]
+    log.info("포트폴리오 AI 분석 완료 (stop_reason=%s, blocks=%s, usage=%s)",
+             message.stop_reason, block_types, message.usage)
 
-    raw_text = message.content[0].text.strip()
+    # content 배열에서 text 블록만 추출 (web_search_tool_result 등 다른 블록 무시)
+    raw_text = ""
+    for block in message.content:
+        if hasattr(block, "type") and block.type == "text":
+            raw_text += block.text
+    raw_text = raw_text.strip()
+
+    if not raw_text:
+        log.error("포트폴리오 분석: text 블록 없음 (stop_reason=%s, blocks=%s)",
+                  message.stop_reason, block_types)
+        return {
+            "scores": {},
+            "report_html": "<p>오류: 모델 응답에 텍스트가 없습니다. 잠시 후 다시 시도해주세요.</p>",
+            "error": f"빈 응답 (stop_reason={message.stop_reason})",
+            "model": config.PORTFOLIO_MODEL,
+            "generated_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "mode": "claude",
+        }
+
+    if message.stop_reason == "max_tokens":
+        log.warning("포트폴리오 분석: max_tokens 도달로 응답이 잘렸을 수 있음 (len=%d)", len(raw_text))
 
     try:
         scores = _parse_json_response(raw_text)
     except json.JSONDecodeError as e:
         log.error("포트폴리오 분석 JSON 파싱 실패: %s", str(e)[:100])
-        log.debug("시도한 JSON: %s", raw_text[:200])
+        log.debug("시도한 JSON (첫 500자): %s", raw_text[:500])
+        log.debug("시도한 JSON (끝 200자): %s", raw_text[-200:])
         return {
             "scores": {},
             "report_html": "<p>오류: JSON 파싱 실패</p>",
             "error": str(e),
-            "model": config.ANALYSIS_MODEL,
+            "model": config.PORTFOLIO_MODEL,
             "generated_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "mode": "claude",
         }
 
     generated_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    model_label = f"Claude ({config.ANALYSIS_MODEL})"
-    report_html = render_portfolio_html(scores, portfolio_items,
-                                        generated_date, model_label)
+    model_label = f"Claude ({config.PORTFOLIO_MODEL})"
+    try:
+        report_html = render_portfolio_html(scores, portfolio_items,
+                                            generated_date, model_label,
+                                            correlation_data=correlation_data)
+    except Exception as e:
+        log.exception("포트폴리오 HTML 렌더링 실패 — raw scores 반환")
+        report_html = (
+            f'<div class="alert alert-warning">'
+            f'<strong>HTML 렌더링 중 오류 발생:</strong> {str(e)}<br>'
+            f'분석 자체는 완료되었습니다. 아래 원본 JSON 데이터를 확인하세요.</div>'
+            f'<pre style="max-height:400px;overflow:auto;">{json.dumps(scores, ensure_ascii=False, indent=2)}</pre>'
+        )
 
     return {
         "scores": scores,
         "report_html": report_html,
-        "model": config.ANALYSIS_MODEL,
+        "model": config.PORTFOLIO_MODEL,
         "generated_date": generated_date,
         "mode": "claude",
     }
 
 
 def render_portfolio_html(scores: dict, portfolio_items: list[dict],
-                          generated_date: str, model_label: str) -> str:
+                          generated_date: str, model_label: str,
+                          correlation_data: dict | None = None) -> str:
     """포트폴리오 분석 결과를 HTML 보고서로 렌더링."""
 
     health = scores.get("portfolio_health", {})
@@ -1008,7 +1303,7 @@ def render_portfolio_html(scores: dict, portfolio_items: list[dict],
     summary = scores.get("summary", "")
 
     grade = health.get("grade", "N/A")
-    score = health.get("score", 0)
+    score = int(float(health.get("score", 0) or 0))
     grade_color = _grade_color(grade)
 
     # 액션 뱃지 컬러/라벨 매핑
@@ -1031,11 +1326,19 @@ def render_portfolio_html(scores: dict, portfolio_items: list[dict],
         action = sa.get("action", "HOLD")
         color = action_colors.get(action, "#6c757d")
         label = action_labels.get(action, action)
-        cur_w = sa.get("current_weight", 0) or 0
-        rec_w = sa.get("recommended_weight", 0) or 0
+        cur_w = float(sa.get("current_weight", 0) or 0)
+        rec_w = float(sa.get("recommended_weight", 0) or 0)
         weight_diff = rec_w - cur_w
         diff_str = f"+{weight_diff:.1f}%" if weight_diff > 0 else f"{weight_diff:.1f}%"
         diff_cls = "val-pos" if weight_diff > 0 else ("val-neg" if weight_diff < 0 else "")
+        # 구체적 매매 수량/가격 (새 필드, 하위 호환)
+        target_shares = int(float(sa.get("target_shares", 0) or 0))
+        price_low = float(sa.get("target_price_low", 0) or 0)
+        price_high = float(sa.get("target_price_high", 0) or 0)
+        est_amount = float(sa.get("estimated_amount", 0) or 0)
+        target_shares_str = f"{target_shares:,}주" if target_shares else "-"
+        price_range_str = f"{price_low:,.0f}~{price_high:,.0f}원" if price_low and price_high else ("-" if not price_low else f"{price_low:,.0f}원~")
+        est_amount_str = f"{est_amount:,.0f}원" if est_amount else "-"
         action_rows += f"""
         <tr>
           <td><strong>{sa.get("name", "")}</strong>
@@ -1044,6 +1347,9 @@ def render_portfolio_html(scores: dict, portfolio_items: list[dict],
           <td>{cur_w:.1f}%</td>
           <td>{rec_w:.1f}%</td>
           <td class="{diff_cls}">{diff_str}</td>
+          <td class="text-end">{target_shares_str}</td>
+          <td class="text-end small">{price_range_str}</td>
+          <td class="text-end">{est_amount_str}</td>
           <td class="small">{sa.get("rationale", "")}</td>
         </tr>"""
 
@@ -1053,7 +1359,7 @@ def render_portfolio_html(scores: dict, portfolio_items: list[dict],
     for r in risks:
         sev = r.get("severity", "medium")
         sev_color = severity_colors.get(sev, "#6c757d")
-        affected = ", ".join(r.get("affected_stocks", []))
+        affected = ", ".join(str(s) for s in r.get("affected_stocks", []))
         risk_html += f"""
         <div class="pf-risk-item">
           <span class="pf-severity-badge" style="background:{sev_color};">
@@ -1067,7 +1373,7 @@ def render_portfolio_html(scores: dict, portfolio_items: list[dict],
     for c in catalysts:
         imp = c.get("impact", "medium")
         imp_color = severity_colors.get(imp, "#6c757d")
-        benefiting = ", ".join(c.get("benefiting_stocks", []))
+        benefiting = ", ".join(str(s) for s in c.get("benefiting_stocks", []))
         catalyst_html += f"""
         <div class="pf-catalyst-item">
           <span class="pf-severity-badge" style="background:{imp_color};">
@@ -1084,6 +1390,177 @@ def render_portfolio_html(scores: dict, portfolio_items: list[dict],
           <strong>{t.get("theme", "")}</strong>
           <div class="small text-muted">{t.get("reason", "")}</div>
         </div>"""
+
+    # 관심종목 편입 권고 테이블
+    wl_recommendations = scores.get("watchlist_recommendations", [])
+    wl_action_colors = {
+        "ADD": "#1e8449", "WATCH": "#1a5276", "SKIP": "#6c757d",
+    }
+    wl_action_labels = {
+        "ADD": "편입 권고", "WATCH": "관찰 지속", "SKIP": "제외",
+    }
+    watchlist_rows = ""
+    for wr in wl_recommendations:
+        wl_act = wr.get("action", "WATCH")
+        wl_color = wl_action_colors.get(wl_act, "#6c757d")
+        wl_label = wl_action_labels.get(wl_act, wl_act)
+        wl_rec_w = float(wr.get("recommended_weight", 0) or 0)
+        wl_shares = int(float(wr.get("target_shares", 0) or 0))
+        wl_pl = float(wr.get("target_price_low", 0) or 0)
+        wl_ph = float(wr.get("target_price_high", 0) or 0)
+        wl_amt = float(wr.get("estimated_amount", 0) or 0)
+        wl_shares_str = f"{wl_shares:,}주" if wl_shares else "-"
+        wl_price_str = f"{wl_pl:,.0f}~{wl_ph:,.0f}원" if wl_pl and wl_ph else "-"
+        wl_amt_str = f"{wl_amt:,.0f}원" if wl_amt else "-"
+        watchlist_rows += f"""
+        <tr>
+          <td><strong>{wr.get("name", "")}</strong>
+            <span class="text-muted small">{wr.get("code", "")}</span></td>
+          <td><span class="pf-action-badge" style="background:{wl_color};">{wl_label}</span></td>
+          <td>{wl_rec_w:.1f}%</td>
+          <td class="text-end">{wl_shares_str}</td>
+          <td class="text-end small">{wl_price_str}</td>
+          <td class="text-end">{wl_amt_str}</td>
+          <td class="small">{wr.get("rationale", "")}</td>
+          <td class="small text-muted">{wr.get("synergy", "")}</td>
+        </tr>"""
+    watchlist_card = ""
+    if wl_recommendations:
+        watchlist_card = f"""
+  <div class="stage-card">
+    <div class="stage-card-title">관심종목 편입 권고</div>
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0">
+        <thead><tr>
+          <th>종목</th><th>판정</th><th>권장비중</th><th>매수수량</th><th>목표가</th><th>예상금액</th><th>근거</th><th>시너지</th>
+        </tr></thead>
+        <tbody>{watchlist_rows}</tbody>
+      </table>
+    </div>
+  </div>"""
+
+    # 리밸런싱 실행 계획
+    rebal = scores.get("rebalancing_plan", {})
+    urgency_map = {
+        "immediate": ("즉시 실행", "#c0392b"),
+        "monthly": ("이번 달 내", "#b9770e"),
+        "quarterly": ("이번 분기 내", "#2c3e50"),
+        "none": ("불필요", "#6c757d"),
+    }
+    urgency_val = rebal.get("urgency", "none")
+    urgency_label, urgency_color = urgency_map.get(urgency_val, ("알 수 없음", "#6c757d"))
+    priority_items = "".join(
+        f'<li>{a}</li>' for a in rebal.get("priority_actions", [])
+    )
+    rebal_card = f"""
+  <div class="stage-card">
+    <div class="stage-card-title">리밸런싱 실행 계획</div>
+    <div class="stage-field">
+      <strong>긴급도:</strong>
+      <span class="pf-severity-badge ms-1" style="background:{urgency_color};">{urgency_label}</span>
+    </div>
+    {f'<div class="stage-field"><strong>우선 실행 항목:</strong><ul class="mb-1 mt-1">{priority_items}</ul></div>' if priority_items else ''}
+    <div class="stage-analysis">{rebal.get("execution_note", "")}</div>
+  </div>""" if rebal else ""
+
+    # 배당 분석
+    div_analysis = scores.get("dividend_analysis", {})
+    div_yield = float(div_analysis.get("portfolio_yield", 0) or 0)
+    div_annual = float(div_analysis.get("annual_dividend_estimate", 0) or 0)
+    dividend_card = f"""
+  <div class="stage-card">
+    <div class="stage-card-title">배당 분석</div>
+    <div class="stage-field"><strong>포트폴리오 배당수익률:</strong> {div_yield:.2f}%</div>
+    <div class="stage-field"><strong>연간 예상 배당금:</strong> {div_annual:,.0f}원</div>
+    <div class="stage-field"><strong>배당 추세:</strong> {div_analysis.get("dividend_growth_trend", "N/A")}</div>
+    <div class="stage-analysis">{div_analysis.get("suggestion", "")}</div>
+  </div>""" if div_analysis else ""
+
+    # 상관관계 히트맵 테이블
+    correlation_card = ""
+    if correlation_data and correlation_data.get("matrix"):
+        corr_names = correlation_data.get("names", [])
+        corr_matrix = correlation_data.get("matrix", [])
+
+        def _corr_cell_style(val, i, j):
+            if i == j:
+                return "background:#d0d0d0; color:#333;"
+            if val is None:
+                return "background:#f8f9fa;"
+            try:
+                v = float(val)
+            except (TypeError, ValueError):
+                return "background:#f8f9fa;"
+            if v >= 0.7:
+                r, g, b = 220, 50, 50
+            elif v >= 0.3:
+                r, g, b = 240, 180, 60
+            elif v <= -0.3:
+                r, g, b = 60, 120, 220
+            else:
+                r, g, b = 248, 249, 250
+            return f"background:rgb({r},{g},{b}); color:{'#fff' if v >= 0.7 or v <= -0.3 else '#222'};"
+
+        header_cells = "".join(
+            f'<th class="text-center small">{n}</th>' for n in corr_names
+        )
+        corr_rows_html = ""
+        for i, name in enumerate(corr_names):
+            if i >= len(corr_matrix):
+                break
+            cells = ""
+            for j, val in enumerate(corr_matrix[i]):
+                style = _corr_cell_style(val, i, j)
+                try:
+                    display = "1.00" if i == j else (f"{float(val):.2f}" if val is not None else "N/A")
+                except (TypeError, ValueError):
+                    display = "N/A"
+                cells += f'<td class="text-center small" style="{style}">{display}</td>'
+            corr_rows_html += f'<tr><th class="small">{name}</th>{cells}</tr>'
+
+        correlation_card = f"""
+  <div class="stage-card">
+    <div class="stage-card-title">종목 간 가격 상관관계 (최근 250 거래일)</div>
+    <div class="table-responsive">
+      <table class="table table-sm table-bordered mb-0" style="width:auto;">
+        <thead><tr><th></th>{header_cells}</tr></thead>
+        <tbody>{corr_rows_html}</tbody>
+      </table>
+    </div>
+    <div class="text-muted small mt-2">
+      <span style="background:rgb(220,50,50);color:#fff;padding:2px 6px;border-radius:3px;">0.7+</span> 고상관 &nbsp;
+      <span style="background:rgb(240,180,60);padding:2px 6px;border-radius:3px;">0.3~0.7</span> 중간 &nbsp;
+      <span style="background:#f8f9fa;border:1px solid #dee2e6;padding:2px 6px;border-radius:3px;">-0.3~0.3</span> 낮음 &nbsp;
+      <span style="background:rgb(60,120,220);color:#fff;padding:2px 6px;border-radius:3px;">-0.3↓</span> 역상관
+    </div>
+  </div>"""
+
+    # 적정 종목수 카드
+    opt = scores.get("portfolio_optimization", {})
+    optimization_card = ""
+    if opt:
+        cur_cnt = opt.get("current_count", len(portfolio_items))
+        rec_min = opt.get("recommended_count_min", 0)
+        rec_max = opt.get("recommended_count_max", 0)
+        strategy_labels = {
+            "balanced": ("균형형", "#2c3e50"),
+            "concentrated": ("집중형", "#c0392b"),
+            "diversified": ("분산형", "#1a5276"),
+        }
+        s_type = opt.get("strategy_type", "balanced")
+        s_label, s_color = strategy_labels.get(s_type, ("균형형", "#2c3e50"))
+        rec_range = f"{rec_min}~{rec_max}종목" if rec_min and rec_max else "N/A"
+        optimization_card = f"""
+  <div class="stage-card">
+    <div class="stage-card-title">적정 종목수 &amp; 구성 최적화</div>
+    <div class="stage-field">
+      <strong>현재 종목수:</strong> {cur_cnt}종목 &nbsp;
+      <strong>권장 범위:</strong> {rec_range} &nbsp;
+      <span class="pf-action-badge ms-1" style="background:{s_color};">{s_label}</span>
+    </div>
+    <div class="stage-field">{opt.get("assessment", "")}</div>
+    <div class="stage-analysis">{opt.get("adjustment_suggestion", "")}</div>
+  </div>"""
 
     # 과비중/과소비중 섹터 뱃지
     overweight = sector_analysis.get("overweight_sectors", [])
@@ -1116,6 +1593,17 @@ def render_portfolio_html(scores: dict, portfolio_items: list[dict],
     <p>{summary}</p>
   </div>
 
+  <div class="pf-charts-row" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px;">
+    <div class="stage-card" style="flex:1;min-width:280px;">
+      <div class="stage-card-title">종목별 수익률</div>
+      <canvas id="pf-return-chart" style="max-height:220px;"></canvas>
+    </div>
+    <div class="stage-card" style="flex:1;min-width:260px;">
+      <div class="stage-card-title">섹터 비중</div>
+      <canvas id="pf-sector-chart" style="max-height:220px;"></canvas>
+    </div>
+  </div>
+
   <div class="stage-card">
     <div class="stage-card-title">포트폴리오 건강도 상세</div>
     <div class="stage-field"><strong>분산도:</strong> {health.get("diversification", "N/A")}</div>
@@ -1124,17 +1612,24 @@ def render_portfolio_html(scores: dict, portfolio_items: list[dict],
     <div class="stage-analysis">{health.get("overall_assessment", "")}</div>
   </div>
 
+  {optimization_card}
+
+  {rebal_card}
+
   <div class="stage-card">
     <div class="stage-card-title">종목별 액션 권고</div>
     <div class="table-responsive">
       <table class="table table-sm table-hover mb-0">
         <thead><tr>
-          <th>종목</th><th>액션</th><th>현재비중</th><th>권장비중</th><th>변경</th><th>근거</th>
+          <th>종목</th><th>액션</th><th>현재비중</th><th>권장비중</th><th>변경</th>
+          <th>매매수량</th><th>목표가</th><th>예상금액</th><th>근거</th>
         </tr></thead>
         <tbody>{action_rows}</tbody>
       </table>
     </div>
   </div>
+
+  {watchlist_card}
 
   <div class="stage-card">
     <div class="stage-card-title">섹터 집중도 분석</div>
@@ -1144,6 +1639,8 @@ def render_portfolio_html(scores: dict, portfolio_items: list[dict],
     <div class="stage-field"><strong>과소비중 섹터:</strong> {uw_badges}</div>
     <div class="stage-analysis">{sector_analysis.get("rebalancing_suggestion", "")}</div>
   </div>
+
+  {correlation_card}
 
   <div class="risk-catalyst-grid">
     <div class="risk-section">
@@ -1160,6 +1657,8 @@ def render_portfolio_html(scores: dict, portfolio_items: list[dict],
     <div class="stage-card-title">보완이 필요한 테마/섹터</div>
     {theme_html if theme_html else '<p class="text-muted small">현재 포트폴리오 구성이 적절합니다.</p>'}
   </div>
+
+  {dividend_card}
 
   <div class="report-footer">
     <span>Generated by {model_label} &mdash; Portfolio Advisor</span>

@@ -429,101 +429,265 @@
 
   // ─── 탭별 기본 컬럼 정의 ─────────────────────────────────────────────
   const COLUMNS = {
-    // 1. 전체 종목 - 균형잡힌 기본 정보 (15개)
+    // 1. 전체 종목 - 균형잡힌 종합 정보 (26개)
     all: [
+      // 기본
       { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" }, { key: "시장구분", label: "시장" },
       { key: "종가", label: "현재가", fmt: "int" }, { key: "시가총액", label: "시총", fmt: "eok" },
+      // 가치평가
       { key: "PER", label: "PER", fmt: "f2" }, { key: "PBR", label: "PBR", fmt: "f2" },
-      { key: "PEG", label: "PEG", fmt: "f2" }, { key: "ROE(%)", label: "ROE", fmt: "f2" },
-      { key: "영업이익_CAGR", label: "OP성장", fmt: "f1" }, { key: "부채비율(%)", label: "부채%", fmt: "f1" },
-      { key: "수급강도", label: "수급", fmt: "f1" }, { key: "거래대금_20일평균", label: "거래(평)", fmt: "eok" },
+      { key: "PEG", label: "PEG", fmt: "f2" }, { key: "PSR", label: "PSR", fmt: "f2" },
+      { key: "적정주가_SRIM", label: "적정가", fmt: "int" }, { key: "괴리율(%)", label: "괴리율%", fmt: "f1" },
+      // 수익성
+      { key: "ROE(%)", label: "ROE%", fmt: "f2" }, { key: "ROIC(%)", label: "ROIC%", fmt: "f1" },
+      { key: "영업이익률(%)", label: "OPM%", fmt: "f1" }, { key: "FCF수익률(%)", label: "FCF%", fmt: "f2" },
+      // 성장성
+      { key: "영업이익_CAGR", label: "OP CAGR", fmt: "f1" }, { key: "Q_영업이익_YoY(%)", label: "Q OP YoY", fmt: "f1" },
+      // 안정성
+      { key: "부채비율(%)", label: "부채%", fmt: "f1" }, { key: "F스코어", label: "F-Score", fmt: "int" },
+      // 수급/기술
+      { key: "수급강도", label: "수급", fmt: "f1" }, { key: "RS_등급", label: "RS등급", fmt: "f1" },
+      { key: "52주_최고대비(%)", label: "고가대비%", fmt: "f1" },
+      { key: "거래대금_20일평균", label: "거래(평)", fmt: "eok" },
+      // 배당
+      { key: "배당수익률(%)", label: "배당%", fmt: "f2" },
+      // 종합
       { key: "종합점수", label: "점수", fmt: "f1" }
     ],
-    // 2. 시장 주도주 - 수급+모멘텀+실적 (13개)
+    // 2. 시장 주도주 - 수급+모멘텀+실적 (18개)
     leaders: [
-      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" }, { key: "시가총액", label: "시총", fmt: "eok" },
-      { key: "종가", label: "현재가", fmt: "int" }, { key: "시장구분", label: "시장" },
-      { key: "수급강도", label: "수급", fmt: "f1" }, { key: "RS_등급", label: "RS등급", fmt: "f1" },
-      { key: "스마트머니_승률", label: "SM승률", fmt: "f1" }, { key: "거래대금_증감(%)", label: "거래증감", fmt: "f1" },
-      { key: "Q_영업이익_YoY(%)", label: "Q OP YoY", fmt: "f1" }, { key: "52주_최고대비(%)", label: "고가대비", fmt: "f1" },
+      // 기본
+      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" },
+      { key: "종가", label: "현재가", fmt: "int" }, { key: "시가총액", label: "시총", fmt: "eok" }, { key: "시장구분", label: "시장" },
+      // 수급/모멘텀
+      { key: "수급강도", label: "수급", fmt: "f1" }, { key: "외인순매수_20d", label: "외인순매수", fmt: "eok" },
+      { key: "기관순매수_20d", label: "기관순매수", fmt: "eok" }, { key: "스마트머니_승률", label: "SM승률", fmt: "f1" },
+      { key: "양매수_비율", label: "양매수%", fmt: "f1" },
+      // RS/기술
+      { key: "RS_등급", label: "RS등급", fmt: "f1" }, { key: "Composite_RS", label: "RS복합", fmt: "f1" },
+      { key: "52주_최고대비(%)", label: "고가대비%", fmt: "f1" }, { key: "VCP_신호", label: "VCP", fmt: "flag" },
+      // 실적
+      { key: "거래대금_증감(%)", label: "거래증감%", fmt: "f1" },
+      { key: "Q_영업이익_YoY(%)", label: "Q OP YoY", fmt: "f1" }, { key: "실적가속_연속", label: "실적가속" },
+      // 점수
       { key: "주도주_점수", label: "주도점수", fmt: "f1" }
     ],
-    // 3. 우량가치 - ROE, F-Score, PEG, ROIC (13개)
+    // 3. 우량가치 - ROE, F-Score, PEG, ROIC (20개)
     quality_value: [
-      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" }, { key: "종가", label: "현재가", fmt: "int" },
-      { key: "시가총액", label: "시총", fmt: "eok" }, { key: "PER", label: "PER", fmt: "f2" },
-      { key: "PEG", label: "PEG", fmt: "f2" }, { key: "PBR", label: "PBR", fmt: "f2" },
-      { key: "ROE(%)", label: "ROE", fmt: "f2" }, { key: "ROIC(%)", label: "ROIC", fmt: "f1" },
-      { key: "F스코어", label: "F-Score", fmt: "int" }, { key: "부채비율(%)", label: "부채%", fmt: "f1" },
-      { key: "영업이익률(%)", label: "OPM%", fmt: "f1" }, { key: "우량가치_점수", label: "우량점수", fmt: "f1" }
-    ],
-    // 4. 고성장 모멘텀 - CAGR, YoY, 추세, 가속도 (14개)
-    growth_mom: [
-      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" }, { key: "종가", label: "현재가", fmt: "int" },
-      { key: "매출_CAGR", label: "매출CAGR", fmt: "f1" }, { key: "영업이익_CAGR", label: "OP CAGR", fmt: "f1" },
-      { key: "순이익_CAGR", label: "NP CAGR", fmt: "f1" }, { key: "Q_영업이익_YoY(%)", label: "Q OP YoY", fmt: "f1" },
-      { key: "실적가속_연속", label: "실적가속", fmt: "flag" }, { key: "영업이익_가속도", label: "OP가속도", fmt: "f1" },
-      { key: "MA20_이격도(%)", label: "MA20이격", fmt: "f1" }, { key: "MA60_이격도(%)", label: "MA60이격", fmt: "f1" },
-      { key: "52주_최고대비(%)", label: "고가대비", fmt: "f1" }, { key: "FCF_CAGR", label: "FCF CAGR", fmt: "f1" },
-      { key: "고성장_점수", label: "성장점수", fmt: "f1" }
-    ],
-    // 5. 현금배당 - FCF, 배당, 현금흐름 (16개)
-    cash_div: [
-      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" }, { key: "종가", label: "현재가", fmt: "int" },
-      { key: "FCF수익률(%)", label: "FCF%", fmt: "f2" }, { key: "배당수익률(%)", label: "배당%", fmt: "f2" },
-      { key: "배당성향(%)", label: "배당성향%", fmt: "f1" }, { key: "배당_경고신호", label: "경고", fmt: "flag" },
-      { key: "ROIC(%)", label: "ROIC%", fmt: "f1" }, { key: "DPS_CAGR", label: "DPS CAGR", fmt: "f1" },
-      { key: "배당_연속증가", label: "배당연속", fmt: "int" }, { key: "현금전환율(%)", label: "현금전환%", fmt: "f1" },
-      { key: "부채비율(%)", label: "부채%", fmt: "f1" }, { key: "이익품질_양호", label: "이익품질", fmt: "flag" },
-      { key: "배당_수익동반증가", label: "동반성장", fmt: "flag" }, { key: "현금배당_점수", label: "배당점수", fmt: "f1" }
-    ],
-    // 6. 턴어라운드 - 전환신호, 이익률, 수급 (13개)
-    turnaround: [
-      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" }, { key: "종가", label: "현재가", fmt: "int" },
-      { key: "흑자전환", label: "흑자전환", fmt: "flag" }, { key: "이익률_급개선", label: "OPM급등", fmt: "flag" },
-      { key: "이익률_변동폭", label: "OPM변동", fmt: "f1" }, { key: "GPM_변화(pp)", label: "GPM변화", fmt: "f1" },
-      { key: "스마트머니_승률", label: "SM승률", fmt: "f1" }, { key: "VCP_신호", label: "VCP", fmt: "flag" },
-      { key: "ROIC_개선", label: "ROIC↑", fmt: "flag" }, { key: "TTM_순이익", label: "TTM NI", fmt: "int" },
-      { key: "실적가속_연속", label: "실적가속", fmt: "flag" }, { key: "RSI_14", label: "RSI", fmt: "f1" },
-      { key: "턴어라운드_점수", label: "턴점수", fmt: "f1" }
-    ],
-    // 7. Multi-Strategy (3관왕) - 5개 전략 점수 (11개)
-    multi_strategy: [
-      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" }, { key: "종가", label: "현재가", fmt: "int" },
-      { key: "전략수", label: "전략수", fmt: "int" }, { key: "종합점수", label: "종합점수", fmt: "f1" },
-      { key: "성장성_점수", label: "성장점수", fmt: "f1" }, { key: "안정성_점수", label: "안정점수", fmt: "f1" },
-      { key: "가격_점수", label: "가격점수", fmt: "f1" }, { key: "주도주_점수", label: "주도점수", fmt: "f1" },
-      { key: "우량가치_점수", label: "우량점수", fmt: "f1" }
-    ],
-    // 8. Forward 추정치 - 커버리지 종목 내 모멘텀 (13개)
-    forward_covered: [
+      // 기본
       { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" },
       { key: "종가", label: "현재가", fmt: "int" }, { key: "시가총액", label: "시총", fmt: "eok" },
+      // 밸류에이션
+      { key: "PER", label: "PER", fmt: "f2" }, { key: "PBR", label: "PBR", fmt: "f2" },
+      { key: "PEG", label: "PEG", fmt: "f2" }, { key: "PSR", label: "PSR", fmt: "f2" },
+      { key: "적정주가_SRIM", label: "적정가", fmt: "int" }, { key: "괴리율(%)", label: "괴리율%", fmt: "f1" },
+      // 수익성/효율
+      { key: "ROE(%)", label: "ROE%", fmt: "f2" }, { key: "ROIC(%)", label: "ROIC%", fmt: "f1" },
+      { key: "영업이익률(%)", label: "OPM%", fmt: "f1" }, { key: "FCF수익률(%)", label: "FCF%", fmt: "f2" },
+      // 안정성
+      { key: "F스코어", label: "F-Score", fmt: "int" }, { key: "부채비율(%)", label: "부채%", fmt: "f1" },
+      { key: "이익품질_양호", label: "이익품질", fmt: "flag" },
+      // 성장
+      { key: "영업이익_CAGR", label: "OP CAGR", fmt: "f1" },
+      // 점수
+      { key: "우량가치_점수", label: "우량점수", fmt: "f1" }
+    ],
+    // 4. 고성장 모멘텀 - CAGR, YoY, 추세, 가속도 (21개)
+    growth_mom: [
+      // 기본
+      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" },
+      { key: "종가", label: "현재가", fmt: "int" }, { key: "시가총액", label: "시총", fmt: "eok" },
+      // 성장 CAGR
+      { key: "매출_CAGR", label: "매출CAGR", fmt: "f1" }, { key: "영업이익_CAGR", label: "OP CAGR", fmt: "f1" },
+      { key: "순이익_CAGR", label: "NP CAGR", fmt: "f1" }, { key: "FCF_CAGR", label: "FCF CAGR", fmt: "f1" },
+      // 분기 YoY
+      { key: "Q_매출_YoY(%)", label: "Q 매출YoY", fmt: "f1" }, { key: "Q_영업이익_YoY(%)", label: "Q OP YoY", fmt: "f1" },
+      { key: "Q_순이익_YoY(%)", label: "Q NP YoY", fmt: "f1" },
+      // 가속도
+      { key: "실적가속_연속", label: "실적가속" }, { key: "영업이익_가속도", label: "OP가속도", fmt: "f1" },
+      { key: "매출_가속도", label: "매출가속도", fmt: "f1" },
+      // 기술
+      { key: "MA20_이격도(%)", label: "MA20이격", fmt: "f1" }, { key: "MA60_이격도(%)", label: "MA60이격", fmt: "f1" },
+      { key: "52주_최고대비(%)", label: "고가대비%", fmt: "f1" }, { key: "RS_등급", label: "RS등급", fmt: "f1" },
+      // 수익성
+      { key: "영업이익률(%)", label: "OPM%", fmt: "f1" },
+      // 점수
+      { key: "고성장_점수", label: "성장점수", fmt: "f1" }
+    ],
+    // 5. 현금배당 - FCF, 배당, 현금흐름 (21개)
+    cash_div: [
+      // 기본
+      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" },
+      { key: "종가", label: "현재가", fmt: "int" }, { key: "시가총액", label: "시총", fmt: "eok" },
+      // 배당
+      { key: "배당수익률(%)", label: "배당%", fmt: "f2" }, { key: "배당성향(%)", label: "배당성향%", fmt: "f1" },
+      { key: "DPS_CAGR", label: "DPS CAGR", fmt: "f1" }, { key: "배당_연속증가", label: "배당연속", fmt: "int" },
+      { key: "배당_수익동반증가", label: "동반성장", fmt: "flag" }, { key: "배당_경고신호", label: "배당경고", fmt: "flag" },
+      // 현금흐름
+      { key: "FCF수익률(%)", label: "FCF%", fmt: "f2" }, { key: "현금전환율(%)", label: "현금전환%", fmt: "f1" },
+      { key: "이익품질_양호", label: "이익품질", fmt: "flag" },
+      // 수익성
+      { key: "ROIC(%)", label: "ROIC%", fmt: "f1" }, { key: "ROE(%)", label: "ROE%", fmt: "f2" },
+      { key: "영업이익률(%)", label: "OPM%", fmt: "f1" },
+      // 밸류
+      { key: "PER", label: "PER", fmt: "f2" }, { key: "PBR", label: "PBR", fmt: "f2" },
+      // 안정성
+      { key: "부채비율(%)", label: "부채%", fmt: "f1" },
+      // 점수
+      { key: "현금배당_점수", label: "배당점수", fmt: "f1" }
+    ],
+    // 6. 턴어라운드 - 전환신호, 이익률, 수급 (21개)
+    turnaround: [
+      // 기본
+      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" },
+      { key: "종가", label: "현재가", fmt: "int" }, { key: "시가총액", label: "시총", fmt: "eok" },
+      // 전환 신호
+      { key: "흑자전환", label: "흑자전환", fmt: "flag" }, { key: "이익률_급개선", label: "OPM급등", fmt: "flag" },
+      { key: "ROIC_개선", label: "ROIC↑", fmt: "flag" }, { key: "퀄리티_턴어라운드", label: "퀄리티TA", fmt: "flag" },
+      { key: "실적가속_연속", label: "실적가속" },
+      // 이익률 변화
+      { key: "이익률_변동폭", label: "OPM변동", fmt: "f1" }, { key: "GPM_변화(pp)", label: "GPM변화", fmt: "f1" },
+      { key: "GPM_최근(%)", label: "GPM%", fmt: "f1" },
+      // TTM 실적
+      { key: "TTM_순이익", label: "TTM NI", fmt: "int" }, { key: "ROIC(%)", label: "ROIC%", fmt: "f1" },
+      // 수급/기술
+      { key: "스마트머니_승률", label: "SM승률", fmt: "f1" }, { key: "VCP_신호", label: "VCP", fmt: "flag" },
+      { key: "RSI_14", label: "RSI", fmt: "f1" }, { key: "52주_최저대비(%)", label: "저가대비%", fmt: "f1" },
+      // 밸류 (턴 후 저평가 확인)
+      { key: "PBR", label: "PBR", fmt: "f2" },
+      // 점수
+      { key: "턴어라운드_점수", label: "턴점수", fmt: "f1" }
+    ],
+    // 7. Multi-Strategy (3관왕) - 5개 전략 점수 (18개)
+    multi_strategy: [
+      // 기본
+      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" },
+      { key: "종가", label: "현재가", fmt: "int" }, { key: "시가총액", label: "시총", fmt: "eok" },
+      // 전략 요약
+      { key: "전략수", label: "전략수", fmt: "int" },
+      // 전략별 점수
+      { key: "종합점수", label: "종합점수", fmt: "f1" },
+      { key: "성장성_점수", label: "성장점수", fmt: "f1" }, { key: "안정성_점수", label: "안정점수", fmt: "f1" },
+      { key: "가격_점수", label: "가격점수", fmt: "f1" }, { key: "주도주_점수", label: "주도점수", fmt: "f1" },
+      { key: "우량가치_점수", label: "우량점수", fmt: "f1" }, { key: "고성장_점수", label: "성장전략점수", fmt: "f1" },
+      { key: "현금배당_점수", label: "배당점수", fmt: "f1" },
+      // 핵심 팩터
+      { key: "ROE(%)", label: "ROE%", fmt: "f2" }, { key: "영업이익_CAGR", label: "OP CAGR", fmt: "f1" },
+      { key: "부채비율(%)", label: "부채%", fmt: "f1" }, { key: "RS_등급", label: "RS등급", fmt: "f1" },
+      { key: "F스코어", label: "F-Score", fmt: "int" }
+    ],
+    // 8. Forward 추정치 - 커버리지 종목 내 모멘텀 (18개)
+    forward_covered: [
+      // 기본
+      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" },
+      { key: "종가", label: "현재가", fmt: "int" }, { key: "시가총액", label: "시총", fmt: "eok" },
+      // 현재 밸류 (비교 기준)
+      { key: "PER", label: "PER(현)", fmt: "f2" }, { key: "PBR", label: "PBR(현)", fmt: "f2" },
+      // Forward 밸류
       { key: "Fwd_PER", label: "Fwd PER", fmt: "f2" }, { key: "Fwd_PBR", label: "Fwd PBR", fmt: "f2" },
       { key: "Fwd_ROE(%)", label: "Fwd ROE%", fmt: "f1" }, { key: "Fwd_OPM(%)", label: "Fwd OPM%", fmt: "f1" },
-      { key: "Fwd_영업이익_성장률(%)", label: "Fwd OP성장%", fmt: "f1" },
+      // Forward 성장률
       { key: "Fwd_매출_성장률(%)", label: "Fwd 매출성장%", fmt: "f1" },
+      { key: "Fwd_영업이익_성장률(%)", label: "Fwd OP성장%", fmt: "f1" },
+      { key: "Fwd_순이익_성장률(%)", label: "Fwd NP성장%", fmt: "f1" },
       { key: "Fwd_2yr_영업이익_성장(%)", label: "2yr OP성장%", fmt: "f1" },
+      // 실적 현황
+      { key: "Q_영업이익_YoY(%)", label: "Q OP YoY", fmt: "f1" }, { key: "ROE(%)", label: "ROE%(현)", fmt: "f2" },
+      // 점수
       { key: "Fwd_모멘텀_점수", label: "Fwd점수", fmt: "f1" }
     ],
-    // 9. 관심종목 - 종합 모니터링 (11개)
+    // 9. 관심종목 - 종합 모니터링 (30개)
     watchlist: [
-      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" }, { key: "종가", label: "현재가", fmt: "int" },
-      { key: "시가총액", label: "시총", fmt: "eok" }, { key: "PER", label: "PER", fmt: "f2" },
-      { key: "PBR", label: "PBR", fmt: "f2" }, { key: "ROE(%)", label: "ROE", fmt: "f2" },
-      { key: "부채비율(%)", label: "부채%", fmt: "f1" }, { key: "배당수익률(%)", label: "배당%", fmt: "f2" },
+      // 기본
+      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" },
+      { key: "종가", label: "현재가", fmt: "int" }, { key: "시가총액", label: "시총", fmt: "eok" },
+      // 가치평가
+      { key: "PER", label: "PER", fmt: "f2" }, { key: "PBR", label: "PBR", fmt: "f2" },
+      { key: "PEG", label: "PEG", fmt: "f2" }, { key: "PSR", label: "PSR", fmt: "f2" },
+      { key: "적정주가_SRIM", label: "적정가", fmt: "int" }, { key: "괴리율(%)", label: "괴리율%", fmt: "f1" },
+      // 수익성
+      { key: "ROE(%)", label: "ROE%", fmt: "f2" }, { key: "ROIC(%)", label: "ROIC%", fmt: "f1" },
+      { key: "영업이익률(%)", label: "OPM%", fmt: "f1" }, { key: "FCF수익률(%)", label: "FCF%", fmt: "f2" },
+      // 성장성
+      { key: "매출_CAGR", label: "매출CAGR", fmt: "f1" }, { key: "영업이익_CAGR", label: "OP CAGR", fmt: "f1" },
+      { key: "Q_영업이익_YoY(%)", label: "Q OP YoY", fmt: "f1" }, { key: "실적가속_연속", label: "실적가속" },
+      // 안정성
+      { key: "부채비율(%)", label: "부채%", fmt: "f1" }, { key: "F스코어", label: "F-Score", fmt: "int" },
+      { key: "이익품질_양호", label: "이익품질", fmt: "flag" },
+      // 배당
+      { key: "배당수익률(%)", label: "배당%", fmt: "f2" }, { key: "배당_연속증가", label: "배당연속", fmt: "int" },
+      // 기술적/수급
+      { key: "RS_등급", label: "RS등급", fmt: "f1" }, { key: "수급강도", label: "수급", fmt: "f1" },
+      { key: "52주_최고대비(%)", label: "고가대비%", fmt: "f1" }, { key: "RSI_14", label: "RSI", fmt: "f1" },
+      { key: "거래대금_20일평균", label: "거래(평)", fmt: "eok" },
+      // 종합
       { key: "종합점수", label: "점수", fmt: "f1" }
     ],
     // 10. 포트폴리오 - 보유종목 관리 (12개)
     portfolio: [
-      { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" },
-      { key: "종목구분", label: "구분" },
-      { key: "현재가", label: "현재가", fmt: "int" }, { key: "수량", label: "수량", fmt: "int" },
-      { key: "평균매입가", label: "매입가", fmt: "int" }, { key: "매입금액", label: "매입금액", fmt: "int" },
-      { key: "평가금액", label: "평가금액", fmt: "int" }, { key: "수익금액", label: "수익금", fmt: "int" },
-      { key: "수익률", label: "수익률%", fmt: "f2" }, { key: "비중", label: "비중%", fmt: "f1" },
-      { key: "섹터", label: "섹터" }
+      { key: "종목코드",  label: "코드",    w: "62px"  },
+      { key: "종목명",   label: "종목명",   w: "110px", align: "left" },
+      { key: "섹터",    label: "섹터",    w: "90px",  align: "left" },
+      { key: "종목구분",  label: "구분",    w: "52px"  },
+      { key: "현재가",   label: "현재가",   w: "80px",  fmt: "int" },
+      { key: "수량",    label: "수량",    w: "54px",  fmt: "int" },
+      { key: "평균매입가", label: "매입가",   w: "80px",  fmt: "int" },
+      { key: "매입금액",  label: "매입금액",  w: "88px",  fmt: "int" },
+      { key: "평가금액",  label: "평가금액",  w: "88px",  fmt: "int" },
+      { key: "수익금액",  label: "수익금",   w: "88px",  fmt: "int" },
+      { key: "수익률",   label: "수익률%",  w: "72px",  fmt: "f2" },
+      { key: "비중",    label: "비중%",   w: "58px",  fmt: "f1" },
     ]
+  };
+
+  // ─── 탭별 그룹 구분선 경계 컬럼 ──────────────────────────────────────────
+  const TAB_GROUP_STARTS = {
+    all:            new Set(["PER", "ROE(%)", "영업이익_CAGR", "부채비율(%)", "수급강도", "배당수익률(%)", "종합점수"]),
+    leaders:        new Set(["수급강도", "RS_등급", "거래대금_증감(%)", "주도주_점수"]),
+    quality_value:  new Set(["PER", "ROE(%)", "F스코어", "영업이익_CAGR", "우량가치_점수"]),
+    growth_mom:     new Set(["매출_CAGR", "Q_매출_YoY(%)", "실적가속_연속", "MA20_이격도(%)", "영업이익률(%)", "고성장_점수"]),
+    cash_div:       new Set(["배당수익률(%)", "FCF수익률(%)", "ROIC(%)", "PER", "부채비율(%)", "현금배당_점수"]),
+    turnaround:     new Set(["흑자전환", "이익률_변동폭", "TTM_순이익", "스마트머니_승률", "PBR", "턴어라운드_점수"]),
+    multi_strategy: new Set(["전략수", "종합점수", "ROE(%)", "F스코어"]),
+    forward_covered:new Set(["PER", "Fwd_PER", "Fwd_매출_성장률(%)", "Q_영업이익_YoY(%)", "Fwd_모멘텀_점수"]),
+    watchlist:      new Set(["PER", "ROE(%)", "매출_CAGR", "부채비율(%)", "배당수익률(%)", "RS_등급", "종합점수"]),
+  };
+  const TAB_GROUP_LABELS = {
+    all: {
+      "PER": "— 가치평가 —", "ROE(%)": "— 수익성 —", "영업이익_CAGR": "— 성장 —",
+      "부채비율(%)": "— 안정성 —", "수급강도": "— 수급/기술 —", "배당수익률(%)": "— 배당 —", "종합점수": "— 종합 —"
+    },
+    leaders: {
+      "수급강도": "— 수급 —", "RS_등급": "— RS/기술 —", "거래대금_증감(%)": "— 거래/실적 —", "주도주_점수": "— 점수 —"
+    },
+    quality_value: {
+      "PER": "— 밸류 —", "ROE(%)": "— 수익성 —", "F스코어": "— 안정성 —",
+      "영업이익_CAGR": "— 성장 —", "우량가치_점수": "— 점수 —"
+    },
+    growth_mom: {
+      "매출_CAGR": "— CAGR —", "Q_매출_YoY(%)": "— 분기YoY —", "실적가속_연속": "— 가속도 —",
+      "MA20_이격도(%)": "— 기술 —", "영업이익률(%)": "— 수익성 —", "고성장_점수": "— 점수 —"
+    },
+    cash_div: {
+      "배당수익률(%)": "— 배당 —", "FCF수익률(%)": "— 현금흐름 —", "ROIC(%)": "— 수익성 —",
+      "PER": "— 밸류 —", "부채비율(%)": "— 안정성 —", "현금배당_점수": "— 점수 —"
+    },
+    turnaround: {
+      "흑자전환": "— 전환신호 —", "이익률_변동폭": "— 이익률 —", "TTM_순이익": "— TTM —",
+      "스마트머니_승률": "— 수급/기술 —", "PBR": "— 밸류 —", "턴어라운드_점수": "— 점수 —"
+    },
+    multi_strategy: {
+      "전략수": "— 전략수 —", "종합점수": "— 전략점수 —", "ROE(%)": "— 핵심팩터 —"
+    },
+    forward_covered: {
+      "PER": "— 현재 —", "Fwd_PER": "— Fwd밸류 —", "Fwd_매출_성장률(%)": "— Fwd성장 —",
+      "Q_영업이익_YoY(%)": "— 실적 —", "Fwd_모멘텀_점수": "— 점수 —"
+    },
+    watchlist: {
+      "PER": "— 가치평가 —", "ROE(%)": "— 수익성 —", "매출_CAGR": "— 성장성 —",
+      "부채비율(%)": "— 안정성 —", "배당수익률(%)": "— 배당 —",
+      "RS_등급": "— 기술/수급 —", "종합점수": "— 종합 —"
+    },
   };
 
     // ─── 지표 평가 로직 (Good: Green, Bad: Red) ─────────────────────────────
@@ -1234,9 +1398,9 @@
       screen: apiScreen, page: currentPage, size: pageSize,
       sort: sortCol, order: sortOrder,
     });
-    const sector = document.getElementById("f-sector")?.value || "";
-    if (market)     params.set("market", market);
-    if (sector)     params.set("sector", sector);
+    const sectors = getSelectedSectors();
+    if (market)          params.set("market", market);
+    if (sectors.length)  params.set("sectors", sectors.join(","));
     if (q)          params.set("q", q);
     if (codesParam) params.set("codes", codesParam);
 
@@ -1267,9 +1431,15 @@
 
   // ─── 테이블 렌더링 ────────────────────────────────────────────────────
   function renderTable(items) {
+    // 포트폴리오 탭에서 설정된 fixed layout 원복
+    const tableEl2 = document.getElementById("stock-table");
+    if (tableEl2) { tableEl2.style.tableLayout = ""; tableEl2.style.minWidth = "1000px"; }
+    const cg = tableEl2?.querySelector("colgroup");
+    if (cg) cg.remove();
+
     const cols = COLUMNS[currentScreen] || COLUMNS.all;
     if (!items.length) {
-      tbody.innerHTML = `<tr><td colspan="${cols.length + 3}" class="text-center py-4 text-muted">데이터 없음</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="${cols.length + 4}" class="text-center py-4 text-muted">데이터 없음</td></tr>`;
       return;
     }
     const wl       = getWatchlist();
@@ -1281,17 +1451,17 @@
       const code    = s["종목코드"];
       const watched = wl.has(code);
       const isNew   = newCodes.has(code);
-      const compareCb = currentScreen === "watchlist"
-        ? `<td class="text-center p-1"><button class="btn btn-sm btn-outline-info pf-add-btn" data-code="${code}" data-name="${(s["종목명"]||"").replace(/"/g,"&quot;")}" style="font-size:.6rem;padding:1px 4px;line-height:1.2;">+PF</button></td>`
-        : `<td class="text-center p-1"><input type="checkbox" class="compare-cb" data-code="${code}" ${compareSet.has(code) ? "checked" : ""}></td>`;
+      const pfBtn    = `<td class="text-center p-1"><button class="btn btn-sm btn-outline-info pf-add-btn" data-code="${code}" data-name="${(s["종목명"]||"").replace(/"/g,"&quot;")}" style="font-size:.6rem;padding:1px 4px;line-height:1.2;">+PF</button></td>`;
+      const compareCb = `<td class="text-center p-1"><input type="checkbox" class="compare-cb" data-code="${code}" ${compareSet.has(code) ? "checked" : ""}></td>`;
       const star      = `<td class="text-center p-1"><button class="watch-btn${watched ? " watched" : ""}" data-code="${code}">${watched ? "★" : "☆"}</button></td>`;
+      const groupStartSet = TAB_GROUP_STARTS[currentScreen] || new Set();
       const cells = cols.map(c => {
-        let cls = "";
+        let cls = groupStartSet.has(c.key) ? "wl-group-start" : "";
         if (["거래대금_증감(%)", "수급강도", "MA20_이격도(%)", "MA60_이격도(%)",
              "Q_매출_YoY(%)", "Q_영업이익_YoY(%)", "Q_순이익_YoY(%)",
              "TTM_매출_YoY(%)", "TTM_영업이익_YoY(%)", "TTM_순이익_YoY(%)",
              "매출_CAGR", "영업이익_CAGR", "순이익_CAGR", "괴리율(%)"].includes(c.key)) {
-          cls = valClass(s[c.key]);
+          cls += (cls ? " " : "") + valClass(s[c.key]);
         }
         const newBadge = (isNew && c.key === "종목명")
           ? ' <span class="badge badge-new bg-success">NEW</span>' : "";
@@ -1300,7 +1470,7 @@
           ? ` <span class="badge badge-ai" title="${rep.model} · ${rep.date}">AI</span>` : "";
         return `<td class="${cls}">${fmt(s[c.key], c.fmt)}${newBadge}${aiBadge}</td>`;
       }).join("");
-      return `<tr data-code="${code}" class="${isNew ? "row-new" : ""}">${compareCb}${star}${cells}</tr>`;
+      return `<tr data-code="${code}" class="${isNew ? "row-new" : ""}">${pfBtn}${compareCb}${star}${cells}</tr>`;
     }).join("");
 
     tbody.querySelectorAll(".watch-btn").forEach(btn =>
@@ -1324,14 +1494,68 @@
   // ─── 헤더 구성 ────────────────────────────────────────────────────────
   function buildHeader() {
     const cols = COLUMNS[currentScreen] || COLUMNS.all;
-    const firstColLabel = currentScreen === "watchlist" ? "+PF" : "";
+    // 컬럼 수에 따라 테이블 최소 너비 동적 설정 (횡스크롤)
+    const tbl = document.getElementById("stock-table");
+    if (tbl) tbl.style.minWidth = Math.max(1000, cols.length * 95 + 120) + "px";
+    // 탭별 그룹 경계 컬럼 (왼쪽 굵은 선) 및 레이블 정의
+    const TAB_GROUP_STARTS = {
+      all:            ["PER", "ROE(%)", "영업이익_CAGR", "부채비율(%)", "수급강도", "배당수익률(%)", "종합점수"],
+      leaders:        ["수급강도", "RS_등급", "거래대금_증감(%)", "주도주_점수"],
+      quality_value:  ["PER", "ROE(%)", "F스코어", "영업이익_CAGR", "우량가치_점수"],
+      growth_mom:     ["매출_CAGR", "Q_매출_YoY(%)", "실적가속_연속", "MA20_이격도(%)", "영업이익률(%)", "고성장_점수"],
+      cash_div:       ["배당수익률(%)", "FCF수익률(%)", "ROIC(%)", "PER", "부채비율(%)", "현금배당_점수"],
+      turnaround:     ["흑자전환", "이익률_변동폭", "TTM_순이익", "스마트머니_승률", "PBR", "턴어라운드_점수"],
+      multi_strategy: ["전략수", "종합점수", "ROE(%)", "F스코어"],
+      forward_covered:["PER", "Fwd_PER", "Fwd_매출_성장률(%)", "Q_영업이익_YoY(%)", "Fwd_모멘텀_점수"],
+      watchlist:      ["PER", "ROE(%)", "매출_CAGR", "부채비율(%)", "배당수익률(%)", "RS_등급", "종합점수"],
+    };
+    const TAB_GROUP_LABELS = {
+      all: {
+        "PER": "— 가치평가 —", "ROE(%)": "— 수익성 —", "영업이익_CAGR": "— 성장 —",
+        "부채비율(%)": "— 안정성 —", "수급강도": "— 수급/기술 —", "배당수익률(%)": "— 배당 —", "종합점수": "— 종합 —"
+      },
+      leaders: {
+        "수급강도": "— 수급 —", "RS_등급": "— RS/기술 —", "거래대금_증감(%)": "— 거래/실적 —", "주도주_점수": "— 점수 —"
+      },
+      quality_value: {
+        "PER": "— 밸류 —", "ROE(%)": "— 수익성 —", "F스코어": "— 안정성 —", "영업이익_CAGR": "— 성장 —", "우량가치_점수": "— 점수 —"
+      },
+      growth_mom: {
+        "매출_CAGR": "— CAGR —", "Q_매출_YoY(%)": "— 분기YoY —", "실적가속_연속": "— 가속도 —",
+        "MA20_이격도(%)": "— 기술 —", "영업이익률(%)": "— 수익성 —", "고성장_점수": "— 점수 —"
+      },
+      cash_div: {
+        "배당수익률(%)": "— 배당 —", "FCF수익률(%)": "— 현금흐름 —", "ROIC(%)": "— 수익성 —",
+        "PER": "— 밸류 —", "부채비율(%)": "— 안정성 —", "현금배당_점수": "— 점수 —"
+      },
+      turnaround: {
+        "흑자전환": "— 전환신호 —", "이익률_변동폭": "— 이익률 —", "TTM_순이익": "— TTM —",
+        "스마트머니_승률": "— 수급/기술 —", "PBR": "— 밸류 —", "턴어라운드_점수": "— 점수 —"
+      },
+      multi_strategy: {
+        "전략수": "— 전략수 —", "종합점수": "— 전략점수 —", "ROE(%)": "— 핵심팩터 —", "F스코어": "—"
+      },
+      forward_covered: {
+        "PER": "— 현재 —", "Fwd_PER": "— Fwd밸류 —", "Fwd_매출_성장률(%)": "— Fwd성장 —",
+        "Q_영업이익_YoY(%)": "— 실적 —", "Fwd_모멘텀_점수": "— 점수 —"
+      },
+      watchlist: {
+        "PER": "— 가치평가 —", "ROE(%)": "— 수익성 —", "매출_CAGR": "— 성장성 —",
+        "부채비율(%)": "— 안정성 —", "배당수익률(%)": "— 배당 —",
+        "RS_등급": "— 기술/수급 —", "종합점수": "— 종합 —"
+      },
+    };
+    const WL_GROUP_STARTS = new Set(TAB_GROUP_STARTS[currentScreen] || []);
+    const WL_GROUP_LABELS = TAB_GROUP_LABELS[currentScreen] || {};
     headerRow.innerHTML =
-      `<tr><th width="20" class="text-center small text-muted">${firstColLabel}</th><th width="30">★</th>` +
+      `<tr><th width="30" class="text-center small text-muted">+PF</th><th width="20" class="text-center small text-muted"></th><th width="30">★</th>` +
       cols.map(c => {
         const arrow = sortCol === c.key ? (sortOrder === "desc" ? " ↓" : " ↑") : "";
         const tip = METRIC_TOOLTIPS[c.key]
           ? ` data-bs-toggle="tooltip" data-bs-placement="bottom" title="${METRIC_TOOLTIPS[c.key]}"` : "";
-        return `<th data-col="${c.key}" style="cursor:pointer; user-select:none;"${tip}>${c.label}<span class="sort-arrow text-muted small">${arrow}</span></th>`;
+        const groupBorder = WL_GROUP_STARTS.has(c.key) ? " wl-group-start" : "";
+        const groupLabel  = WL_GROUP_LABELS[c.key] ? `<div class="wl-group-label">${WL_GROUP_LABELS[c.key]}</div>` : "";
+        return `<th data-col="${c.key}" class="${groupBorder}" style="cursor:pointer; user-select:none;"${tip}>${groupLabel}${c.label}<span class="sort-arrow text-muted small">${arrow}</span></th>`;
       }).join("") + `</tr>`;
 
     headerRow.querySelectorAll("th[data-col]").forEach(th => {
@@ -1692,7 +1916,7 @@
     }
   }
 
-  async function requestAnalysis(code, mode) {
+  async function requestAnalysis(code, mode, forceRegenerate) {
     if (_analysisInProgress) {
       alert("AI 분석이 이미 진행 중입니다. 완료 후 다시 시도해주세요.");
       return;
@@ -1713,16 +1937,18 @@
     document.getElementById("report-loading-text").textContent = "Claude로 심층 분석 중...";
 
     try {
-      // 캐시 확인
+      // 캐시 확인 (재생성 시 건너뜀)
       let data;
-      const getRes = await fetch(`/api/stocks/${code}/analysis`);
-      if (getRes.ok) {
-        const cached = await getRes.json();
-        if (cached.mode === mode) {
-          data = cached;
+      if (!forceRegenerate) {
+        const getRes = await fetch(`/api/stocks/${code}/analysis`);
+        if (getRes.ok) {
+          const cached = await getRes.json();
+          if (cached.mode === mode) {
+            data = cached;
+          }
         }
       }
-      // 캐시 없거나 모드 다르면 생성
+      // 캐시 없거나 모드 다르거나 재생성이면 생성
       if (!data) {
         console.log("[AI분석] POST 요청 시작:", code, mode);
         const controller = new AbortController();
@@ -1961,7 +2187,7 @@
   function getCurrentFilterSnapshot() {
     return {
       market:        document.getElementById("f-market")?.value  || "",
-      sector:        document.getElementById("f-sector")?.value  || "",
+      sectors:       getSelectedSectors(),
       search:        document.getElementById("f-search")?.value  || "",
       columnFilters: JSON.parse(JSON.stringify(columnFilters)),
     };
@@ -1969,10 +2195,9 @@
 
   function applyPreset(snap) {
     if (snap.market !== undefined) document.getElementById("f-market").value = snap.market;
-    if (snap.sector !== undefined) {
-      const sel = document.getElementById("f-sector");
-      if (sel) sel.value = snap.sector;
-    }
+    if (snap.sectors !== undefined) setSelectedSectors(snap.sectors);
+    // 하위 호환: 구버전 preset에 단일 sector 문자열이 저장된 경우
+    else if (snap.sector !== undefined) setSelectedSectors(snap.sector ? [snap.sector] : []);
     if (snap.search !== undefined) document.getElementById("f-search").value = snap.search;
     Object.keys(columnFilters).forEach(k => delete columnFilters[k]);
     if (snap.columnFilters) {
@@ -2303,7 +2528,7 @@
 
     const sectors = portfolioData["섹터별"] || [];
     sectorEl.innerHTML = sectors.slice(0, 8).map(d =>
-      `<span class="badge bg-light text-dark border">${d.섹터} ${d.비중.toFixed(1)}%</span>`
+      `<span class="badge bg-light text-dark border" title="${(d.종목 || []).join(', ')}">${d.섹터} ${d.비중.toFixed(1)}%</span>`
     ).join("");
   }
 
@@ -2312,12 +2537,23 @@
     const headerEl = document.getElementById("table-header");
     const tbodyEl  = document.getElementById("stock-tbody");
 
+    // colgroup으로 컬럼 너비 고정
+    const tableEl = document.getElementById("stock-table");
+    let colgroup = tableEl.querySelector("colgroup");
+    if (!colgroup) { colgroup = document.createElement("colgroup"); tableEl.prepend(colgroup); }
+    colgroup.innerHTML =
+      `<col style="width:55px">` +
+      cols.map(c => `<col style="width:${c.w || 'auto'}">`).join("");
+    tableEl.style.tableLayout = "fixed";
+    tableEl.style.minWidth = "";
+
     // 헤더 구성 (관리 컬럼 추가)
     headerEl.innerHTML =
-      `<tr><th width="55" class="text-center">관리</th>` +
+      `<tr><th class="text-center">관리</th>` +
       cols.map(c => {
         const arrow = sortCol === c.key ? (sortOrder === "desc" ? " ↓" : " ↑") : "";
-        return `<th data-col="${c.key}" style="cursor:pointer; user-select:none;">${c.label}<span class="sort-arrow text-muted small">${arrow}</span></th>`;
+        const align = c.align === "left" ? " text-start" : "";
+        return `<th data-col="${c.key}" class="${align}" style="cursor:pointer; user-select:none;">${c.label}<span class="sort-arrow text-muted small">${arrow}</span></th>`;
       }).join("") + `</tr>`;
 
     if (!items.length) {
@@ -2340,12 +2576,12 @@
         <button class="btn btn-sm btn-outline-danger pf-del-btn" data-code="${e["종목코드"]}" title="삭제" style="font-size:.7rem;padding:1px 5px;">✕</button>
       </td>`;
       const cells = cols.map(c => {
-        let cls = "";
-        if (c.key === "수익률" || c.key === "수익금액") cls = plClass;
+        let cls = c.align === "left" ? "text-start" : "";
+        if (c.key === "수익률" || c.key === "수익금액") cls += " " + plClass;
         if (c.key === "종목구분") return `<td>${_gbnBadge(e["종목구분"])}</td>`;
         const rep = (c.key === "종목명") ? reportMap[e["종목코드"]] : null;
         const aiBadge = rep ? ` <span class="badge badge-ai" title="${rep.model} · ${rep.date}">AI</span>` : "";
-        return `<td class="${cls}">${fmt(e[c.key], c.fmt)}${aiBadge}</td>`;
+        return `<td class="${cls.trim()}">${fmt(e[c.key], c.fmt)}${aiBadge}</td>`;
       }).join("");
       return `<tr data-code="${e["종목코드"]}">${actionBtns}${cells}</tr>`;
     }).join("");
@@ -2483,8 +2719,7 @@
   });
   document.getElementById("btn-clear").addEventListener("click", () => {
     document.getElementById("f-market").value = "";
-    const sectorSel = document.getElementById("f-sector");
-    if (sectorSel) sectorSel.value = "";
+    setSelectedSectors([]);
     document.getElementById("f-search").value = "";
     currentPage = 1; loadStocks();
   });
@@ -2504,7 +2739,7 @@
   // 프리셋 저장 버튼
   document.getElementById("btn-preset-save")?.addEventListener("click", () => {
     const snap = getCurrentFilterSnapshot();
-    const hasFilter = snap.market || snap.sector || snap.search || Object.keys(snap.columnFilters).length;
+    const hasFilter = snap.market || (snap.sectors && snap.sectors.length) || snap.search || Object.keys(snap.columnFilters).length;
     if (!hasFilter) { alert("저장할 필터 조건이 없습니다."); return; }
     const name = prompt("프리셋 이름을 입력하세요:", "내 프리셋");
     if (!name) return;
@@ -2587,6 +2822,78 @@
     } catch (e) { /* ignore */ }
   });
 
+  // ─── 포트폴리오 차트 렌더링 ────────────────────────────────────────
+  let _pfCharts = [];
+
+  function _renderPortfolioCharts(scores) {
+    // 기존 차트 제거
+    _pfCharts.forEach(c => { try { c.destroy(); } catch(e) {} });
+    _pfCharts = [];
+
+    if (!scores || typeof Chart === "undefined") return;
+
+    // 1. 수익률 바 차트
+    const returnCanvas = document.getElementById("pf-return-chart");
+    if (returnCanvas && portfolioData && portfolioData.items) {
+      const items = portfolioData.items.filter(i => i["수익률"] !== null && i["수익률"] !== undefined);
+      if (items.length > 0) {
+        const labels = items.map(i => i["종목명"] || i["종목코드"]);
+        const values = items.map(i => i["수익률"] || 0);
+        const colors = values.map(v => v >= 0 ? "rgba(39,174,96,0.8)" : "rgba(192,57,43,0.8)");
+        _pfCharts.push(new Chart(returnCanvas, {
+          type: "bar",
+          data: {
+            labels,
+            datasets: [{ label: "수익률(%)", data: values, backgroundColor: colors, borderWidth: 0 }]
+          },
+          options: {
+            indexAxis: "y",
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { grid: { color: "#eee" }, ticks: { callback: v => v + "%" } },
+              y: { ticks: { font: { size: 11 } } }
+            }
+          }
+        }));
+      }
+    }
+
+    // 2. 섹터 도넛 차트
+    const sectorCanvas = document.getElementById("pf-sector-chart");
+    if (sectorCanvas && portfolioData && portfolioData["섹터별"]) {
+      const sectors = portfolioData["섹터별"].filter(s => s["비중"] > 0);
+      if (sectors.length > 0) {
+        const palette = ["#2980b9","#27ae60","#e74c3c","#8e44ad","#f39c12",
+                         "#16a085","#d35400","#2c3e50","#7f8c8d","#1abc9c"];
+        _pfCharts.push(new Chart(sectorCanvas, {
+          type: "doughnut",
+          data: {
+            labels: sectors.map(s => s["섹터"]),
+            datasets: [{
+              data: sectors.map(s => s["비중"]),
+              backgroundColor: sectors.map((_, i) => palette[i % palette.length]),
+              borderWidth: 1
+            }]
+          },
+          options: {
+            responsive: true,
+            plugins: {
+              legend: { position: "right", labels: { font: { size: 11 } } },
+              tooltip: { callbacks: {
+                label: ctx => ctx.label + ": " + ctx.parsed.toFixed(1) + "%",
+                afterLabel: ctx => {
+                  const stocks = sectors[ctx.dataIndex]["종목"];
+                  return stocks && stocks.length ? stocks.join(", ") : "";
+                }
+              } }
+            }
+          }
+        }));
+      }
+    }
+  }
+
   // ─── 포트폴리오 AI 분석 ────────────────────────────────────────────
   let _pfAnalysisInProgress = false;
 
@@ -2628,6 +2935,7 @@
             staleBanner.style.display = "flex";
             contentEl.innerHTML = cached.report_html || "";
             metaEl.textContent = (cached.model || "") + " \u00b7 " + (cached.generated_date || "") + " (\uc774\uc804 \ubd84\uc11d)";
+            _renderPortfolioCharts(cached.scores);
             return;
           }
           data = cached;
@@ -2635,25 +2943,71 @@
       }
 
       if (!data) {
-        loadingText.textContent = "\ud3ec\ud2b8\ud3f4\ub9ac\uc624 AI \ubd84\uc11d \uc911...";
-        let elapsed = 0;
-        const timerInterval = setInterval(() => {
-          elapsed++;
-          loadingText.textContent = "\ud3ec\ud2b8\ud3f4\ub9ac\uc624 AI \ubd84\uc11d \uc911... (" + elapsed + "\ucd08)";
-        }, 1000);
+        // 단계별 프로그레스 정의 (누적 %, 경과 초, 메시지)
+        const PF_STAGES = [
+          { pct: 5,  sec: 2,   msg: "포트폴리오 데이터 준비 중..." },
+          { pct: 12, sec: 8,   msg: "종목 재무·퀀트 데이터 수집 중..." },
+          { pct: 20, sec: 15,  msg: "AI 모델에 분석 요청 전송 중..." },
+          { pct: 30, sec: 30,  msg: "포트폴리오 구성 종합 분석 중..." },
+          { pct: 45, sec: 60,  msg: "종목별 매수/보유/매도 판단 분석 중..." },
+          { pct: 58, sec: 90,  msg: "섹터 배분 및 상관관계 분석 중..." },
+          { pct: 68, sec: 120, msg: "리스크·촉매 요인 도출 중..." },
+          { pct: 78, sec: 160, msg: "리밸런싱 실행 계획 작성 중..." },
+          { pct: 86, sec: 210, msg: "보고서 구조화 중..." },
+          { pct: 93, sec: 280, msg: "최종 검토 및 HTML 렌더링 중..." },
+          { pct: 97, sec: 400, msg: "거의 완료됐습니다. 잠시만 기다려주세요..." },
+        ];
+
+        const progressBar  = document.getElementById("pf-progress-bar");
+        const progressPct  = document.getElementById("pf-progress-pct");
+        const progressStage = document.getElementById("pf-progress-stage");
+
+        const startTime = Date.now();
+        let stageIdx = 0;
+
+        function updateProgress() {
+          const elapsed = (Date.now() - startTime) / 1000;
+          // 현재 단계 찾기
+          while (stageIdx < PF_STAGES.length - 1 && elapsed >= PF_STAGES[stageIdx + 1].sec) {
+            stageIdx++;
+          }
+          const cur = PF_STAGES[stageIdx];
+          const next = PF_STAGES[Math.min(stageIdx + 1, PF_STAGES.length - 1)];
+          // 단계 내 보간
+          let pct = cur.pct;
+          if (stageIdx < PF_STAGES.length - 1) {
+            const segElapsed = elapsed - cur.sec;
+            const segDur = next.sec - cur.sec;
+            pct = cur.pct + (next.pct - cur.pct) * Math.min(segElapsed / segDur, 1);
+          }
+          pct = Math.min(pct, 97);
+          if (progressBar)  progressBar.style.width = pct.toFixed(1) + "%";
+          if (progressPct)  progressPct.textContent = Math.round(pct) + "%";
+          if (progressStage) progressStage.textContent = cur.msg;
+          loadingText.textContent = "포트폴리오 AI 분석 중... (" + Math.round(elapsed) + "초)";
+        }
+
+        const progressInterval = setInterval(updateProgress, 500);
+        updateProgress();
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 600000);
+        const timeoutId = setTimeout(() => controller.abort(), 660000); // 11분 (서버 10분 + 여유)
 
         try {
+          const watchlistCodes = [...getWatchlist()];
           const postRes = await fetch("/api/portfolio/analysis", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ watchlist_codes: watchlistCodes }),
             signal: controller.signal,
           });
+          // 완료 시 100%로
+          if (progressBar)  { progressBar.style.width = "100%"; progressBar.classList.remove("progress-bar-animated"); }
+          if (progressPct)  progressPct.textContent = "100%";
+          if (progressStage) progressStage.textContent = "분석 완료!";
           data = await postRes.json();
         } finally {
-          clearInterval(timerInterval);
+          clearInterval(progressInterval);
           clearTimeout(timeoutId);
         }
       }
@@ -2666,6 +3020,7 @@
       } else {
         contentEl.innerHTML = data.report_html || "";
         metaEl.textContent = (data.model || "") + " \u00b7 " + (data.generated_date || "");
+        _renderPortfolioCharts(data.scores);
       }
     } catch (e) {
       loadingEl.style.display = "none";
@@ -2725,7 +3080,7 @@
   // 보고서 재생성 / PDF
   document.getElementById("btn-regenerate").addEventListener("click", function () {
     if (this.dataset.code && this.dataset.mode) {
-      requestAnalysis(this.dataset.code, this.dataset.mode);
+      requestAnalysis(this.dataset.code, this.dataset.mode, true);
     }
   });
   document.getElementById("btn-pdf").addEventListener("click", () => window.print());
@@ -2784,28 +3139,89 @@
     })
   );
 
+  // ── 섹터 멀티셀렉트 헬퍼 ────────────────────────────────────────────
+  function getSelectedSectors() {
+    const boxes = document.querySelectorAll("#f-sector-options input[type=checkbox]:checked");
+    return Array.from(boxes).map(cb => cb.value);
+  }
+
+  function setSelectedSectors(arr) {
+    const boxes = document.querySelectorAll("#f-sector-options input[type=checkbox]");
+    boxes.forEach(cb => { cb.checked = arr.includes(cb.value); });
+    _updateSectorBtn();
+  }
+
+  function _updateSectorBtn() {
+    const btn = document.getElementById("f-sector-btn");
+    const allCb = document.getElementById("f-sector-all");
+    if (!btn) return;
+    const selected = getSelectedSectors();
+    if (!selected.length) {
+      btn.textContent = "전체 섹터";
+      if (allCb) allCb.checked = true;
+    } else if (selected.length === 1) {
+      btn.textContent = selected[0];
+      if (allCb) allCb.checked = false;
+    } else {
+      btn.textContent = `${selected.length}개 섹터`;
+      if (allCb) allCb.checked = false;
+    }
+  }
+
   // 섹터 드롭다운 초기화
   async function loadSectorOptions() {
-    const sel = document.getElementById("f-sector");
-    if (!sel) return;
+    const optWrap = document.getElementById("f-sector-options");
+    if (!optWrap) return;
     try {
       const res  = await fetch("/api/sectors");
       if (!res.ok) return;
       const data = await res.json();
-      // 기존 옵션 (전체 섹터) 유지 후 추가
-      const current = sel.value;
-      while (sel.options.length > 1) sel.remove(1);
-      data.forEach(({ 섹터: name, count }) => {
-        const opt = document.createElement("option");
-        opt.value = name;
-        opt.textContent = `${name} (${count})`;
-        sel.appendChild(opt);
+      optWrap.innerHTML = "";
+      data.forEach(({ 섹터: name, count }, idx) => {
+        const lbl = document.createElement("label");
+        lbl.className = "sector-item" + (idx === 0 ? " sector-divider" : "");
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.value = name;
+        cb.addEventListener("change", () => {
+          document.getElementById("f-sector-all").checked = false;
+          _updateSectorBtn();
+          currentPage = 1; loadStocks();
+        });
+        lbl.appendChild(cb);
+        lbl.appendChild(document.createTextNode(`${name} (${count})`));
+        optWrap.appendChild(lbl);
       });
-      sel.value = current;
     } catch (e) { /* 섹터 API 실패 시 무시 */ }
   }
-  const sectorEl = document.getElementById("f-sector");
-  if (sectorEl) sectorEl.addEventListener("change", () => { currentPage = 1; loadStocks(); });
+
+  // 전체선택 체크박스
+  const sectorAllCb = document.getElementById("f-sector-all");
+  if (sectorAllCb) {
+    sectorAllCb.addEventListener("change", () => {
+      if (sectorAllCb.checked) {
+        setSelectedSectors([]);
+        currentPage = 1; loadStocks();
+      }
+    });
+  }
+
+  // 버튼 클릭 → 드롭다운 토글
+  const sectorBtn = document.getElementById("f-sector-btn");
+  const sectorDropdown = document.getElementById("f-sector-dropdown");
+  if (sectorBtn && sectorDropdown) {
+    sectorBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isOpen = sectorDropdown.style.display !== "none";
+      sectorDropdown.style.display = isOpen ? "none" : "block";
+    });
+    // 외부 클릭 시 닫기
+    document.addEventListener("click", (e) => {
+      if (!document.getElementById("sector-multiselect-wrap")?.contains(e.target)) {
+        sectorDropdown.style.display = "none";
+      }
+    });
+  }
 
   // ─── 데이터 품질 정보 ─────────────────────────────────────────────────
   async function loadDataInfo() {

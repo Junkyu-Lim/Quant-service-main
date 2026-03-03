@@ -112,6 +112,14 @@ def run_pipeline(skip_collect: bool = False, test_mode: bool = False, skip_price
         sector_map = shares[["종목코드", "섹터"]].drop_duplicates("종목코드")
         full_df = full_df.merge(sector_map, on="종목코드", how="left")
 
+        # 우선주 섹터 보완: 섹터가 없는 종목(우선주 등)은 코드 끝자리를 '0'으로 바꿔 보통주 섹터 참조
+        sector_map_dict = sector_map.dropna(subset=["섹터"]).set_index("종목코드")["섹터"].to_dict()
+        mask = full_df["섹터"].isna() | (full_df["섹터"] == "")
+        if mask.any():
+            full_df.loc[mask, "섹터"] = full_df.loc[mask, "종목코드"].apply(
+                lambda c: sector_map_dict.get(c[:-1] + "0")
+            )
+
     # 전략별 종합점수 사전 계산 (기술적 지표 이후, DB 저장 전)
     _progress("전략 점수 계산 중", 84)
     full_df = calc_strategy_scores(full_df)

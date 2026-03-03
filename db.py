@@ -636,6 +636,46 @@ def get_stock_info_from_master(code: str) -> dict | None:
             return None
 
 
+def load_price_history_multi(codes: list[str], n_days: int = 250) -> pd.DataFrame:
+    """여러 종목의 최근 n_days 일간 종가를 Wide 포맷으로 반환.
+
+    반환: DataFrame (날짜 index, 종목코드 columns, 종가 values)
+    데이터가 없으면 빈 DataFrame 반환.
+    """
+    if not codes:
+        return pd.DataFrame()
+    codes = [c.zfill(6) for c in codes]
+    placeholders = ", ".join(["?"] * len(codes))
+    with get_conn() as conn:
+        try:
+            row = conn.execute(
+                "SELECT MAX(collected_date) FROM price_history"
+            ).fetchone()
+            if not row or not row[0]:
+                return pd.DataFrame()
+            latest = row[0]
+            df = conn.execute(
+                f"""SELECT 종목코드, 날짜, 종가
+                    FROM price_history
+                    WHERE 종목코드 IN ({placeholders})
+                      AND collected_date = ?
+                    ORDER BY 날짜""",
+                codes + [latest],
+            ).df()
+        except Exception:
+            return pd.DataFrame()
+
+    if df.empty:
+        return pd.DataFrame()
+
+    pivot = df.pivot_table(index="날짜", columns="종목코드", values="종가", aggfunc="last")
+    pivot = pivot.sort_index()
+    # 최근 n_days 행만
+    if len(pivot) > n_days:
+        pivot = pivot.iloc[-n_days:]
+    return pivot
+
+
 def get_data_status() -> dict:
     tables = ["master", "daily", "financial_statements",
               "indicators", "shares", "price_history", "investor_trading",

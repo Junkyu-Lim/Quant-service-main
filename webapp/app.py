@@ -16,7 +16,7 @@ from flask_cors import CORS
 
 import config
 import db as _db
-from analysis.claude_analyzer import generate_report, generate_portfolio_report, generate_diff_summary
+from analysis.claude_analyzer import generate_report, generate_portfolio_report, generate_diff_summary, compute_correlation_matrix
 
 log = logging.getLogger(__name__)
 
@@ -158,9 +158,11 @@ def api_stocks():
         if codes: filtered = filtered[filtered["종목코드"].isin(codes)]
     if market and "시장구분" in filtered.columns:
         filtered = filtered[filtered["시장구분"] == market.upper()]
-    sector = request.args.get("sector", "").strip()
-    if sector and "섹터" in filtered.columns:
-        filtered = filtered[filtered["섹터"] == sector]
+    sectors_raw = request.args.get("sectors", request.args.get("sector", "")).strip()
+    if sectors_raw and "섹터" in filtered.columns:
+        sector_list = [s.strip() for s in sectors_raw.split(",") if s.strip()]
+        if sector_list:
+            filtered = filtered[filtered["섹터"].isin(sector_list)]
     if q:
         mask = (filtered["종목명"].str.contains(q, case=False, na=False) | filtered["종목코드"].str.contains(q, case=False, na=False))
         filtered = filtered[mask]
@@ -481,6 +483,13 @@ def _build_portfolio_response(entries, df, supp):
         if sector is None and code in config.ETF_METADATA:
             sector = config.ETF_METADATA[code].get("sector")
 
+        # 우선주 섹터 보완: 코드 끝자리를 '0'으로 바꿔 보통주 섹터 참조
+        if (not sector) and not df.empty:
+            common_code = code[:-1] + "0"
+            common_row = df[df["종목코드"] == common_code]
+            if not common_row.empty:
+                sector = common_row.iloc[0].get("섹터")
+
         eval_amount = (qty * cur_price) if cur_price else None
         profit = (eval_amount - buy_amount) if eval_amount else None
         profit_pct = ((cur_price / avg_price - 1) * 100) if (cur_price and avg_price) else None
@@ -510,6 +519,8 @@ def _build_portfolio_response(entries, df, supp):
         for i in items:
             if i["평가금액"]:
                 i["비중"] = round(i["평가금액"] / total_eval * 100, 1)
+            else:
+                i["비중"] = None  # 현재가 없는 종목은 None으로 명시
 
     total_buy = sum(i["매입금액"] for i in items if i["매입금액"])
     total_profit = (total_eval - total_buy) if total_eval else 0
@@ -517,12 +528,16 @@ def _build_portfolio_response(entries, df, supp):
 
     # 섹터별 분포
     sector_map = {}
+    sector_stocks = {}
     for i in items:
         s = i["섹터"] or "기타"
         sector_map.setdefault(s, 0)
         sector_map[s] += (i["평가금액"] or 0)
+        sector_stocks.setdefault(s, [])
+        sector_stocks[s].append(i.get("종목명") or i.get("종목코드", ""))
     sector_list = sorted(
-        [{"섹터": k, "평가금액": v, "비중": round(v / total_eval * 100, 1) if total_eval else 0}
+        [{"섹터": k, "평가금액": v, "비중": round(v / total_eval * 100, 1) if total_eval else 0,
+          "종목": sector_stocks.get(k, [])}
          for k, v in sector_map.items()],
         key=lambda x: x["비중"], reverse=True,
     )
@@ -605,13 +620,15 @@ def api_portfolio_delete(code: str):
 
 # ── Portfolio AI Analysis ─────────────────────────────────────────────
 
-def _portfolio_hash(entries: list[dict]) -> str:
+def _portfolio_hash(entries: list[dict], watchlist_codes: list[str] | None = None) -> str:
     """포트폴리오 구성의 해시 생성 (캐시 무효화 판단용)"""
     import hashlib
     parts = sorted(
         f"{e['종목코드']}:{e.get('수량', 0)}:{e.get('평균매입가', 0)}"
         for e in entries
     )
+    if watchlist_codes:
+        parts.append("wl:" + ",".join(sorted(watchlist_codes)))
     return hashlib.md5("|".join(parts).encode()).hexdigest()
 
 
@@ -650,33 +667,62 @@ def api_portfolio_analysis_post():
     if not entries:
         return jsonify({"error": "포트폴리오가 비어 있습니다."}), 400
 
-    df = _load_data()
-    supp = _db.load_price_supplement()
-    portfolio_res = _build_portfolio_response(entries, df, supp)
-    portfolio_items = portfolio_res["items"]
-
-    # 종목별 정량 데이터 수집
-    stock_data = {}
-    for item in portfolio_items:
-        code = item["종목코드"]
-        if not df.empty:
-            rows = df[df["종목코드"] == code]
-            if not rows.empty:
-                stock_data[code] = {c: _safe_val(rows.iloc[0].get(c)) for c in df.columns}
-
-    # 기존 AI 분석 보고서 수집
-    ai_reports = {}
-    for item in portfolio_items:
-        code = item["종목코드"]
-        report_row = _db.load_report(code)
-        if report_row and report_row.get("scores_json"):
-            try:
-                ai_reports[code] = json.loads(report_row["scores_json"])
-            except (json.JSONDecodeError, TypeError):
-                pass
+    # 요청 body에서 워치리스트 코드 파싱
+    body = request.get_json(silent=True) or {}
+    watchlist_codes = [str(c).strip().zfill(6) for c in body.get("watchlist_codes", []) if c]
 
     try:
-        result = generate_portfolio_report(portfolio_items, stock_data, ai_reports)
+        df = _load_data()
+        supp = _db.load_price_supplement()
+        portfolio_res = _build_portfolio_response(entries, df, supp)
+        portfolio_items = portfolio_res["items"]
+
+        # 종목별 정량 데이터 수집
+        stock_data = {}
+        for item in portfolio_items:
+            code = item["종목코드"]
+            if not df.empty:
+                rows = df[df["종목코드"] == code]
+                if not rows.empty:
+                    stock_data[code] = {c: _safe_val(rows.iloc[0].get(c)) for c in df.columns}
+
+        # 기존 AI 분석 보고서 수집
+        ai_reports = {}
+        for item in portfolio_items:
+            code = item["종목코드"]
+            report_row = _db.load_report(code)
+            if report_row and report_row.get("scores_json"):
+                try:
+                    ai_reports[code] = json.loads(report_row["scores_json"])
+                except (json.JSONDecodeError, TypeError) as e:
+                    log.warning("AI report JSON parse failed for %s: %s", code, e)
+
+        # 관심종목 정량 데이터 수집 (포트폴리오에 없는 종목만)
+        portfolio_codes = {item["종목코드"] for item in portfolio_items}
+        watchlist_data = {}
+        if watchlist_codes and not df.empty:
+            for code in watchlist_codes:
+                if code in portfolio_codes:
+                    continue  # 이미 포트폴리오에 있는 종목 제외
+                rows = df[df["종목코드"] == code]
+                if not rows.empty:
+                    watchlist_data[code] = {c: _safe_val(rows.iloc[0].get(c)) for c in df.columns}
+
+        # 종목 간 상관관계 계산
+        pf_codes = [item["종목코드"] for item in portfolio_items]
+        pf_names = {item["종목코드"]: item.get("종목명", item["종목코드"]) for item in portfolio_items}
+        correlation_data = None
+        if len(pf_codes) >= 2:
+            try:
+                correlation_data = compute_correlation_matrix(pf_codes, pf_names)
+            except Exception as e:
+                log.warning("상관관계 계산 실패: %s", e)
+
+        result = generate_portfolio_report(
+            portfolio_items, stock_data, ai_reports,
+            watchlist_data=watchlist_data or None,
+            correlation_data=correlation_data,
+        )
         if "error" not in result:
             _db.save_portfolio_analysis(
                 html=result.get("report_html", ""),
