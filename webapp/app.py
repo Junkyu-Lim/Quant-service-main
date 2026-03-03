@@ -41,6 +41,11 @@ _pipeline: dict = {
     "progress": 0,
 }
 
+# ── Analysis task state (per stock code) ──
+# { code: {"status": "running"|"done"|"error", "result": {...}, "name": str} }
+_analysis_tasks: dict = {}
+_analysis_tasks_lock = threading.Lock()
+
 # Columns exposed to the frontend
 DISPLAY_COLS = [
     "종목코드", "종목명", "시장구분", "종가", "시가총액",
@@ -367,6 +372,37 @@ def api_list_reports():
     result = {r["종목코드"]: {"model": r["model_used"], "date": r["generated_date"]} for r in reports}
     return jsonify(result)
 
+def _run_analysis_task(code: str, stock: dict, prev_scores_json):
+    """백그라운드 스레드에서 AI 분석 실행."""
+    try:
+        result = generate_report(stock)
+        if "error" not in result:
+            _db.save_report(
+                code=code,
+                name=stock.get("종목명", ""),
+                html=result.get("report_html", ""),
+                scores_json=json.dumps(result.get("scores", {}), ensure_ascii=False),
+                model=result.get("model", ""),
+                date=result.get("generated_date", ""),
+            )
+            if prev_scores_json:
+                result["diff_html"] = generate_diff_summary(
+                    prev_scores_json, result.get("scores", {})
+                )
+        with _analysis_tasks_lock:
+            _analysis_tasks[code]["status"] = "done"
+            _analysis_tasks[code]["result"] = result
+    except Exception as e:
+        log.exception("Analysis failed for %s", code)
+        err_name = type(e).__name__
+        err_str = str(e)
+        if "Timeout" in err_name or "timeout" in err_str.lower():
+            err_str = "분석 시간이 초과되었습니다. 잠시 후 다시 시도해주세요."
+        with _analysis_tasks_lock:
+            _analysis_tasks[code]["status"] = "error"
+            _analysis_tasks[code]["result"] = {"error": err_str}
+
+
 @app.route("/api/stocks/<code>/analysis", methods=["GET", "POST"])
 def api_stock_analysis(code: str):
     code = code.zfill(6)
@@ -381,7 +417,12 @@ def api_stock_analysis(code: str):
             "generated_date": row.get("generated_date", ""),
             "mode": "claude",
         })
-    # POST – generate new report
+    # POST – 백그라운드에서 보고서 생성 시작
+    with _analysis_tasks_lock:
+        task = _analysis_tasks.get(code)
+        if task and task["status"] == "running":
+            return jsonify({"status": "running", "name": task.get("name", "")}), 202
+
     df = _load_data()
     if df.empty:
         return jsonify({"error": "No data"}), 404
@@ -389,35 +430,37 @@ def api_stock_analysis(code: str):
     if rows.empty:
         return jsonify({"error": "Stock not found"}), 404
     stock = {c: _safe_val(rows.iloc[0].get(c)) for c in df.columns}
+    name = stock.get("종목명", code)
 
-    # 이전 보고서 scores 보관 (diff용)
     prev_row = _db.load_report(code)
     prev_scores_json = prev_row.get("scores_json") if prev_row else None
 
-    try:
-        result = generate_report(stock)
-        if "error" not in result:
-            _db.save_report(
-                code=code,
-                name=stock.get("종목명", ""),
-                html=result.get("report_html", ""),
-                scores_json=json.dumps(result.get("scores", {}), ensure_ascii=False),
-                model=result.get("model", ""),
-                date=result.get("generated_date", ""),
-            )
-            # 이전 보고서와 비교하여 diff 요약 생성
-            if prev_scores_json:
-                result["diff_html"] = generate_diff_summary(
-                    prev_scores_json, result.get("scores", {})
-                )
-        return jsonify(result)
-    except Exception as e:
-        log.exception("Analysis failed for %s", code)
-        err_name = type(e).__name__
-        err_str = str(e)
-        if "Timeout" in err_name or "timeout" in err_str.lower():
-            return jsonify({"error": "분석 시간이 초과되었습니다. 잠시 후 다시 시도해주세요."}), 504
-        return jsonify({"error": err_str}), 500
+    with _analysis_tasks_lock:
+        _analysis_tasks[code] = {"status": "running", "name": name, "result": None}
+
+    t = threading.Thread(target=_run_analysis_task, args=(code, stock, prev_scores_json), daemon=True)
+    t.start()
+    return jsonify({"status": "running", "name": name}), 202
+
+
+@app.route("/api/stocks/<code>/analysis/status", methods=["GET"])
+def api_stock_analysis_status(code: str):
+    """백그라운드 분석 태스크 상태 조회."""
+    code = code.zfill(6)
+    with _analysis_tasks_lock:
+        task = _analysis_tasks.get(code)
+    if task is None:
+        return jsonify({"status": "idle"}), 200
+    status = task["status"]
+    if status == "running":
+        return jsonify({"status": "running", "name": task.get("name", "")}), 200
+    # done or error – 결과 반환 후 태스크 정리
+    result = task.get("result") or {}
+    with _analysis_tasks_lock:
+        _analysis_tasks.pop(code, None)
+    if status == "error":
+        return jsonify({"status": "error", **result}), 200
+    return jsonify({"status": "done", **result}), 200
 
 
 @app.route("/api/stocks/<code>/analysis/history")

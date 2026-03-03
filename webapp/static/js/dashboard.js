@@ -1860,14 +1860,24 @@
   }
 
   // ─── AI 분석 ─────────────────────────────────────────────────────────
-  let _analysisInProgress = false;
+  // 현재 백그라운드 분석 중인 종목 정보
+  let _analysisRunningCode = null;  // 종목코드 or null
+  let _analysisRunningName = null;  // 종목명 or null
+  let _analysisPollingTimer = null;
 
-  function _setAnalysisLock(locked) {
-    _analysisInProgress = locked;
+  function _setAnalysisLock(locked, runningCode, runningName) {
+    _analysisRunningCode = locked ? (runningCode || null) : null;
+    _analysisRunningName = locked ? (runningName || null) : null;
     const analysisBtn = document.getElementById("btn-analysis-claude");
-    const regenBtn = document.getElementById("btn-regenerate");
-    if (analysisBtn) { analysisBtn.disabled = locked; }
-    if (regenBtn) { regenBtn.disabled = locked; }
+    const regenBtn    = document.getElementById("btn-regenerate");
+    if (analysisBtn) {
+      analysisBtn.disabled = locked;
+      analysisBtn.textContent = locked ? "⏳ 분석 진행중..." : "🤖 Claude AI 분석";
+    }
+    if (regenBtn) {
+      regenBtn.disabled = locked;
+      regenBtn.textContent = locked ? "분석 진행중..." : "재생성";
+    }
   }
 
   async function loadReportHistory(code) {
@@ -1916,12 +1926,86 @@
     }
   }
 
+  function _showAnalysisResult(code, mode, data) {
+    const diffArea = document.getElementById("report-diff-area");
+    document.getElementById("report-loading").style.display = "none";
+    if (data.error) {
+      document.getElementById("report-content").innerHTML =
+        `<div class="alert alert-danger"><strong>오류:</strong> ${data.error}</div>`;
+    } else {
+      if (data.diff_html) {
+        diffArea.innerHTML =
+          `<div class="diff-header" id="diff-toggle-header">
+            <h6>📊 이전 보고서 대비 변경점</h6>
+            <span class="diff-toggle">접기 ▲</span>
+          </div>
+          <div id="diff-body">${data.diff_html}</div>`;
+        diffArea.style.display = "";
+        document.getElementById("diff-toggle-header").addEventListener("click", () => {
+          const body   = document.getElementById("diff-body");
+          const toggle = diffArea.querySelector(".diff-toggle");
+          if (body.style.display === "none") {
+            body.style.display = "";
+            toggle.textContent = "접기 ▲";
+          } else {
+            body.style.display = "none";
+            toggle.textContent = "펼치기 ▼";
+          }
+        });
+      }
+      document.getElementById("report-content").innerHTML = data.report_html || "";
+      document.getElementById("report-meta").textContent  =
+        `${data.model || ""} · ${data.generated_date || ""}`;
+      const paddedCode = code.toString().padStart(6, "0");
+      reportMap[paddedCode] = { model: data.model || "", date: data.generated_date || "" };
+      const nameCell = document.querySelector(`tr[data-code="${paddedCode}"] td:nth-child(3)`);
+      if (nameCell && !nameCell.querySelector(".badge-ai")) {
+        nameCell.insertAdjacentHTML("beforeend",
+          ` <span class="badge badge-ai" title="${data.model} · ${data.generated_date}">AI</span>`);
+      }
+      loadReportHistory(code);
+    }
+    document.getElementById("btn-regenerate").dataset.code = code;
+    document.getElementById("btn-regenerate").dataset.mode = mode;
+    _setAnalysisLock(false);
+  }
+
+  async function _pollAnalysisStatus(code, mode, elapsed) {
+    try {
+      const res  = await fetch(`/api/stocks/${code}/analysis/status`);
+      const data = await res.json();
+      if (data.status === "running") {
+        document.getElementById("report-loading-text").textContent =
+          `Claude로 심층 분석 중... (${elapsed}초)`;
+        _analysisPollingTimer = setTimeout(() => _pollAnalysisStatus(code, mode, elapsed + 3), 3000);
+      } else {
+        // done or error
+        _showAnalysisResult(code, mode, data);
+      }
+    } catch (e) {
+      document.getElementById("report-loading").style.display = "none";
+      document.getElementById("report-content").innerHTML =
+        `<div class="alert alert-danger">상태 조회 실패: ${e.message}</div>`;
+      _setAnalysisLock(false);
+    }
+  }
+
   async function requestAnalysis(code, mode, forceRegenerate) {
-    if (_analysisInProgress) {
-      alert("AI 분석이 이미 진행 중입니다. 완료 후 다시 시도해주세요.");
+    // 이미 같은 종목 분석 진행 중 → 모달만 열어서 진행 상태 보여줌
+    if (_analysisRunningCode === code) {
+      const name = (currentDetailData && currentDetailData["종목명"]) || code;
+      const reportModal = new bootstrap.Modal(document.getElementById("report-modal"));
+      reportModal.show();
+      document.getElementById("report-title").textContent = `AI 분석 보고서 — ${name}`;
+      // 로딩 UI가 이미 표시 중이므로 그대로 둠
       return;
     }
-    _setAnalysisLock(true);
+    // 다른 종목 분석 진행 중
+    if (_analysisRunningCode !== null) {
+      const runningLabel = _analysisRunningName || _analysisRunningCode;
+      alert(`[${runningLabel}] AI 분석이 진행 중입니다. 완료 후 다시 시도해주세요.`);
+      return;
+    }
 
     const name = (currentDetailData && currentDetailData["종목명"]) || code;
     const reportModal = new bootstrap.Modal(document.getElementById("report-modal"));
@@ -1936,93 +2020,44 @@
     document.getElementById("report-meta").textContent    = "";
     document.getElementById("report-loading-text").textContent = "Claude로 심층 분석 중...";
 
-    try {
-      // 캐시 확인 (재생성 시 건너뜀)
-      let data;
-      if (!forceRegenerate) {
+    // 캐시 확인 (재생성 시 건너뜀)
+    if (!forceRegenerate) {
+      try {
         const getRes = await fetch(`/api/stocks/${code}/analysis`);
         if (getRes.ok) {
           const cached = await getRes.json();
           if (cached.mode === mode) {
-            data = cached;
+            document.getElementById("report-loading").style.display = "none";
+            _showAnalysisResult(code, mode, cached);
+            return;
           }
         }
-      }
-      // 캐시 없거나 모드 다르거나 재생성이면 생성
-      if (!data) {
-        console.log("[AI분석] POST 요청 시작:", code, mode);
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 360000);
-        const loadingText = document.getElementById("report-loading-text");
-        const baseMsg = "Claude로 심층 분석 중";
-        let elapsed = 0;
-        const timerInterval = setInterval(() => {
-          elapsed++;
-          loadingText.textContent = `${baseMsg}... (${elapsed}초)`;
-        }, 1000);
-        try {
-          const postRes = await fetch(`/api/stocks/${code}/analysis`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ mode }),
-            signal: controller.signal,
-          });
-          data = await postRes.json();
-        } finally {
-          clearInterval(timerInterval);
-          clearTimeout(timeoutId);
-        }
-      }
+      } catch { /* 캐시 없으면 생성으로 진행 */ }
+    }
 
-      document.getElementById("report-loading").style.display = "none";
-      if (data.error) {
+    // 서버에 백그라운드 분석 시작 요청
+    try {
+      console.log("[AI분석] POST 요청 시작:", code, mode);
+      const postRes = await fetch(`/api/stocks/${code}/analysis`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
+      const postData = await postRes.json();
+
+      if (postData.status === "running") {
+        _setAnalysisLock(true, code, name);
+        // 3초 간격 폴링 시작
+        _analysisPollingTimer = setTimeout(() => _pollAnalysisStatus(code, mode, 3), 3000);
+      } else if (postData.error) {
+        document.getElementById("report-loading").style.display = "none";
         document.getElementById("report-content").innerHTML =
-          `<div class="alert alert-danger"><strong>오류:</strong> ${data.error}</div>`;
-      } else {
-        // diff 요약 표시 (재생성 시 서버가 diff_html을 반환)
-        if (data.diff_html) {
-          diffArea.innerHTML =
-            `<div class="diff-header" id="diff-toggle-header">
-              <h6>📊 이전 보고서 대비 변경점</h6>
-              <span class="diff-toggle">접기 ▲</span>
-            </div>
-            <div id="diff-body">${data.diff_html}</div>`;
-          diffArea.style.display = "";
-          document.getElementById("diff-toggle-header").addEventListener("click", () => {
-            const body = document.getElementById("diff-body");
-            const toggle = diffArea.querySelector(".diff-toggle");
-            if (body.style.display === "none") {
-              body.style.display = "";
-              toggle.textContent = "접기 ▲";
-            } else {
-              body.style.display = "none";
-              toggle.textContent = "펼치기 ▼";
-            }
-          });
-        }
-        document.getElementById("report-content").innerHTML = data.report_html || "";
-        document.getElementById("report-meta").textContent  =
-          `${data.model || ""} · ${data.generated_date || ""}`;
-        // reportMap 갱신 → 테이블 행 뱃지 즉시 반영
-        const paddedCode = code.toString().padStart(6, "0");
-        reportMap[paddedCode] = { model: data.model || "", date: data.generated_date || "" };
-        const nameCell = document.querySelector(`tr[data-code="${paddedCode}"] td:nth-child(3)`);
-        if (nameCell && !nameCell.querySelector(".badge-ai")) {
-          nameCell.insertAdjacentHTML("beforeend",
-            ` <span class="badge badge-ai" title="${data.model} · ${data.generated_date}">AI</span>`);
-        }
-        // 히스토리 드롭다운 로드
-        loadReportHistory(code);
+          `<div class="alert alert-danger"><strong>오류:</strong> ${postData.error}</div>`;
       }
-      document.getElementById("btn-regenerate").dataset.code = code;
-      document.getElementById("btn-regenerate").dataset.mode = mode;
     } catch (e) {
       document.getElementById("report-loading").style.display = "none";
-      const msg = e.name === "AbortError" ? "분석 시간이 초과되었습니다. 다시 시도해주세요." : e.message;
       document.getElementById("report-content").innerHTML =
-        `<div class="alert alert-danger">오류: ${msg}</div>`;
-    } finally {
-      _setAnalysisLock(false);
+        `<div class="alert alert-danger">요청 실패: ${e.message}</div>`;
     }
   }
 
