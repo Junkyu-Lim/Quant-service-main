@@ -542,63 +542,128 @@ def collect_index_history(days: int = 365) -> pd.DataFrame:
 # 2-b. 외국인/기관 투자자 매매 동향
 # ═════════════════════════════════════════════
 
+def _fetch_investor_trading_naver(ticker: str, days: int) -> list[dict]:
+    """Naver Finance frgn.nhn에서 외국인/기관 순매수 데이터 수집.
+
+    종목별로 데이터 테이블 인덱스가 다를 수 있어(2 또는 3) 동적으로 탐색합니다.
+    """
+    from io import StringIO as _StringIO
+    import time as _time
+
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Referer": "https://finance.naver.com/",
+    })
+
+    cutoff = date.today() - timedelta(days=days)
+    rows = []
+    page = 1
+
+    while True:
+        try:
+            url = f"https://finance.naver.com/item/frgn.nhn?code={ticker}&page={page}"
+            r = session.get(url, timeout=REQUEST_TIMEOUT)
+            r.raise_for_status()
+            
+            # 차단 여부 확인
+            if "b_panel" in r.text or "spam" in r.text.lower() or "captcha" in r.text.lower():
+                log.warning(f"투자자 매매동향: {ticker} -> 네이버 접속 차단 감지")
+                break
+
+            html = r.content.decode("euc-kr", errors="replace")
+            tables = pd.read_html(_StringIO(html), displayed_only=False)
+            if len(tables) < 3:
+                break
+
+            # 데이터가 있는 테이블(보통 2번 또는 3번) 찾기
+            target_table = None
+            for idx in [2, 3]:
+                if idx >= len(tables): continue
+                t = tables[idx]
+                if t.shape[1] >= 7 and t.shape[0] > 1:
+                    # 첫 번째 데이터 행에서 날짜 형식 확인
+                    for row_idx in range(min(5, len(t))):
+                        val = str(t.iloc[row_idx, 0])
+                        if re.search(r"\d{4}[\./]\d{2}[\./]\d{2}", val):
+                            target_table = t
+                            start_row = row_idx
+                            break
+                if target_table is not None: break
+            
+            if target_table is None:
+                break
+
+            for _, row in target_table.iloc[start_row:].iterrows():
+                raw_date = row.iloc[0]
+                if pd.isna(raw_date):
+                    continue
+                try:
+                    dt_str = str(raw_date).replace(".", "-")
+                    dt = date.fromisoformat(dt_str)
+                except ValueError:
+                    continue
+                if dt < cutoff:
+                    return rows
+                
+                rows.append({
+                    "종목코드": ticker,
+                    "날짜": dt.strftime("%Y-%m-%d"),
+                    "외국인순매수": safe_float(row.iloc[6]),
+                    "기관순매수": safe_float(row.iloc[5]),
+                    "개인순매수": None,
+                })
+        except Exception as e:
+            log.debug(f"투자자 매매동향 naver: {ticker} p{page} → {type(e).__name__}: {e}")
+            break
+
+        _time.sleep(0.1) # 지연 시간 증가
+        page += 1
+        if page > 15: # 최대 페이지 수 약간 축소
+            break
+
+    return rows
+
+
 def collect_investor_trading(tickers: list[str], days: int = 60) -> pd.DataFrame:
-    """pykrx로 외국인/기관/개인 순매수 데이터 수집 (최근 N일).
+    """Naver Finance에서 외국인/기관 순매수 데이터 수집 (최근 N일).
 
     Args:
         tickers: 종목코드 리스트
-        days: 수집 기간 (캘린더 일 기준, 기본 60일 ≈ 3개월)
+        days: 수집 기간 (캘린더 일 기준, 기본 60일)
 
     Returns:
         DataFrame with 종목코드, 날짜, 외국인순매수, 기관순매수, 개인순매수
     """
-    import time
-    # pykrx 내부에서 빈 DataFrame 처리 시 root 로거로 노이즈 발생 → 수집 중 억제
-    _root_logger = logging.getLogger()
-    _prev_level = _root_logger.level
-    _root_logger.setLevel(logging.WARNING)
+    INVESTOR_WORKERS = 4  # 동시 요청 수 감소 (차단 방지)
 
     end_date = date.today()
     start_date = end_date - timedelta(days=days)
-    start_str = start_date.strftime("%Y%m%d")
-    end_str = end_date.strftime("%Y%m%d")
-
-    log.info(f"🏦 투자자 매매동향 수집 ({start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}, {len(tickers)}개 종목)...")
+    log.info(f"투자자 매매동향 수집 ({start_date} ~ {end_date}, {len(tickers)}개 종목, Naver)...")
 
     all_rows = []
     failed_tickers = []
 
-    for ticker in tqdm(tickers, desc="투자자 매매동향", ncols=100):
-        try:
-            df = stock.get_market_trading_value_by_date(start_str, end_str, ticker)
-            if df is None or df.empty:
-                log.debug(f"투자자 매매동향: {ticker} → 데이터 없음")
+    with ThreadPoolExecutor(max_workers=INVESTOR_WORKERS) as pool:
+        futures = {pool.submit(_fetch_investor_trading_naver, ticker, days): ticker for ticker in tickers}
+        for future in tqdm(as_completed(futures), total=len(futures), desc="투자자 매매동향", ncols=100):
+            ticker = futures[future]
+            try:
+                rows = future.result(timeout=120) # 타임아웃 넉넉히
+                if not rows:
+                    failed_tickers.append(ticker)
+                else:
+                    all_rows.extend(rows)
+            except Exception as e:
+                log.debug(f"투자자 매매동향: {ticker} -> {type(e).__name__}: {e}")
                 failed_tickers.append(ticker)
-                time.sleep(0.3)
-                continue
-
-            for dt, row in df.iterrows():
-                dt_str = dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt)[:10]
-                all_rows.append({
-                    "종목코드": ticker,
-                    "날짜": dt_str,
-                    "외국인순매수": safe_float(row.get("외국인합계")),
-                    "기관순매수": safe_float(row.get("기관합계")),
-                    "개인순매수": safe_float(row.get("개인")),
-                })
-
-            time.sleep(0.3)
-        except Exception as e:
-            log.debug(f"투자자 매매동향: {ticker} → {type(e).__name__}: {e}")
-            failed_tickers.append(ticker)
-            time.sleep(0.3)
-
-    # root 로거 레벨 복원
-    _root_logger.setLevel(_prev_level)
 
     success = len(tickers) - len(failed_tickers)
-    log.info(f"  → 투자자 매매동향: {success}/{len(tickers)}건 성공, {len(failed_tickers)}건 실패")
-    log.info(f"  → 총 {len(all_rows)}건 수집 완료")
+    log.info(f"  -> 투자자 매매동향: {success}/{len(tickers)}건 성공, {len(failed_tickers)}건 실패")
     return pd.DataFrame(all_rows) if all_rows else pd.DataFrame()
 
 

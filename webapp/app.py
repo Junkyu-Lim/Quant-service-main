@@ -377,6 +377,12 @@ def _run_analysis_task(code: str, stock: dict, prev_scores_json):
     try:
         result = generate_report(stock)
         if "error" not in result:
+            diff_html = None
+            if prev_scores_json:
+                diff_html = generate_diff_summary(
+                    prev_scores_json, result.get("scores", {})
+                )
+                result["diff_html"] = diff_html
             _db.save_report(
                 code=code,
                 name=stock.get("종목명", ""),
@@ -384,11 +390,8 @@ def _run_analysis_task(code: str, stock: dict, prev_scores_json):
                 scores_json=json.dumps(result.get("scores", {}), ensure_ascii=False),
                 model=result.get("model", ""),
                 date=result.get("generated_date", ""),
+                diff_html=diff_html,
             )
-            if prev_scores_json:
-                result["diff_html"] = generate_diff_summary(
-                    prev_scores_json, result.get("scores", {})
-                )
         with _analysis_tasks_lock:
             _analysis_tasks[code]["status"] = "done"
             _analysis_tasks[code]["result"] = result
@@ -415,6 +418,7 @@ def api_stock_analysis(code: str):
             "scores": json.loads(row.get("scores_json") or "{}"),
             "model": row.get("model_used", ""),
             "generated_date": row.get("generated_date", ""),
+            "diff_html": row.get("diff_html") or None,
             "mode": "claude",
         })
     # POST – 백그라운드에서 보고서 생성 시작

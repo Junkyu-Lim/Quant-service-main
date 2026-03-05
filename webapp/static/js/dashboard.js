@@ -1679,7 +1679,7 @@
       currentDetailData = await res.json();
       renderDetailModal(currentDetailData);
       const modalEl = document.getElementById("detail-modal");
-      const modal = new bootstrap.Modal(modalEl);
+      const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
       // 모달 애니메이션 완료 후 차트 렌더 (display:none 상태에서 크기 0 방지)
       modalEl.addEventListener("shown.bs.modal", () => {
         loadFinancialChart(code);
@@ -2081,7 +2081,7 @@
     // 이미 같은 종목 분석 진행 중 → 모달만 열어서 진행 상태 보여줌
     if (_analysisRunningCode === code) {
       const name = (currentDetailData && currentDetailData["종목명"]) || code;
-      const reportModal = new bootstrap.Modal(document.getElementById("report-modal"));
+      const reportModal = bootstrap.Modal.getOrCreateInstance(document.getElementById("report-modal"));
       reportModal.show();
       document.getElementById("report-title").textContent = `AI 분석 보고서 — ${name}`;
       // 로딩 UI가 이미 표시 중이므로 그대로 둠
@@ -2095,7 +2095,7 @@
     }
 
     const name = (currentDetailData && currentDetailData["종목명"]) || code;
-    const reportModal = new bootstrap.Modal(document.getElementById("report-modal"));
+    const reportModal = bootstrap.Modal.getOrCreateInstance(document.getElementById("report-modal"));
     reportModal.show();
 
     const diffArea = document.getElementById("report-diff-area");
@@ -3480,6 +3480,16 @@
   updateWatchlistCount();
   // reportMap을 먼저 로드한 뒤 테이블 렌더 → AI 배지 누락 방지
   loadReportMap().then(() => loadStocks());
+
+  // 모달 닫힐 때 backdrop 잔존 방지 (report-modal, detail-modal 공통)
+  ["report-modal", "detail-modal"].forEach(id => {
+    document.getElementById(id)?.addEventListener("hidden.bs.modal", () => {
+      document.querySelectorAll(".modal-backdrop").forEach(el => el.remove());
+      document.body.classList.remove("modal-open");
+      document.body.style.removeProperty("overflow");
+      document.body.style.removeProperty("padding-right");
+    });
+  });
 
   const initDesc = STRATEGY_DESCRIPTIONS.all;
   document.getElementById("strategy-desc").innerHTML =

@@ -72,6 +72,82 @@ EXCLUDE_KEYWORDS = ["증가율", "(-1Y)", "(평균)", "률(", "비율", "배율"
                     "연율화", "자본금"]
 _UNIT_SUFFIX_RE = re.compile(r'\((?:억원|백만원|원|천억원|조원)\)$')
 
+_ACCOUNT_MATCH_CACHE = {}
+_YOY_MATCH_CACHE = {}
+
+def _normalize_account(name: str) -> str:
+    name = str(name).strip()
+    name = re.sub(r'^\([+\-±]\)\s*', '', name)
+    name = name.replace(' ', '').replace('\n', '').replace('\t', '')
+    return name
+
+def get_account_match(raw_name, target_key):
+    cache_key = (raw_name, target_key)
+    if cache_key in _ACCOUNT_MATCH_CACHE:
+        return _ACCOUNT_MATCH_CACHE[cache_key]
+    
+    targets = EXACT_ACCOUNTS.get(target_key, [target_key])
+    norm_targets = {_normalize_account(t) for t in targets}
+    priority_map = {_normalize_account(t): i for i, t in enumerate(targets)}
+    
+    raw_str = str(raw_name)
+    
+    # Step 1: exact match
+    if raw_str in targets:
+        prio = priority_map.get(_normalize_account(raw_str), 999)
+        res = (1, prio)
+        _ACCOUNT_MATCH_CACHE[cache_key] = res
+        return res
+        
+    norm_raw = _normalize_account(raw_str)
+    
+    # Step 2: normalized match
+    if norm_raw in norm_targets:
+        prio = priority_map.get(norm_raw, 999)
+        res = (2, prio)
+        _ACCOUNT_MATCH_CACHE[cache_key] = res
+        return res
+        
+    # Step 2.5: 단위접미사 제거 후 재매칭
+    stripped = _UNIT_SUFFIX_RE.sub('', norm_raw)
+    if stripped in norm_targets:
+        prio = priority_map.get(stripped, 999)
+        res = (3, prio)
+        _ACCOUNT_MATCH_CACHE[cache_key] = res
+        return res
+        
+    # Step 3: startswith fallback
+    if not any(kw in raw_str for kw in EXCLUDE_KEYWORDS):
+        for nt in norm_targets:
+            if norm_raw.startswith(nt):
+                prio = priority_map.get(nt, 999)
+                res = (4, prio)
+                _ACCOUNT_MATCH_CACHE[cache_key] = res
+                return res
+                
+    res = (0, 999)
+    _ACCOUNT_MATCH_CACHE[cache_key] = res
+    return res
+
+def get_yoy_match(raw_name, target_key):
+    cache_key = (raw_name, target_key)
+    if cache_key in _YOY_MATCH_CACHE:
+        return _YOY_MATCH_CACHE[cache_key]
+        
+    base_keys = EXACT_ACCOUNTS.get(target_key, [target_key])
+    raw_str = str(raw_name)
+    norm_name = _normalize_account(raw_str)
+    
+    is_match = False
+    for bk in base_keys:
+        norm_bk = _normalize_account(bk)
+        if norm_name.startswith(norm_bk + "증가율"):
+            is_match = True
+            break
+            
+    _YOY_MATCH_CACHE[cache_key] = is_match
+    return is_match
+
 # ═════════════════════════════════════════════
 # 유틸리티 (v8 원본 로직)
 # ═════════════════════════════════════════════
@@ -97,60 +173,42 @@ def load_table(prefix: str) -> pd.DataFrame:
         if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce')
     return df
 
-def _normalize_account(name: str) -> str:
-    name = str(name).strip()
-    name = re.sub(r'^\([+\-±]\)\s*', '', name)
-    name = name.replace(' ', '').replace('\n', '').replace('\t', '')
-    return name
-
 def find_account_value(df, target_key, date_filter=None):
     if df.empty or "계정" not in df.columns: return {}
-    targets = EXACT_ACCOUNTS.get(target_key, [target_key])
-    norm_targets = {_normalize_account(t) for t in targets}
-    work = df.copy()
-    if date_filter is not None: work = work[work["기준일"].isin(date_filter)]
-    # 우선순위: EXACT_ACCOUNTS 리스트 순서대로 정렬 후 dedup → 지배주주순이익 등 우선 선택
-    priority_map = {_normalize_account(t): i for i, t in enumerate(targets)}
-
-    def _finalize(m, key_fn=None):
-        m = m.copy()
-        if key_fn:
-            m["_priority"] = m["계정"].apply(lambda n: priority_map.get(key_fn(n), 999))
-        else:
-            m["_priority"] = m["계정"].apply(lambda n: priority_map.get(_normalize_account(n), 999))
-        m = m.sort_values(["종목코드", "기준일", "_priority"])
-        m = m.drop_duplicates(["종목코드", "기준일"], keep="first")
-        return {str(r["기준일"]): (float(r["값"]) if pd.notna(r["값"]) else None) for _, r in m.iterrows()}
-
-    # Step 1: exact match
-    matched = work[work["계정"].isin(targets)]
-    if not matched.empty:
-        return _finalize(matched)
-
-    # Step 2: normalized match (공백/개행 제거 후)
-    matched = work[work["계정"].apply(lambda n: _normalize_account(n) in norm_targets)]
-    if not matched.empty:
-        return _finalize(matched)
-
-    # Step 2.5: 단위접미사 제거 후 재매칭 — "자본(억원)"→"자본", "당기순이익(억원)"→"당기순이익"
-    # startswith보다 먼저 시도하여 "자본잉여금", "자본조정" 오매칭 방지
-    def _strip_unit(n):
-        return _UNIT_SUFFIX_RE.sub('', _normalize_account(str(n)))
-    matched = work[work["계정"].apply(lambda n: _strip_unit(n) in norm_targets)]
-    if not matched.empty:
-        return _finalize(matched, key_fn=_strip_unit)
-
-    # Step 3: startswith fallback (EXCLUDE_KEYWORDS 적용으로 증가율/잉여금/조정 등 제외)
-    def _startswith_any(name):
-        raw = str(name)
-        if any(kw in raw for kw in EXCLUDE_KEYWORDS):
-            return False
-        norm = _normalize_account(raw)
-        return any(norm.startswith(t) for t in norm_targets)
-    matched = work[work["계정"].apply(_startswith_any)]
-    if matched.empty:
+    
+    matched_rows = []
+    
+    if date_filter is not None:
+        valid_dates = set(date_filter)
+    else:
+        valid_dates = None
+        
+    for row in df.itertuples(index=False):
+        raw_name = row.계정
+        match_level, priority = get_account_match(raw_name, target_key)
+        
+        if match_level > 0:
+            date_val = str(row.기준일)
+            if valid_dates and date_val not in valid_dates:
+                continue
+            val = row.값
+            matched_rows.append((match_level, priority, date_val, val))
+            
+    if not matched_rows:
         return {}
-    return _finalize(matched)
+        
+    min_level = min(r[0] for r in matched_rows)
+    best_rows = [r for r in matched_rows if r[0] == min_level]
+    best_rows.sort(key=lambda x: (x[2], x[1]))
+    
+    result = {}
+    for r in best_rows:
+        date_str = r[2]
+        if date_str not in result:
+            val = r[3]
+            result[date_str] = float(val) if pd.notna(val) else None
+            
+    return result
 
 def preprocess_indicators(ind_df):
     if ind_df.empty: return ind_df
@@ -201,24 +259,25 @@ def _read_yoy_from_ratio_q(q_data, key):
     계정명 패턴: '{key}증가율(({key} / {key}(-1Y)) - 1) * 100 ...'"""
     if q_data.empty or "계정" not in q_data.columns:
         return {}
-    # EXACT_ACCOUNTS 에서 가능한 원본 계정명들 수집
-    base_keys = EXACT_ACCOUNTS.get(key, [key])
-    # 증가율 계정: base_key + "증가율" 로 시작하거나 "(-1Y)" 포함하지 않고 기준 계정명 포함
-    def _is_growth_acct(name: str) -> bool:
-        for bk in base_keys:
-            norm_bk = _normalize_account(bk)
-            norm_name = _normalize_account(name)
-            if norm_name.startswith(norm_bk + "증가율"):
-                return True
-        return False
-    matched = q_data[q_data["계정"].apply(_is_growth_acct)]
-    if matched.empty:
+        
+    matched_rows = []
+    for row in q_data.itertuples(index=False):
+        raw_name = row.계정
+        if get_yoy_match(raw_name, key):
+            matched_rows.append((str(row.기준일), row.값))
+            
+    if not matched_rows:
         return {}
-    # 날짜별 중복 제거 (우선순위: EXACT_ACCOUNTS 앞쪽)
-    matched = matched.copy()
-    matched = matched.dropna(subset=["값"])
-    matched = matched.drop_duplicates("기준일", keep="first")
-    return {str(r["기준일"]): float(r["값"]) for _, r in matched.iterrows() if pd.notna(r["값"])}
+        
+    result = {}
+    for r in matched_rows:
+        date_str = r[0]
+        val = r[1]
+        if date_str not in result:
+            if pd.notna(val):
+                result[date_str] = float(val)
+                
+    return result
 
 
 def calc_quarterly_yoy(q_data, key):
@@ -657,9 +716,17 @@ def analyze_all(fs_df, ind_df, progress_callback=None):
     results = []
     tickers = list(set(fs_df["종목코드"].unique()) | set(ind_df["종목코드"].unique()))
     total = len(tickers)
+    
+    log.info("사전 그룹화 진행 중 (Pre-grouping data for performance)...")
+    ind_grouped = {k: v for k, v in ind_df.groupby("종목코드")} if not ind_df.empty else {}
+    fs_grouped = {k: v for k, v in fs_df.groupby("종목코드")} if not fs_df.empty else {}
+    empty_ind = pd.DataFrame(columns=ind_df.columns) if not ind_df.empty else pd.DataFrame()
+    empty_fs = pd.DataFrame(columns=fs_df.columns) if not fs_df.empty else pd.DataFrame()
 
     for idx, ticker in enumerate(tqdm(tickers, desc="펀더멘털 분석")):
-        results.append(analyze_one_stock(ticker, ind_grp=ind_df[ind_df["종목코드"]==ticker], fs_grp=fs_df[fs_df["종목코드"]==ticker]))
+        ind_grp = ind_grouped.get(ticker, empty_ind)
+        fs_grp = fs_grouped.get(ticker, empty_fs)
+        results.append(analyze_one_stock(ticker, ind_grp=ind_grp, fs_grp=fs_grp))
         if progress_callback and idx % max(1, total // 10) == 0:
             pct = 62 + int((idx / total) * 8)  # 62% ~ 70% 범위
             progress_callback(f"펀더멘털 분석 중 ({idx}/{total})", pct)
@@ -839,9 +906,11 @@ def calc_technical_indicators(df, price_hist, index_hist=None, master=None):
             return np.nan
         return (p_now / p_prev - 1) * 100
 
+    ph_grouped = {k: v for k, v in price_hist.groupby("종목코드")} if not price_hist.empty else {}
     techs = []
     for code in df["종목코드"].unique():
-        ph = price_hist[price_hist["종목코드"]==code].sort_values("날짜")
+        if code not in ph_grouped: continue
+        ph = ph_grouped[code].sort_values("날짜")
         if len(ph) < 5: continue
         close = ph["종가"].iloc[-1]
         ma20 = ph["종가"].rolling(20).mean().iloc[-1] if len(ph)>=20 else np.nan
@@ -940,11 +1009,16 @@ def calc_investor_strength(inv_df, daily, price_hist=None):
     """
     if inv_df.empty: return pd.DataFrame(columns=["종목코드", "수급강도", "외인순매수_20d", "기관순매수_20d"])
     res = []
+    
+    inv_grouped = {k: v for k, v in inv_df.groupby("종목코드")}
+    daily_mcap = daily.drop_duplicates("종목코드").set_index("종목코드")["시가총액"].to_dict()
+    ph_grouped = {k: v for k, v in price_hist.groupby("종목코드")} if price_hist is not None and not price_hist.empty else {}
+
     for code in inv_df["종목코드"].unique():
-        df_code = inv_df[inv_df["종목코드"]==code].sort_values("날짜", ascending=False).head(20)
+        if code not in inv_grouped: continue
+        df_code = inv_grouped[code].sort_values("날짜", ascending=False).head(20)
         f_sum, i_sum = df_code["외국인순매수"].sum(), df_code["기관순매수"].sum()
-        mcap = daily.loc[daily["종목코드"]==code, "시가총액"].values
-        mcap = mcap[0] if len(mcap) > 0 else np.nan
+        mcap = daily_mcap.get(code, np.nan)
         strength = ((f_sum + i_sum) / mcap) * 100 if pd.notna(mcap) and mcap > 0 else np.nan
 
         # ── 스마트머니 매집 연속성 ──
@@ -960,8 +1034,8 @@ def calc_investor_strength(inv_df, daily, price_hist=None):
 
         # ── VCP 신호 (가격 + 거래량 축소 동시 확인) ──
         vcp = 0
-        if price_hist is not None and not price_hist.empty:
-            ph = price_hist[price_hist["종목코드"]==code].sort_values("날짜")
+        if ph_grouped and code in ph_grouped:
+            ph = ph_grouped[code].sort_values("날짜")
             if len(ph) >= 60:
                 close_s = ph["종가"]
                 # 가격 CV(변동계수) 비교

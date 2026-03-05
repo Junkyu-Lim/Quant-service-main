@@ -37,7 +37,9 @@
       "Bash(pip index versions pykrx)",
       "WebFetch(domain:www.k-etf.com)",
       "mcp__context7__query-docs",
-      "mcp__context7__resolve-library-id"
+      "mcp__context7__resolve-library-id",
+      "Bash(TASKLIST /FI \"IMAGENAME eq python.exe\")",
+      "Bash(wmic process where \"name=''python.exe''\" get ProcessId,CommandLine)"
     ],
     "additionalDirectories": [
       "c:\\Users\\limjk\\.claude\\projects\\c--Users-limjk-Quant-service-main\\memory"

@@ -108,8 +108,10 @@ _SCHEMA_STATEMENTS = [
     scores_json   TEXT,
     model_used    TEXT,
     generated_date TEXT NOT NULL,
+    diff_html     TEXT,
     PRIMARY KEY (종목코드)
 )""",
+    "ALTER TABLE analysis_reports ADD COLUMN IF NOT EXISTS diff_html TEXT",
     """CREATE TABLE IF NOT EXISTS portfolio (
     종목코드      TEXT PRIMARY KEY,
     수량          INTEGER NOT NULL DEFAULT 0,
@@ -407,7 +409,7 @@ def load_dashboard_prev() -> pd.DataFrame:
 # ─────────────────────────────────────────────
 
 def save_report(code: str, name: str, html: str, scores_json: str,
-                 model: str, date: str):
+                 model: str, date: str, diff_html: str = None):
     with get_conn() as conn:
         # 기존 보고서가 있으면 히스토리에 보관
         cur = conn.execute(
@@ -427,9 +429,9 @@ def save_report(code: str, name: str, html: str, scores_json: str,
             )
         conn.execute(
             """INSERT OR REPLACE INTO analysis_reports
-               (종목코드, 종목명, report_html, scores_json, model_used, generated_date)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            [code, name, html, scores_json, model, date],
+               (종목코드, 종목명, report_html, scores_json, model_used, generated_date, diff_html)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            [code, name, html, scores_json, model, date, diff_html],
         )
     log.info("보고서 저장: %s %s (이전 버전 보관)", code, name)
 
