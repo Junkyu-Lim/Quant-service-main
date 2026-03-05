@@ -8,6 +8,7 @@ Usage:
     python run.py pipeline --test                   – Test mode (3 sample stocks)
     python run.py pipeline --skip-collect           – Screen only (CSV data must exist)
     python run.py pipeline --skip-investor          – Skip investor trading collection
+    python run.py update-prices                     – Update stock prices only (fast)
     python run.py collect                           – Run collector only
     python run.py collect --skip-investor           – Collect without investor trading
     python run.py screen                            – Run screener only
@@ -50,6 +51,11 @@ def cmd_collect(args):
     run_full(test_mode=args.test, skip_price_history=args.skip_price_history, skip_investor=args.skip_investor)
 
 
+def cmd_update_prices(args):
+    from pipeline import run_update_prices
+    run_update_prices()
+
+
 def cmd_screen(args):
     from quant_screener import run
     run()
@@ -72,6 +78,8 @@ def main():
     p_col.add_argument("--skip-price-history", action="store_true", help="Skip price history collection")
     p_col.add_argument("--skip-investor", action="store_true", help="Skip investor trading collection (외국인/기관 매매동향)")
 
+    sub.add_parser("update-prices", help="Update stock prices only (fast, no FnGuide crawling)")
+
     sub.add_parser("screen", help="Run screener only (requires existing CSVs)")
 
     args = parser.parse_args()
@@ -80,6 +88,7 @@ def main():
         "server": cmd_server,
         "pipeline": cmd_pipeline,
         "collect": cmd_collect,
+        "update-prices": cmd_update_prices,
         "screen": cmd_screen,
     }
     handler = commands.get(args.command)

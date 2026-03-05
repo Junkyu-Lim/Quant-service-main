@@ -19,3 +19,6 @@ Thumbs.db
 
 # IDE (VS Code 등) 설정 파일
 .vscode/
+
+# Windows 예약 장치 이름 (Git 처리 불가)
+NUL

@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 
 import db as _db
-from quant_collector_enhanced import run_full as collector_run, test_crawling
+from quant_collector_enhanced import run_full as collector_run, test_crawling, collect_daily, get_biz_day
 from quant_screener import (
     load_table,
     preprocess_indicators,
@@ -27,6 +27,69 @@ from quant_screener import (
 )
 
 log = logging.getLogger("PIPELINE")
+
+
+def run_update_prices():
+    """주가(종가/시총)만 빠르게 업데이트하고 스크리너를 재실행한다.
+    FnGuide 크롤링 없이 fdr로 시세만 갱신하므로 빠르다."""
+    start = datetime.now()
+    log.info("=== 주가 업데이트 시작 ===")
+
+    _db.init_db()
+    biz_day = get_biz_day()
+    log.info("기준 영업일: %s", biz_day)
+
+    # 1) 최신 종가 수집
+    daily = collect_daily(biz_day)
+    _db.save_df(daily, "daily", biz_day)
+    log.info("daily 저장 완료 (%d rows)", len(daily))
+
+    # 2) 기존 데이터 로드 + 스크리너 재실행
+    log.info("스크리너 재실행 중...")
+    master = load_table("master")
+    fs = load_table("financial_statements")
+    ind = load_table("indicators")
+    shares = load_table("shares")
+    price_hist = load_table("price_history")
+    inv = load_table("investor_trading")
+    index_hist = load_table("index_history")
+
+    ind = preprocess_indicators(ind)
+    multiplier = detect_unit_multiplier(ind)
+    anal_df = analyze_all(fs, ind)
+
+    full_df = calc_valuation(daily, anal_df, multiplier, shares)
+    full_df = calc_technical_indicators(
+        full_df, price_hist,
+        index_hist=index_hist if not index_hist.empty else None,
+        master=master if not master.empty else None,
+    )
+    full_df = full_df.merge(
+        calc_investor_strength(inv, daily, price_hist=price_hist if not price_hist.empty else None),
+        on="종목코드", how="left",
+    )
+
+    if not master.empty and "시장구분" in master.columns:
+        master_info = master[["종목코드", "시장구분", "종목구분"]].drop_duplicates("종목코드")
+        full_df = full_df.merge(master_info, on="종목코드", how="left")
+
+    if not shares.empty and "섹터" in shares.columns:
+        sector_map = shares[["종목코드", "섹터"]].drop_duplicates("종목코드")
+        full_df = full_df.merge(sector_map, on="종목코드", how="left")
+        sector_map_dict = sector_map.dropna(subset=["섹터"]).set_index("종목코드")["섹터"].to_dict()
+        mask = full_df["섹터"].isna() | (full_df["섹터"] == "")
+        if mask.any():
+            full_df.loc[mask, "섹터"] = full_df.loc[mask, "종목코드"].apply(
+                lambda c: sector_map_dict.get(c[:-1] + "0")
+            )
+
+    full_df = calc_strategy_scores(full_df)
+
+    _db.save_dashboard(full_df)
+    log.info("Dashboard 저장 완료 (%d rows)", len(full_df))
+
+    elapsed = datetime.now() - start
+    log.info("=== 주가 업데이트 완료 (%s) ===", elapsed)
 
 
 def run_pipeline(skip_collect: bool = False, test_mode: bool = False, skip_price_history: bool = False, skip_investor: bool = False, progress_callback=None):

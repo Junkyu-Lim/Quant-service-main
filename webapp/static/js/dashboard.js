@@ -1164,77 +1164,164 @@
     {
       key: "valuation", label: "밸류에이션",
       fields: [
-        { col: "PER",       label: "PER" },
-        { col: "PBR",       label: "PBR" },
-        { col: "PSR",       label: "PSR" },
-        { col: "PEG",       label: "PEG" },
-        { col: "괴리율(%)", label: "괴리율%" },
+        { col: "PER",             label: "PER" },
+        { col: "PBR",             label: "PBR" },
+        { col: "PSR",             label: "PSR" },
+        { col: "PEG",             label: "PEG" },
+        { col: "이익수익률(%)",   label: "이익수익률%" },
+        { col: "괴리율(%)",       label: "S-RIM 괴리%" },
+        { col: "적정주가_SRIM",   label: "적정주가(원)" },
       ]
     },
     {
       key: "profitability", label: "수익성",
       fields: [
-        { col: "ROE(%)",        label: "ROE%" },
-        { col: "영업이익률(%)", label: "영업이익률%" },
-        { col: "FCF수익률(%)",  label: "FCF수익률%" },
-        { col: "이익수익률(%)", label: "이익수익률%" },
+        { col: "ROE(%)",          label: "ROE%" },
+        { col: "ROIC(%)",         label: "ROIC%" },
+        { col: "ROIC_전년(%)",    label: "전년ROIC%" },
+        { col: "영업이익률(%)",   label: "영업이익률%" },
+        { col: "영업이익률_최근", label: "최근OP이익률" },
+        { col: "영업이익률_전년", label: "전년OP이익률" },
+        { col: "FCF수익률(%)",    label: "FCF수익률%" },
+        { col: "현금전환율(%)",   label: "현금전환율%" },
+        { col: "CAPEX비율(%)",    label: "CAPEX비율%" },
+        { col: "GPM_최근(%)",     label: "매출총이익률%" },
+        { col: "GPM_전년(%)",     label: "전년GPM%" },
+        { col: "GPM_변화(pp)",    label: "GPM변화(pp)" },
       ]
     },
     {
       key: "growth", label: "성장성",
       fields: [
-        { col: "매출_CAGR",           label: "매출CAGR%" },
-        { col: "영업이익_CAGR",       label: "OP CAGR%" },
-        { col: "순이익_CAGR",         label: "NP CAGR%" },
-        { col: "Q_영업이익_YoY(%)",   label: "Q OP YoY%" },
-        { col: "TTM_매출_YoY(%)",     label: "TTM 매출YoY%" },
+        { col: "매출_CAGR",             label: "매출CAGR%" },
+        { col: "영업이익_CAGR",         label: "OP CAGR%" },
+        { col: "순이익_CAGR",           label: "NP CAGR%" },
+        { col: "영업CF_CAGR",           label: "OCF CAGR%" },
+        { col: "FCF_CAGR",              label: "FCF CAGR%" },
+        { col: "Q_매출_YoY(%)",         label: "Q 매출YoY%" },
+        { col: "Q_영업이익_YoY(%)",     label: "Q OP YoY%" },
+        { col: "Q_순이익_YoY(%)",       label: "Q NP YoY%" },
+        { col: "TTM_매출_YoY(%)",       label: "TTM 매출YoY%" },
+        { col: "TTM_영업이익_YoY(%)",   label: "TTM OP YoY%" },
+        { col: "TTM_순이익_YoY(%)",     label: "TTM NP YoY%" },
+        { col: "영업이익_가속도",       label: "OP 가속도" },
+        { col: "매출_가속도",           label: "매출 가속도" },
+      ]
+    },
+    {
+      key: "consistency", label: "연속성",
+      fields: [
+        { col: "매출_연속성장",           label: "매출연속성장" },
+        { col: "영업이익_연속성장",       label: "OP연속성장" },
+        { col: "순이익_연속성장",         label: "NP연속성장" },
+        { col: "영업CF_연속성장",         label: "OCF연속성장" },
+        { col: "Q_매출_연속YoY성장",      label: "Q매출연속YoY" },
+        { col: "Q_영업이익_연속YoY성장",  label: "Q OP연속YoY" },
+        { col: "Q_순이익_연속YoY성장",    label: "Q NP연속YoY" },
+        { col: "실적가속_연속",           label: "실적가속연속" },
+        { col: "이익률_변동폭",           label: "이익률변동폭" },
+        { col: "데이터_연수",             label: "데이터연수" },
       ]
     },
     {
       key: "stability", label: "안정성",
       fields: [
-        { col: "F스코어",      label: "F-Score" },
-        { col: "부채비율(%)",  label: "부채비율%" },
-        { col: "부채상환능력", label: "이자보상배율" },
+        { col: "F스코어",        label: "F-Score" },
+        { col: "부채비율(%)",    label: "부채비율%" },
+        { col: "유동비율(%)",    label: "유동비율%" },
+        { col: "부채상환능력",   label: "부채상환능력" },
+        { col: "이자보상배율",   label: "이자보상배율" },
       ]
     },
     {
       key: "technical", label: "기술적",
       fields: [
-        { col: "RSI_14",           label: "RSI(14)" },
-        { col: "수급강도",         label: "수급강도" },
-        { col: "MA20_이격도(%)",   label: "MA20%" },
-        { col: "52주_최저대비(%)", label: "52주 최저대비%" },
-        { col: "변동성_60일(%)",   label: "변동성(60일)%" },
+        { col: "RSI_14",             label: "RSI(14)" },
+        { col: "수급강도",           label: "수급강도" },
+        { col: "MA20_이격도(%)",     label: "MA20 이격%" },
+        { col: "MA60_이격도(%)",     label: "MA60 이격%" },
+        { col: "52주_최저대비(%)",   label: "52주최저대비%" },
+        { col: "52주_최고대비(%)",   label: "52주최고대비%" },
+        { col: "변동성_60일(%)",     label: "변동성(60일)%" },
+        { col: "거래대금_20일평균",  label: "거래대금(20일)", unit: 1e8 },
+        { col: "거래대금_증감(%)",   label: "거래대금증감%" },
+      ]
+    },
+    {
+      key: "supply", label: "수급",
+      fields: [
+        { col: "외인순매수_20d",   label: "외인순매수(20d)" },
+        { col: "기관순매수_20d",   label: "기관순매수(20d)" },
+        { col: "스마트머니_승률",  label: "스마트머니승률" },
+        { col: "양매수_비율",      label: "양매수비율" },
+        { col: "RS_60d",           label: "RS 60일" },
+        { col: "RS_120d",          label: "RS 120일" },
+        { col: "RS_250d",          label: "RS 250일" },
+        { col: "Composite_RS",     label: "종합RS" },
+        { col: "RS_등급",          label: "RS등급" },
       ]
     },
     {
       key: "dividend", label: "배당",
       fields: [
-        { col: "배당수익률(%)", label: "배당수익률%" },
-        { col: "DPS_CAGR",     label: "DPS CAGR%" },
-        { col: "배당_연속증가", label: "배당연속증가" },
-        { col: "배당성향(%)",   label: "배당성향%" },
-        { col: "ROIC(%)",       label: "ROIC%" },
-        { col: "현금전환율(%)", label: "현금전환율%" },
+        { col: "배당수익률(%)",      label: "배당수익률%" },
+        { col: "DPS_CAGR",           label: "DPS CAGR%" },
+        { col: "배당_연속증가",      label: "배당연속증가" },
+        { col: "배당성향(%)",        label: "배당성향%" },
+        { col: "배당_수익동반증가",  label: "수익동반증가" },
+      ]
+    },
+    {
+      key: "turnaround", label: "턴어라운드",
+      fields: [
+        { col: "흑자전환",          label: "흑자전환" },
+        { col: "이익률_개선",       label: "이익률개선" },
+        { col: "이익률_급개선",     label: "이익률급개선" },
+        { col: "ROIC_개선",         label: "ROIC개선" },
+        { col: "퀄리티_턴어라운드", label: "퀄리티턴어라운드" },
+        { col: "VCP_신호",          label: "VCP신호" },
       ]
     },
     {
       key: "market", label: "시가총액 / 점수",
       fields: [
-        { col: "시가총액", label: "시가총액(억)", unit: 1e8 },
-        { col: "종합점수", label: "종합점수" },
+        { col: "시가총액",         label: "시가총액(억)", unit: 1e8 },
+        { col: "종합점수",         label: "종합점수" },
+        { col: "성장성_점수",      label: "성장성점수" },
+        { col: "안정성_점수",      label: "안정성점수" },
+        { col: "가격_점수",        label: "가격점수" },
+        { col: "주도주_점수",      label: "주도주점수" },
+        { col: "우량가치_점수",    label: "우량가치점수" },
+        { col: "고성장_점수",      label: "고성장점수" },
+        { col: "현금배당_점수",    label: "현금배당점수" },
+        { col: "턴어라운드_점수",  label: "턴어라운드점수" },
+        { col: "전략수",           label: "통과전략수" },
       ]
     },
     {
-      key: "forward", label: "Forward 추정치 ⚠️",
+      key: "fundamental", label: "재무 규모",
       fields: [
-        { col: "Fwd_PER",                label: "Fwd PER" },
-        { col: "Fwd_PBR",                label: "Fwd PBR" },
-        { col: "Fwd_ROE(%)",             label: "Fwd ROE%" },
-        { col: "Fwd_OPM(%)",             label: "Fwd OPM%" },
-        { col: "Fwd_영업이익_성장률(%)", label: "Fwd OP성장%" },
-        { col: "Fwd_매출_성장률(%)",     label: "Fwd 매출성장%" },
+        { col: "TTM_매출",      label: "TTM매출(억)",  unit: 1e8 },
+        { col: "TTM_영업이익",  label: "TTM OP(억)",   unit: 1e8 },
+        { col: "TTM_순이익",    label: "TTM NP(억)",   unit: 1e8 },
+        { col: "TTM_영업CF",    label: "TTM OCF(억)",  unit: 1e8 },
+        { col: "TTM_FCF",       label: "TTM FCF(억)",  unit: 1e8 },
+        { col: "자본",          label: "자본(억)",     unit: 1e8 },
+        { col: "부채",          label: "부채(억)",     unit: 1e8 },
+      ]
+    },
+    {
+      key: "forward", label: "Forward 추정치",
+      fields: [
+        { col: "Fwd_PER",                  label: "Fwd PER" },
+        { col: "Fwd_PBR",                  label: "Fwd PBR" },
+        { col: "Fwd_ROE(%)",               label: "Fwd ROE%" },
+        { col: "Fwd_OPM(%)",               label: "Fwd OPM%" },
+        { col: "Fwd_영업이익_성장률(%)",   label: "Fwd OP성장%" },
+        { col: "Fwd_매출_성장률(%)",       label: "Fwd 매출성장%" },
+        { col: "Fwd_순이익_성장률(%)",     label: "Fwd NP성장%" },
+        { col: "Fwd_2yr_영업이익_성장(%)", label: "Fwd 2yr OP성장%" },
+        { col: "컨센서스_커버리지",        label: "커버리지" },
       ]
     },
   ];
@@ -2188,8 +2275,10 @@
       const vals     = columnFilters[f.col] || { min: "", max: "" };
       const isActive = vals.min !== "" || vals.max !== "";
       const unitNote = f.unit ? ` (억)` : "";
+      const tipText  = METRIC_TOOLTIPS[f.col] || "";
+      const tipAttr  = tipText ? ` data-tip="${tipText.replace(/"/g, '&quot;')}"` : "";
       return `<div class="adv-filter-row${isActive ? " adv-filter-row--active" : ""}">
-        <span class="adv-filter-label" title="${f.col}">${f.label}${unitNote}</span>
+        <span class="adv-filter-label" title="${f.col}"${tipAttr}>${f.label}${unitNote}</span>
         <input type="number" step="any" class="adv-filter-input" data-col="${f.col}" data-type="min"
           value="${vals.min}" placeholder="최솟값">
         <span class="adv-filter-sep">~</span>
@@ -2529,8 +2618,42 @@
       const res = await fetch("/api/portfolio");
       portfolioData = await res.json();
       updatePortfolioCount();
+      await loadCashBalance();
       return portfolioData;
     } catch (e) { console.error("loadPortfolio:", e); return null; }
+  }
+
+  async function loadCashBalance() {
+    try {
+      const res = await fetch("/api/portfolio/cash");
+      if (!res.ok) return;
+      const data = await res.json();
+      const input = document.getElementById("input-cash-balance");
+      if (input && data.amount > 0) input.value = data.amount;
+    } catch (e) { console.error("loadCashBalance:", e); }
+  }
+
+  async function saveCashBalance() {
+    const input = document.getElementById("input-cash-balance");
+    if (!input) return;
+    const amount = parseFloat(input.value) || 0;
+    try {
+      const res = await fetch("/api/portfolio/cash", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount }),
+      });
+      if (!res.ok) throw new Error("저장 실패");
+      // 저장 후 portfolioData summary 갱신
+      if (portfolioData && portfolioData.summary) {
+        portfolioData.summary["예수금"] = amount;
+        portfolioData.summary["총자산"] = (portfolioData.summary["총평가금액"] || 0) + amount;
+        portfolioData["예수금"] = amount;
+      }
+      renderPortfolioSummary();
+    } catch (e) {
+      alert("예수금 저장 중 오류: " + e.message);
+    }
   }
 
   function updatePortfolioCount() {
@@ -2554,10 +2677,20 @@
     const s = portfolioData.summary;
     const plClass = s.총수익금액 >= 0 ? "val-pos" : "val-neg";
     const plSign  = s.총수익금액 >= 0 ? "+" : "";
+    const cash = s["예수금"] || 0;
+    const totalAssets = s["총자산"] || s.총평가금액 || 0;
+    const cashPct = totalAssets > 0 ? (cash / totalAssets * 100).toFixed(1) : "0.0";
+    const cashHtml = cash > 0
+      ? `<span class="mx-1 text-muted">|</span>
+         <span class="text-muted small">💰 예수금 ${Math.round(cash).toLocaleString("ko-KR")}원 (${cashPct}%)</span>
+         <span class="mx-1 text-muted">|</span>
+         <span class="fw-bold text-secondary">총자산 ${Math.round(totalAssets).toLocaleString("ko-KR")}원</span>`
+      : "";
     statsEl.innerHTML = `
-      <span class="fw-bold">총평가 <span class="fs-6">${Math.round(s.총평가금액).toLocaleString("ko-KR")}</span>원</span>
+      <span class="fw-bold">주식평가 <span class="fs-6">${Math.round(s.총평가금액).toLocaleString("ko-KR")}</span>원</span>
       <span class="mx-1 text-muted">|</span>
       <span class="${plClass} fw-bold">${plSign}${Math.round(s.총수익금액).toLocaleString("ko-KR")}원 (${plSign}${s.총수익률.toFixed(2)}%)</span>
+      ${cashHtml}
       <span class="mx-1 text-muted">|</span>
       <span class="text-muted small">${s.종목수}종목</span>`;
 
@@ -2698,7 +2831,7 @@
 
   async function savePortfolioEntry() {
     const code  = (document.getElementById("pf-code").value || "").trim().padStart(6, "0");
-    const qty   = parseInt(document.getElementById("pf-qty").value);
+    const qty   = parseFloat(document.getElementById("pf-qty").value);
     const price = parseFloat(document.getElementById("pf-price").value);
     const date  = document.getElementById("pf-date").value;
     const memo  = document.getElementById("pf-memo").value.trim();
@@ -2826,6 +2959,14 @@
     openPortfolioAdd("", "");
   });
 
+  // 예수금 저장 버튼
+  document.getElementById("btn-save-cash")?.addEventListener("click", saveCashBalance);
+
+  // 예수금 입력창 엔터키
+  document.getElementById("input-cash-balance")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") saveCashBalance();
+  });
+
   // 포트폴리오 모달: 종목코드 입력 시 종목명/종목구분 자동 조회
   document.getElementById("pf-code")?.addEventListener("blur", async function () {
     const raw = this.value.trim();
@@ -2932,6 +3073,26 @@
   // ─── 포트폴리오 AI 분석 ────────────────────────────────────────────
   let _pfAnalysisInProgress = false;
 
+  async function loadPortfolioAnalysisHistory() {
+    const selectEl = document.getElementById("pf-report-history-select");
+    if (!selectEl) return;
+    try {
+      const res = await fetch("/api/portfolio/analysis/history");
+      if (!res.ok) return;
+      const { history } = await res.json();
+      if (!history || history.length <= 1) {
+        selectEl.style.display = "none";
+        return;
+      }
+      selectEl.style.display = "";
+      selectEl.innerHTML = history.map((h, i) =>
+        `<option value="${h.id}">${i === 0 ? "최신 " : ""}${h.generated_date} (${h.model_used || "AI"})</option>`
+      ).join("");
+    } catch (e) {
+      selectEl.style.display = "none";
+    }
+  }
+
   async function requestPortfolioAnalysis(forceRegenerate) {
     if (_pfAnalysisInProgress) {
       alert("포트폴리오 AI 분석이 이미 진행 중입니다. 완료 후 다시 시도해주세요.");
@@ -2939,13 +3100,12 @@
     }
     _pfAnalysisInProgress = true;
     const pfAnalysisBtn = document.getElementById("btn-portfolio-analysis");
-    const pfReanalyzeBtn = document.getElementById("btn-pf-reanalyze");
     if (pfAnalysisBtn) pfAnalysisBtn.disabled = true;
-    if (pfReanalyzeBtn) pfReanalyzeBtn.disabled = true;
 
     const modalEl = document.getElementById("portfolio-report-modal");
     const reportModal = bootstrap.Modal.getOrCreateInstance(modalEl);
     reportModal.show();
+    loadPortfolioAnalysisHistory();
 
     const loadingEl   = document.getElementById("pf-report-loading");
     const contentEl   = document.getElementById("pf-report-content");
@@ -3066,9 +3226,26 @@
     } finally {
       _pfAnalysisInProgress = false;
       if (pfAnalysisBtn) pfAnalysisBtn.disabled = false;
-      if (pfReanalyzeBtn) pfReanalyzeBtn.disabled = false;
+      loadPortfolioAnalysisHistory();
     }
   }
+
+  document.getElementById("pf-report-history-select")?.addEventListener("change", async function () {
+    const reportId = this.value;
+    if (!reportId) return;
+    const contentEl = document.getElementById("pf-report-content");
+    const metaEl = document.getElementById("pf-report-meta");
+    try {
+      const res = await fetch(`/api/portfolio/analysis/${reportId}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      contentEl.innerHTML = data.report_html || "";
+      metaEl.textContent = (data.model || "") + " · " + (data.generated_date || "") + " (이력)";
+      _renderPortfolioCharts(data.scores);
+    } catch (e) {
+      contentEl.innerHTML = '<div class="alert alert-danger">이력 보고서 로드 실패</div>';
+    }
+  });
 
   document.getElementById("btn-portfolio-analysis")?.addEventListener("click", () => {
     if (!portfolioData || !portfolioData.items || !portfolioData.items.length) {
@@ -3082,12 +3259,10 @@
     requestPortfolioAnalysis(true);
   });
 
-  document.getElementById("btn-pf-reanalyze")?.addEventListener("click", () => {
-    requestPortfolioAnalysis(true);
-  });
-
   document.getElementById("btn-pf-pdf")?.addEventListener("click", () => {
+    document.body.classList.add("printing-portfolio");
     window.print();
+    document.body.classList.remove("printing-portfolio");
   });
 
   // 재무 차트 연간/분기 토글
@@ -3118,7 +3293,11 @@
       requestAnalysis(this.dataset.code, this.dataset.mode, true);
     }
   });
-  document.getElementById("btn-pdf").addEventListener("click", () => window.print());
+  document.getElementById("btn-pdf").addEventListener("click", () => {
+    document.body.classList.add("printing-report");
+    window.print();
+    document.body.classList.remove("printing-report");
+  });
 
   // 분석 가이드 버튼
   document.getElementById("btn-strategy-guide").addEventListener("click", () => {

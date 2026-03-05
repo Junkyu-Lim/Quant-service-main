@@ -198,6 +198,78 @@ def collect_master() -> pd.DataFrame:
 # 2. 일별 시세 + 펀더멘털
 # ═════════════════════════════════════════════
 
+def _fetch_naver_all_prices() -> pd.DataFrame:
+    """네이버 금융 시가총액 페이지에서 전종목 종가/시총을 벌크로 수집한다.
+    fdr.StockListing('KRX') 실패 시 fallback으로 사용. (~10초)"""
+    import requests
+    from bs4 import BeautifulSoup
+
+    headers = {"User-Agent": "Mozilla/5.0"}
+    all_items = []
+
+    for sosok in [0, 1]:  # 0=KOSPI, 1=KOSDAQ
+        # 첫 페이지에서 총 페이지 수 확인
+        url = f"https://finance.naver.com/sise/sise_market_sum.nhn?sosok={sosok}&page=1"
+        resp = requests.get(url, headers=headers, timeout=10)
+        resp.encoding = "euc-kr"
+        soup = BeautifulSoup(resp.text, "html.parser")
+        paging = soup.select("td.pgRR a")
+        last_page = int(paging[0]["href"].split("page=")[-1]) if paging else 1
+
+        for page in range(1, last_page + 1):
+            url = f"https://finance.naver.com/sise/sise_market_sum.nhn?sosok={sosok}&page={page}"
+            resp = requests.get(url, headers=headers, timeout=10)
+            resp.encoding = "euc-kr"
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            for row in soup.select("table.type_2 tbody tr"):
+                tds = row.select("td")
+                if len(tds) < 7:
+                    continue
+                name_tag = tds[1].select_one("a")
+                if not name_tag:
+                    continue
+                code = name_tag["href"].split("=")[-1]
+                price_text = tds[2].text.strip().replace(",", "")
+                try:
+                    price = float(price_text)
+                except (ValueError, TypeError):
+                    continue
+                all_items.append({
+                    "종목코드": code,
+                    "종가": price,
+                })
+
+    log.info(f"  → 네이버 금융에서 {len(all_items)}개 종목 시세 수집 완료")
+    return pd.DataFrame(all_items)
+
+
+def _update_prices_via_naver(df: pd.DataFrame) -> pd.DataFrame:
+    """fdr.StockListing 실패 시, 네이버 금융 벌크 크롤링으로
+    DB 캐시 DataFrame의 종가/시가총액을 최신화한다."""
+    naver_df = _fetch_naver_all_prices()
+    if naver_df.empty:
+        log.warning("  ⚠️ 네이버 금융 크롤링도 실패 — DB 캐시 그대로 사용")
+        return df
+
+    price_map = naver_df.set_index("종목코드")["종가"].to_dict()
+
+    updated = 0
+    for idx, row in df.iterrows():
+        code = row["종목코드"]
+        if code in price_map:
+            df.at[idx, "종가"] = price_map[code]
+            # 시총은 종가 × 상장주식수로 재계산 (네이버 시총 단위가 불안정하므로)
+            if "시가총액" in df.columns and "상장주식수" in df.columns:
+                shares = safe_float(row.get("상장주식수"))
+                if shares:
+                    df.at[idx, "시가총액"] = price_map[code] * shares
+            updated += 1
+
+    log.info(f"  → 네이버 종가 업데이트: {updated}/{len(df)}개 종목")
+    return df
+
+
 def collect_daily(biz_day: str) -> pd.DataFrame:
     """FinanceDataReader를 이용한 시세 + 펀더멘털 수집"""
     # biz_day 포맷 변경 (YYYYMMDD -> YYYY-MM-DD) 필요 시 변환, 
@@ -211,12 +283,15 @@ def collect_daily(biz_day: str) -> pd.DataFrame:
     try:
         df_krx = fdr.StockListing('KRX')
     except Exception as e:
-        log.warning(f"  ⚠️ fdr.StockListing 실패: {e} — DB 캐시에서 로드합니다.")
+        log.warning(f"  ⚠️ fdr.StockListing 실패: {e} — 네이버 금융에서 최신 종가 수집 시도...")
         import db as _db
         df_krx = _db.load_latest("daily")
         if df_krx.empty:
             raise RuntimeError("KRX 시세 수집 실패 및 DB 캐시 없음") from e
-        log.info(f"  → DB 캐시 사용: {len(df_krx)}개 종목")
+        # 네이버 금융 벌크 크롤링으로 종가/시총 최신화
+        df_krx = _update_prices_via_naver(df_krx)
+        log.info(f"  → DB 캐시 + 네이버 최신 종가 업데이트: {len(df_krx)}개 종목")
+        df_krx["기준일"] = biz_day
         return df_krx
     
     # 컬럼 이름이 한글/영문 혼용될 수 있어 정리

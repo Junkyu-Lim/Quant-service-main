@@ -82,12 +82,24 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
   padding: 6px 10px; border-radius: 6px;
   border: 1px solid #dee2e6; background: #fff;
   transition: border-color .15s, background .15s;
+  position: relative; overflow: visible;
 }
 .adv-filter-row--active { border-color: #0d6efd !important; background: #eef3ff !important; }
 .adv-filter-label {
   font-size: .73rem; font-weight: 600; color: #495057;
   min-width: 72px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  position: relative; cursor: default;
 }
+.adv-filter-label[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute; left: 0; top: 100%; margin-top: 4px;
+  background: #212529; color: #fff; font-size: .68rem; font-weight: 400;
+  padding: 5px 8px; border-radius: 5px;
+  pointer-events: none; opacity: 0; transition: opacity .15s;
+  z-index: 1060; max-width: 280px; white-space: normal; line-height: 1.35;
+  box-shadow: 0 2px 8px rgba(0,0,0,.2);
+}
+.adv-filter-label[data-tip]:hover::after { opacity: 1; }
 .adv-filter-input {
   width: 68px !important; font-size: .7rem !important; padding: 2px 5px !important;
   border: 1px solid #ced4da; border-radius: 4px; background: #f8f9fa; text-align: center;
@@ -165,6 +177,33 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .catalyst-section h4 { color: #1e8449; }
 .risk-list, .catalyst-list { padding-left: 18px; margin: 0; }
 .risk-item, .catalyst-item { font-size: .83rem; line-height: 1.7; }
+
+/* ── Grand Master Report: Recent News & Disclosures ── */
+.news-section {
+  background: #f8f9ff; border: 1px solid #d6dce4; border-radius: 8px;
+  padding: 16px 20px; margin-bottom: 20px;
+}
+.news-grid { display: flex; flex-direction: column; gap: 12px; }
+.news-card {
+  background: #fff; border: 1px solid #e9ecef; border-radius: 6px;
+  padding: 12px 16px; transition: box-shadow .2s;
+}
+.news-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+.news-card-header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 6px;
+}
+.news-impact-badge {
+  font-size: .7rem; font-weight: 700; padding: 2px 10px;
+  border-radius: 10px; display: inline-block;
+}
+.impact-positive { background: #d5f5e3; color: #1e8449; }
+.impact-negative { background: #fadbd8; color: #c0392b; }
+.impact-neutral { background: #ebedef; color: #6c757d; }
+.news-date { font-size: .72rem; color: #adb5bd; }
+.news-title { font-size: .85rem; font-weight: 600; color: #2c3e50; margin-bottom: 4px; }
+.news-summary { font-size: .82rem; line-height: 1.6; color: #555; }
+.news-source { font-size: .7rem; color: #adb5bd; margin-top: 4px; }
 
 .report-footer {
   display: flex; justify-content: space-between;
@@ -256,6 +295,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
   .stage-card { break-inside: avoid; }
   .business-identity-box { break-inside: avoid; }
   .action-plan-box { break-inside: avoid; }
+  .news-card { break-inside: avoid; }
 }
 
 /* ── Score Breakdown ── */
@@ -303,16 +343,29 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 /* ── Print Styles (PDF 저장) ── */
 @media print {
   body * { visibility: hidden; }
-  #report-modal .modal-body,
-  #report-modal .modal-body * { visibility: visible; }
-  #report-modal .modal-body {
+
+  /* 종목 분석 보고서 인쇄 */
+  body.printing-report #report-modal .modal-body,
+  body.printing-report #report-modal .modal-body * { visibility: visible; }
+  body.printing-report #report-modal .modal-body {
     position: absolute; left: 0; top: 0; width: 100%;
     padding: 20px; margin: 0;
   }
-  #report-modal .modal-dialog { max-width: 100%; margin: 0; }
-  #report-modal .modal-content { border: none; box-shadow: none; }
+  body.printing-report #report-modal .modal-dialog { max-width: 100%; margin: 0; }
+  body.printing-report #report-modal .modal-content { border: none; box-shadow: none; }
+
+  /* 포트폴리오 분석 보고서 인쇄 */
+  body.printing-portfolio #portfolio-report-modal .modal-body,
+  body.printing-portfolio #portfolio-report-modal .modal-body * { visibility: visible; }
+  body.printing-portfolio #portfolio-report-modal .modal-body {
+    position: absolute; left: 0; top: 0; width: 100%;
+    padding: 20px; margin: 0;
+  }
+  body.printing-portfolio #portfolio-report-modal .modal-dialog { max-width: 100%; margin: 0; }
+  body.printing-portfolio #portfolio-report-modal .modal-content { border: none; box-shadow: none; }
+
   .modal-header, .modal-footer, .modal-backdrop,
-  .btn-close, #report-loading { display: none !important; }
+  .btn-close, #report-loading, #pf-report-loading { display: none !important; }
   .analysis-report { break-inside: avoid; }
   .master-card { break-inside: avoid; }
 }
@@ -476,8 +529,8 @@ tr.row-new { background-color: rgba(25, 135, 84, 0.04) !important; }
   padding: 1px 4px !important;
   line-height: 1.2;
 }
-#portfolio-summary-bar .val-pos { color: #dc3545; font-weight: 600; }
-#portfolio-summary-bar .val-neg { color: #0d6efd; font-weight: 600; }
+#portfolio-summary-bar .val-pos { color: #198754; font-weight: 600; }
+#portfolio-summary-bar .val-neg { color: #dc3545; font-weight: 600; }
 
 /* 포트폴리오 분석 프로그레스바 */
 .pf-progress-wrap {

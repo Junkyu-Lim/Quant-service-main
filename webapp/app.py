@@ -601,18 +601,24 @@ def _build_portfolio_response(entries, df, supp):
 @app.route("/api/portfolio", methods=["GET"])
 def api_portfolio():
     """포트폴리오 목록 + 현재가/수익률/비중 계산"""
+    cash_balance = _db.load_cash()
     entries = _db.load_portfolio()
     if not entries:
         return jsonify({
             "items": [],
             "summary": {"총매입금액": 0, "총평가금액": 0, "총수익금액": 0,
-                         "총수익률": 0, "종목수": 0},
+                         "총수익률": 0, "종목수": 0, "예수금": cash_balance},
             "섹터별": [],
+            "예수금": cash_balance,
         })
 
     df = _load_data()
     supp = _db.load_price_supplement()
-    return jsonify(_build_portfolio_response(entries, df, supp))
+    res = _build_portfolio_response(entries, df, supp)
+    res["예수금"] = cash_balance
+    res["summary"]["예수금"] = cash_balance
+    res["summary"]["총자산"] = res["summary"]["총평가금액"] + cash_balance
+    return jsonify(res)
 
 
 @app.route("/api/portfolio", methods=["POST"])
@@ -624,16 +630,45 @@ def api_portfolio_add():
         return jsonify({"error": "종목코드가 필요합니다."}), 400
     code = code.zfill(6)
     try:
-        qty = int(body.get("수량", body.get("qty", 0)))
+        qty = float(body.get("수량", body.get("qty", 0)))
         price = float(body.get("평균매입가", body.get("price", 0)))
     except (ValueError, TypeError):
         return jsonify({"error": "수량과 매입가는 숫자여야 합니다."}), 400
     buy_date = body.get("매입일", body.get("date", ""))
-    memo = body.get("메모", body.get("memo", ""))
+    memo = (body.get("메모", body.get("memo", "")) or "")[:200]
     if qty <= 0 or price <= 0:
         return jsonify({"error": "수량과 매입가는 0보다 커야 합니다."}), 400
+    # 종목코드 존재 확인
+    df = _db.load_dashboard()
+    supp = _db.load_price_supplement()
+    code_known = (
+        (not df.empty and code in df["종목코드"].values)
+        or code in supp
+        or code in config.ETF_METADATA
+    )
+    if not code_known:
+        return jsonify({"error": f"종목코드 {code}를 DB에서 찾을 수 없습니다. 데이터 수집 후 다시 시도하세요."}), 404
     _db.upsert_portfolio_item(code, qty, price, buy_date, memo)
     return jsonify({"status": "ok", "종목코드": code})
+
+
+@app.route("/api/portfolio/cash", methods=["GET"])
+def api_portfolio_cash_get():
+    """예수금 조회"""
+    return jsonify({"amount": _db.load_cash()})
+
+
+@app.route("/api/portfolio/cash", methods=["POST"])
+def api_portfolio_cash_post():
+    """예수금 저장"""
+    body = request.get_json(silent=True) or {}
+    amount = body.get("amount", 0)
+    try:
+        amount = float(amount)
+    except (TypeError, ValueError):
+        return jsonify({"error": "amount must be a number"}), 400
+    _db.save_cash(amount)
+    return jsonify({"status": "ok", "amount": amount})
 
 
 @app.route("/api/portfolio/<code>", methods=["PUT"])
@@ -642,12 +677,12 @@ def api_portfolio_update(code: str):
     code = code.zfill(6)
     body = request.get_json(silent=True) or {}
     try:
-        qty = int(body.get("수량", body.get("qty", 0)))
+        qty = float(body.get("수량", body.get("qty", 0)))
         price = float(body.get("평균매입가", body.get("price", 0)))
     except (ValueError, TypeError):
         return jsonify({"error": "수량과 매입가는 숫자여야 합니다."}), 400
     buy_date = body.get("매입일", body.get("date", ""))
-    memo = body.get("메모", body.get("memo", ""))
+    memo = (body.get("메모", body.get("memo", "")) or "")[:200]
     if qty <= 0 or price <= 0:
         return jsonify({"error": "수량과 매입가는 0보다 커야 합니다."}), 400
     _db.upsert_portfolio_item(code, qty, price, buy_date, memo)
@@ -663,7 +698,8 @@ def api_portfolio_delete(code: str):
 
 # ── Portfolio AI Analysis ─────────────────────────────────────────────
 
-def _portfolio_hash(entries: list[dict], watchlist_codes: list[str] | None = None) -> str:
+def _portfolio_hash(entries: list[dict], watchlist_codes: list[str] | None = None,
+                    cash: float = 0) -> str:
     """포트폴리오 구성의 해시 생성 (캐시 무효화 판단용)"""
     import hashlib
     parts = sorted(
@@ -672,7 +708,31 @@ def _portfolio_hash(entries: list[dict], watchlist_codes: list[str] | None = Non
     )
     if watchlist_codes:
         parts.append("wl:" + ",".join(sorted(watchlist_codes)))
+    if cash:
+        parts.append(f"cash:{int(cash)}")
     return hashlib.md5("|".join(parts).encode()).hexdigest()
+
+
+@app.route("/api/portfolio/analysis/history", methods=["GET"])
+def api_portfolio_analysis_history():
+    """포트폴리오 분석 이력 목록 조회"""
+    history = _db.load_portfolio_analysis_history()
+    return jsonify({"history": history})
+
+
+@app.route("/api/portfolio/analysis/<int:report_id>", methods=["GET"])
+def api_portfolio_analysis_by_id(report_id: int):
+    """특정 포트폴리오 분석 보고서 조회"""
+    row = _db.load_portfolio_analysis_by_id(report_id)
+    if row is None:
+        return jsonify({"error": "보고서를 찾을 수 없습니다."}), 404
+    return jsonify({
+        "report_html": row.get("report_html", ""),
+        "scores": json.loads(row.get("scores_json") or "{}"),
+        "model": row.get("model_used", ""),
+        "generated_date": row.get("generated_date", ""),
+        "saved_at": row.get("saved_at", ""),
+    })
 
 
 @app.route("/api/portfolio/analysis", methods=["GET"])
@@ -713,6 +773,9 @@ def api_portfolio_analysis_post():
     # 요청 body에서 워치리스트 코드 파싱
     body = request.get_json(silent=True) or {}
     watchlist_codes = [str(c).strip().zfill(6) for c in body.get("watchlist_codes", []) if c]
+
+    # 예수금 조회
+    cash_balance = _db.load_cash()
 
     try:
         df = _load_data()
@@ -765,12 +828,13 @@ def api_portfolio_analysis_post():
             portfolio_items, stock_data, ai_reports,
             watchlist_data=watchlist_data or None,
             correlation_data=correlation_data,
+            cash_balance=cash_balance,
         )
         if "error" not in result:
             _db.save_portfolio_analysis(
                 html=result.get("report_html", ""),
                 scores_json=json.dumps(result.get("scores", {}), ensure_ascii=False),
-                portfolio_hash=_portfolio_hash(entries),
+                portfolio_hash=_portfolio_hash(entries, cash=cash_balance),
                 model=result.get("model", ""),
                 date=result.get("generated_date", ""),
             )

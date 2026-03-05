@@ -141,12 +141,19 @@ _SCHEMA_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_history_code ON analysis_reports_history (종목코드, generated_date DESC)",
     """CREATE SEQUENCE IF NOT EXISTS seq_report_history START 1""",
     """CREATE TABLE IF NOT EXISTS portfolio_analysis (
-    id              INTEGER PRIMARY KEY DEFAULT 1,
+    id              INTEGER PRIMARY KEY,
     report_html     TEXT,
     scores_json     TEXT,
     portfolio_hash  TEXT,
     model_used      TEXT,
-    generated_date  TEXT NOT NULL
+    generated_date  TEXT NOT NULL,
+    saved_at        TEXT
+)""",
+    """CREATE SEQUENCE IF NOT EXISTS seq_portfolio_analysis START 1""",
+    """CREATE TABLE IF NOT EXISTS portfolio_cash (
+    id         INTEGER PRIMARY KEY DEFAULT 1,
+    amount     DOUBLE NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
 )""",
     """CREATE TABLE IF NOT EXISTS dashboard_result (
     종목코드      TEXT PRIMARY KEY,
@@ -250,10 +257,14 @@ def get_conn():
     """DuckDB 연결 컨텍스트 매니저 — with get_conn() as conn: 패턴으로 사용"""
     conn = duckdb.connect(str(config.DB_PATH))
     try:
+        conn.begin()
         yield conn
         conn.commit()
     except Exception:
-        conn.rollback()
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         raise
     finally:
         conn.close()
@@ -263,6 +274,16 @@ def init_db():
     with get_conn() as conn:
         for stmt in _SCHEMA_STATEMENTS:
             conn.execute(stmt)
+        # portfolio_analysis 테이블 마이그레이션: saved_at 컬럼 추가
+        try:
+            cols = [r[0] for r in conn.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name='portfolio_analysis'"
+            ).fetchall()]
+            if "saved_at" not in cols:
+                conn.execute("ALTER TABLE portfolio_analysis ADD COLUMN saved_at TEXT")
+                log.info("portfolio_analysis: saved_at 컬럼 추가")
+        except Exception as e:
+            log.warning("portfolio_analysis 마이그레이션 실패: %s", e)
     log.info("DB 초기화 완료: %s", config.DB_PATH)
 
 
@@ -550,25 +571,91 @@ def delete_portfolio_item(code: str):
     log.info("포트폴리오 삭제: %s", code)
 
 
+def load_cash() -> float:
+    """예수금(현금) 잔고 조회. 미설정 시 0 반환."""
+    with get_conn() as conn:
+        row = conn.execute("SELECT amount FROM portfolio_cash WHERE id = 1").fetchone()
+        return float(row[0]) if row else 0.0
+
+
+def save_cash(amount: float):
+    """예수금(현금) 잔고 저장."""
+    from datetime import datetime
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO portfolio_cash (id, amount, updated_at)
+               VALUES (1, ?, ?)""",
+            [max(0.0, float(amount)), now],
+        )
+    log.info("예수금 저장: %.0f원", amount)
+
+
 def save_portfolio_analysis(html: str, scores_json: str, portfolio_hash: str,
                             model: str, date: str):
-    """포트폴리오 분석 보고서 저장 (1건만 유지)"""
+    """포트폴리오 분석 보고서 저장 (최대 5건 이력 유지)"""
+    from datetime import datetime
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with get_conn() as conn:
-        conn.execute("DELETE FROM portfolio_analysis")
+        new_id = conn.execute(
+            "SELECT COALESCE(MAX(id), 0) + 1 FROM portfolio_analysis"
+        ).fetchone()[0]
         conn.execute(
             """INSERT INTO portfolio_analysis
-               (id, report_html, scores_json, portfolio_hash, model_used, generated_date)
-               VALUES (1, ?, ?, ?, ?, ?)""",
-            [html, scores_json, portfolio_hash, model, date],
+               (id, report_html, scores_json, portfolio_hash, model_used, generated_date, saved_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            [new_id, html, scores_json, portfolio_hash, model, date, now],
         )
-    log.info("포트폴리오 분석 보고서 저장 완료 (model=%s)", model)
+        # 5건 초과 시 가장 오래된 것 삭제
+        old_ids = conn.execute(
+            "SELECT id FROM portfolio_analysis ORDER BY id DESC OFFSET 5"
+        ).fetchall()
+        if old_ids:
+            ids_to_del = [r[0] for r in old_ids]
+            conn.execute(
+                f"DELETE FROM portfolio_analysis WHERE id IN ({','.join('?' * len(ids_to_del))})",
+                ids_to_del,
+            )
+    log.info("포트폴리오 분석 보고서 저장 완료 (id=%d, model=%s)", new_id, model)
 
 
 def load_portfolio_analysis() -> dict | None:
-    """포트폴리오 분석 보고서 조회"""
+    """포트폴리오 분석 보고서 최신 1건 조회"""
     with get_conn() as conn:
         try:
-            cur = conn.execute("SELECT * FROM portfolio_analysis WHERE id = 1")
+            cur = conn.execute(
+                "SELECT * FROM portfolio_analysis ORDER BY id DESC LIMIT 1"
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            cols = [d[0] for d in cur.description]
+            return dict(zip(cols, row))
+        except Exception:
+            return None
+
+
+def load_portfolio_analysis_history() -> list[dict]:
+    """포트폴리오 분석 이력 목록 조회 (id, generated_date, model_used, saved_at)"""
+    with get_conn() as conn:
+        try:
+            cur = conn.execute(
+                """SELECT id, generated_date, model_used, saved_at, portfolio_hash
+                   FROM portfolio_analysis ORDER BY id DESC"""
+            )
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+        except Exception:
+            return []
+
+
+def load_portfolio_analysis_by_id(report_id: int) -> dict | None:
+    """특정 id의 포트폴리오 분석 보고서 조회"""
+    with get_conn() as conn:
+        try:
+            cur = conn.execute(
+                "SELECT * FROM portfolio_analysis WHERE id = ?", [report_id]
+            )
             row = cur.fetchone()
             if row is None:
                 return None

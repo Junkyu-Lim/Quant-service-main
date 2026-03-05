@@ -108,11 +108,18 @@ SYSTEM_PROMPT = """\
 
 ## 최신 정보 활용 (웹 검색)
 - web_search 도구를 활용하여 분석 대상 기업의 최신 뉴스·공시·실적발표·산업 동향을 반드시 확인하세요
-- **검색은 최대 2회**로 제한됩니다. 효율적으로 사용하세요:
-  - 1차 검색: "{종목명} 최신 실적 공시 뉴스 {현재연도}" — 기업 고유 이슈 파악
-  - 2차 검색(필요시): "{산업명} 시장 전망 동향 {현재연도}" — 산업 레벨 트렌드 보완
+- **검색은 최대 3회**로 제한됩니다. 효율적으로 사용하세요:
+  - 1차 검색: "{종목명} 실적 공시 뉴스 {현재연도}" — 최신 기업 뉴스 및 실적 파악
+  - 2차 검색: "{종목명} 주요주주 지분변동 배당 자사주 {현재연도}" — 공시·지분 이벤트·주주환원 파악
+  - 3차 검색: "{산업명} 시장 전망 동향 {현재연도}" — 산업 레벨 트렌드 보완
 - 검색 결과를 Stage 1(거시환경), Stage 5(전망/촉매), Stage 8(액션 플랜)에 적극 반영하세요
 - 검색으로 확인한 최신 정보는 분석 근거에 구체적으로 인용하세요 (예: "2026년 1분기 실적 발표에 따르면...")
+
+## 최신 뉴스/공시 구조화 (recent_news 필수)
+- 웹 검색으로 확인한 최신 뉴스·공시 중 투자 판단에 중요한 것을 **최소 3건, 최대 5건** `recent_news` 배열에 구조화하세요
+- 각 항목에 제목(title), 날짜(date), 요약(summary), 영향도(impact: 긍정/부정/중립), 출처(source)를 포함하세요
+- 날짜를 정확히 알 수 없으면 "2026년 2월 추정" 등 대략적 시기를 기재하세요
+- 실적 발표, 대규모 수주, 지분 변동, 규제 변화, 신사업 진출 등 주가에 영향을 줄 수 있는 뉴스를 우선 선별하세요
 """
 
 USER_PROMPT_TEMPLATE = """\
@@ -217,6 +224,15 @@ USER_PROMPT_TEMPLATE = """\
   "composite_score": <1-100 정수, 가중평균: Buffett 20%, Damodaran 15%, Fisher 15%, Dorsey 15%, Lynch 15%, Kostolany 10%, 사업정체성 신뢰도 10%>,
   "investment_grade": "<S|A|B+|B|C+|C|D|F 중 하나>",
   "summary": "<5-7문장 종합 투자 의견>",
+  "recent_news": [
+    {{
+      "title": "<뉴스/공시 제목>",
+      "date": "<YYYY-MM-DD 또는 추정 시기 (예: 2026년 2월)>",
+      "summary": "<1-2문장 핵심 요약>",
+      "impact": "<긍정|부정|중립>",
+      "source": "<출처명 (예: 전자공시시스템, 한국경제, 매일경제 등)>"
+    }}
+  ],
   "risks": ["<핵심 리스크1>", "<리스크2>", "<리스크3>"],
   "catalysts": ["<핵심 촉매1>", "<촉매2>", "<촉매3>"]
 }}
@@ -429,12 +445,12 @@ def generate_report(stock: dict, mode: str = "claude") -> dict:
         timeout=httpx.Timeout(300.0, connect=30.0),
     )
 
-    log.info("종목 AI 분석 시작 (%s %s, model=%s, web_search max_uses=2)", code, name, config.ANALYSIS_MODEL)
+    log.info("종목 AI 분석 시작 (%s %s, model=%s, web_search max_uses=3)", code, name, config.ANALYSIS_MODEL)
     message = _call_with_retry(
         client, model=config.ANALYSIS_MODEL, max_tokens=16384,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
-        tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 2}],
+        tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
     )
 
     block_types = [getattr(b, "type", "?") for b in message.content]
@@ -591,6 +607,8 @@ def render_html(code: str, name: str, market: str, stock: dict,
     stage6 = scores.get("stage6_valuation", {})
     stage8 = scores.get("stage8_action", {})
 
+    recent_news = scores.get("recent_news", [])
+
     composite = scores.get("composite_score", 0)
     grade = scores.get("investment_grade", "N/A")
     summary = scores.get("summary", "")
@@ -726,6 +744,38 @@ def render_html(code: str, name: str, market: str, stock: dict,
     </div>
   </div>"""
 
+    # ── 최신 뉴스 & 공시 섹션 ──
+    news_html = ""
+    if recent_news:
+        news_items = ""
+        for item in recent_news[:5]:
+            title = item.get("title", "")
+            date = item.get("date", "")
+            summary_text = item.get("summary", "")
+            impact = item.get("impact", "중립")
+            source = item.get("source", "")
+
+            impact_cls = {"긍정": "impact-positive", "부정": "impact-negative"}.get(impact, "impact-neutral")
+            impact_icon = {"긍정": "&#9650;", "부정": "&#9660;"}.get(impact, "&#9644;")
+
+            news_items += f"""
+        <div class="news-card">
+          <div class="news-card-header">
+            <span class="news-impact-badge {impact_cls}">{impact_icon} {impact}</span>
+            <span class="news-date">{date}</span>
+          </div>
+          <div class="news-title">{title}</div>
+          <div class="news-summary">{summary_text}</div>
+          <div class="news-source">{source}</div>
+        </div>"""
+
+        news_html = f"""
+  <div class="news-section">
+    <div class="stage-card-title">&#128240; 최신 뉴스 &amp; 공시</div>
+    <div class="news-grid">{news_items}
+    </div>
+  </div>"""
+
     # ── Stage 6: 밸류에이션 + 코스톨라니 달걀 ──
     valuation_html = ""
     if stage6:
@@ -835,6 +885,7 @@ def render_html(code: str, name: str, market: str, stock: dict,
 {stage12_html}
 {moat_html}
 {stage45_html}
+{news_html}
 {valuation_html}
 
   <div class="summary-box">
@@ -916,48 +967,74 @@ PORTFOLIO_SYSTEM_PROMPT = """\
 당신은 한국 주식시장 포트폴리오 전략 어드바이저입니다.
 투자자의 보유 포트폴리오 전체를 분석하여 포트폴리오 수준의 전략적 조언을 제공합니다.
 
+## 투자 철학 (최우선 전제)
+
+이 포트폴리오의 기본 전제는 **종목과 해당 산업의 장기적 우상향**입니다.
+모든 분석과 권고는 이 철학을 최우선으로 적용하세요.
+
+- **1순위 판단 기준은 산업의 장기 성장성**입니다. 전방산업 CAGR, AI 분석의 산업분류, 해자 등급을 핵심 근거로 활용하세요.
+- 장기 성장하는 산업에 속한 고품질 종목(해자 wide/narrow)은 단기 등락과 무관하게 HOLD 또는 BUY_MORE를 우선 고려하세요.
+- **TRIM/SELL은 산업 성장성 훼손, 해자 소실, 구조적 경쟁력 약화가 확인된 경우에만 권고**하세요. 단기 고평가(PER 등)는 TRIM 근거가 되지 않습니다.
+- 현금(예수금)이 있는 경우, BUY_MORE 권고 시 예수금 범위 내에서 실행 가능한 매수량/금액을 우선 제시하세요.
+- 수급(코스톨라니 달걀 위치, 시장심리)은 매수 타이밍 보조 지표로만 활용하고, 장기 성장성 판단을 뒤집어서는 안 됩니다.
+
 ## 분석 프레임워크
 
 ### 1. 포트폴리오 건강도 평가
 - 전체 포트폴리오의 품질 점수 (0-100)
-- 분산도, 밸류에이션, 성장성, 안정성 관점에서 종합 평가
+- **산업 성장성, 해자 품질, 밸류에이션, 분산도** 관점에서 종합 평가
 
 ### 2. 종목별 액션 권고
 - 각 종목에 대해 BUY_MORE / HOLD / TRIM / SELL 중 하나를 권고
+- **판단 우선순위**: ① 산업 장기 성장성(전방산업 CAGR) → ② 해자 등급(wide/narrow/none) → ③ 개별 AI 분석(6대 거장) → ④ 현재 비중 → ⑤ 수급/시장심리(달걀모형)
 - 현재 비중 vs 권장 비중 제시
-- 정량 데이터와 기존 AI 분석을 종합하여 근거 제시
 - **구체적 매매 수량 산출** (보유수량, 평균매입가, 현재가, 총평가금액 기반):
-  - BUY_MORE: 추가 매수할 주수(target_shares), 매수 목표가 범위(target_price_low ~ target_price_high), 예상 매수금액(estimated_amount)
+  - BUY_MORE: 추가 매수할 주수(target_shares), 매수 목표가 범위(target_price_low ~ target_price_high), 예상 매수금액(estimated_amount). 예수금이 있으면 예수금 내 실행 가능한 금액 우선
   - TRIM: 매도할 주수(target_shares), 매도 목표가 범위, 예상 매도금액
   - SELL: 전량 매도 주수(=보유수량), 매도 목표가 범위, 예상 매도금액
   - HOLD: target_shares=0, 가격 범위는 현재가 ±5% 내외 감시 범위
   - target_shares 산출식: abs(총평가금액 × (권장비중 - 현재비중) / 100) ÷ 목표가 중간값, 정수 반올림
   - estimated_amount = target_shares × 목표가 중간값
 
-### 3. 섹터 집중도 분석
-- 섹터별 비중 분포의 적절성 평가
-- 과집중/과소 섹터 식별
-- 섹터 리밸런싱 권고
+### 3. 섹터/산업 성장성 분석
+- AI 분석 데이터(전방산업 CAGR, 해자 등급)를 기반으로 각 섹터의 **장기 성장성**을 평가하세요
+- 장기 성장 산업에 과소 비중인 경우 → 비중 확대 권고
+- 장기 쇠퇴 우려 산업에 집중된 경우 → 구조적 리스크로 표시
+- 섹터 내 종목들의 해자 등급(wide/narrow/none)을 종합하여 섹터 품질을 평가하세요
+- 단순 집중도 수치보다 **산업 장기 성장성 + 해자 품질** 기반으로 판단하세요
 
 ### 4. 포트폴리오 리스크 & 촉매
 - 포트폴리오 전체 관점에서의 주요 리스크 (상관관계, 동일 리스크 노출 등)
-- 포트폴리오 전체 관점에서의 상승 촉매
+- 12개월 촉매(AI 분석 제공 시) 및 포트폴리오 전체 상승 촉매
 - **상관관계 행렬 데이터가 제공된 경우**: 수치를 기반으로 고상관 페어(상관계수 0.7 이상)를 구체적으로 식별하고, 분산 효과 부족 구간 지적
 - 상관관계 데이터가 없는 경우: 섹터/밸류체인 기반 정성적 판단으로 대체
 
-### 5. 보완 제안
-- 포트폴리오에 부족한 섹터/테마/스타일 식별
-- 추가 편입 후보 테마 제안 (종목 추천 아님, 테마/섹터 수준)
+### 5. 적정 종목수 & 구성 최적화
+- 현재 종목수가 투자 전략 대비 적정한지 평가
+- 권장 종목수 범위(min~max) 제시
+- 전략 유형 판정: balanced(균형형, 7~15종목), concentrated(집중형, 3~6종목), diversified(분산형, 16종목 이상)
+- 종목수 조정이 필요한 경우 구체적 방향 제안 (축소/유지/확대 및 이유)
 
-### 6. 관심종목 편입 권고 (관심종목 데이터가 있는 경우)
+### 6. 배당 분석
+- 포트폴리오 가중평균 배당수익률 추정 (각 종목의 배당수익률 × 비중 합산)
+- 연간 예상 배당금 합계 (보유 수량 × 주당 배당금 기반, 데이터 부족 시 업종 평균 참고)
+- 배당 성향 추세: 증가/유지/감소/혼재/무배당 다수 중 판정
+- 배당 인컴 관점에서 포트폴리오 평가 및 개선 제안
+
+### 7. 보완 제안
+- 포트폴리오에 부족한 섹터/테마/스타일 식별
+- **장기 성장 산업 중 미편입 섹터**를 우선으로 추가 편입 후보 테마 제안 (종목 추천 아님, 테마/섹터 수준)
+
+### 8. 관심종목 편입 권고 (관심종목 데이터가 있는 경우)
 - 관심종목 중 포트폴리오에 추가하면 좋을 종목 식별
 - 각 관심종목에 대해 ADD(편입 권고) / WATCH(관찰 지속) / SKIP(제외 권고) 판정
 - ADD 종목: 권장 비중, 매수 주수, 목표가 범위, 예상 금액 제시
-- 기존 포트폴리오와의 섹터 분산 효과, 성장성 보완 효과, 상관관계 고려
+- 기존 포트폴리오와의 섹터 분산 효과, 산업 성장성 보완, 상관관계 고려
 
-### 7. 리밸런싱 실행 계획
+### 9. 리밸런싱 실행 계획
 - 가장 시급한 액션 1-3개 우선순위 제시
 - 실행 순서 및 권장 시기 (즉시/이번 달/이번 분기/불필요)
+- 예수금이 있는 경우: 현금 활용 우선순위 포함
 
 ## 분석 지침
 - 포트폴리오 비중이 높은 종목에 더 주의를 기울이세요
@@ -973,7 +1050,9 @@ PORTFOLIO_USER_PROMPT_TEMPLATE = """\
 
 ## 포트폴리오 요약
 - 총 종목수: {stock_count}
-- 총평가금액: {total_eval}원
+- 총평가금액(주식): {total_eval}원
+- 예수금(현금): {cash_balance}원 ({cash_weight})
+- 총자산(주식+현금): {total_assets}원
 - 총수익률: {total_return}%
 - 섹터 분포: {sector_distribution}
 
@@ -1052,6 +1131,20 @@ PORTFOLIO_USER_PROMPT_TEMPLATE = """\
       "synergy": "포트폴리오 시너지/보완 효과 설명"
     }}
   ],
+  "portfolio_optimization": {{
+    "current_count": 0,
+    "recommended_count_min": 0,
+    "recommended_count_max": 0,
+    "strategy_type": "balanced|concentrated|diversified",
+    "assessment": "현재 종목수 적정성 평가 2-3문장",
+    "adjustment_suggestion": "종목수 조정 방향 및 근거 2-3문장"
+  }},
+  "dividend_analysis": {{
+    "portfolio_yield": 0.0,
+    "annual_dividend_estimate": 0,
+    "dividend_growth_trend": "증가|유지|감소|혼재|무배당 다수",
+    "suggestion": "배당 인컴 관점 포트폴리오 평가 및 개선 제안 2-3문장"
+  }},
   "rebalancing_plan": {{
     "urgency": "immediate|monthly|quarterly|none",
     "priority_actions": ["가장 먼저 실행할 액션 1", "액션 2"],
@@ -1105,6 +1198,28 @@ def format_portfolio_stock(stock: dict, portfolio_item: dict,
         catalysts = ai_report.get("catalysts", [])
         if catalysts:
             lines.append(f"- 촉매: {', '.join(str(c) for c in catalysts)}")
+        # 산업/해자 정보
+        biz = ai_report.get("business_identity", {})
+        if biz.get("industry_classification"):
+            lines.append(f"- 산업분류: {biz['industry_classification']}")
+        moat = ai_report.get("stage3_moat", {})
+        if moat.get("moat_rating"):
+            lines.append(f"- 해자등급: {moat['moat_rating']}")
+        # 전방산업 성장성
+        macro = ai_report.get("stage1_macro", {})
+        if macro.get("upstream_cagr"):
+            lines.append(f"- 전방산업 성장률(CAGR): {macro['upstream_cagr']}")
+        # 수급/시장심리
+        val = ai_report.get("stage6_valuation", {})
+        egg = val.get("kostolany_egg_position")
+        psych = val.get("market_psychology")
+        if egg or psych:
+            lines.append(f"- 달걀모형 위치: {egg}/6, 시장심리: {psych or 'N/A'}")
+        # 12개월 촉매
+        outlook = ai_report.get("stage5_outlook", {})
+        cats_12m = outlook.get("catalysts_12m", [])
+        if cats_12m:
+            lines.append(f"- 12개월 촉매: {', '.join(str(c) for c in cats_12m[:3])}")
         # 거장 점수 요약
         masters = ai_report.get("stage7_masters", {})
         if masters:
@@ -1122,7 +1237,8 @@ def generate_portfolio_report(portfolio_items: list[dict],
                               stock_data: dict[str, dict],
                               ai_reports: dict[str, dict],
                               watchlist_data: dict[str, dict] | None = None,
-                              correlation_data: dict | None = None) -> dict:
+                              correlation_data: dict | None = None,
+                              cash_balance: float = 0) -> dict:
     """
     포트폴리오 전체 분석 보고서 생성 (Claude API).
 
@@ -1203,9 +1319,16 @@ def generate_portfolio_report(portfolio_items: list[dict],
         corr_lines.append("\n※ 0.7 이상: 고상관(빨강), 0.3~0.7: 중간, -0.3~0.3: 낮음, -0.3 미만: 역상관")
         correlation_section = "\n".join(corr_lines) + "\n"
 
+    total_assets = total_eval + cash_balance
+    cash_weight_str = (
+        f"{cash_balance / total_assets * 100:.1f}%" if total_assets > 0 else "0%"
+    )
     user_prompt = PORTFOLIO_USER_PROMPT_TEMPLATE.format(
         stock_count=len(portfolio_items),
         total_eval=f"{round(total_eval):,}",
+        cash_balance=f"{round(cash_balance):,}",
+        cash_weight=cash_weight_str,
+        total_assets=f"{round(total_assets):,}",
         total_return=f"{total_return:.2f}",
         sector_distribution=sector_dist,
         per_stock_sections="\n".join(per_stock_parts),
