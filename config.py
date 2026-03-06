@@ -29,6 +29,15 @@ PORTFOLIO_MODEL = os.environ.get("PORTFOLIO_MODEL", "claude-sonnet-4-6")
 REPORT_DIR = DATA_DIR / "reports"
 REPORT_DIR.mkdir(exist_ok=True)
 
+# 사용자가 배치하는 사업보고서 PDF (예: 삼성전자_2024Q3.pdf)
+# REPORT_DIR(AI 생성 HTML 저장소)와 별개 경로
+PDF_REPORT_DIR = BASE_DIR / "report"
+PDF_REPORT_DIR.mkdir(exist_ok=True)
+
+# AI 분석 토큰 설정
+ANALYSIS_MAX_TOKENS = int(os.environ.get("ANALYSIS_MAX_TOKENS", "8192"))
+WEB_SEARCH_MAX_USES = int(os.environ.get("WEB_SEARCH_MAX_USES", "3"))
+
 # S-RIM 할인율 설정 (동적 Ke = RISK_FREE_RATE + ERP)
 # 환경변수로 재정의 가능: RISK_FREE_RATE=3.5, EQUITY_RISK_PREMIUM=5.5
 RISK_FREE_RATE = float(os.environ.get("RISK_FREE_RATE", "3.5"))        # 국고채 3년물 기준 (%)

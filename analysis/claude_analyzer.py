@@ -8,10 +8,12 @@ Pat Dorsey, Peter Lynch, André Kostolany)의 핵심 철학을 기반으로
 
 import json
 import logging
+import re
 import sys
 import os
 import time
 from datetime import datetime
+from pathlib import Path
 
 import anthropic
 import httpx
@@ -120,6 +122,12 @@ SYSTEM_PROMPT = """\
 - 각 항목에 제목(title), 날짜(date), 요약(summary), 영향도(impact: 긍정/부정/중립), 출처(source)를 포함하세요
 - 날짜를 정확히 알 수 없으면 "2026년 2월 추정" 등 대략적 시기를 기재하세요
 - 실적 발표, 대규모 수주, 지분 변동, 규제 변화, 신사업 진출 등 주가에 영향을 줄 수 있는 뉴스를 우선 선별하세요
+
+## 첨부 사업보고서 활용 (제공된 경우)
+- 사업보고서 문서가 첨부된 경우, Stage 0에서 반드시 해당 문서를 1차 정보원으로 활용하세요
+- 핵심 사업 모델, 매출 구성, 주요 제품/서비스는 사업보고서의 내용을 기준으로 작성하세요
+- 사업보고서의 내용과 웹 검색 결과가 상충할 경우, 날짜가 더 최신인 정보를 우선하세요
+- confidence 값은 사업보고서가 있으면 "high"로 설정하세요
 """
 
 USER_PROMPT_TEMPLATE = """\
@@ -304,6 +312,58 @@ def _fmt_val(v, fmt_type: str) -> str:
     return str(v)
 
 
+def _find_report_pdf(stock_name: str, stock_code: str) -> Path | None:
+    """
+    config.PDF_REPORT_DIR에서 종목명 또는 종목코드가 포함된 PDF를 탐색.
+    파일명 형식: {기업명}_{년도Q분기}.pdf 또는 {기업명}_{년도}.pdf
+    여러 파일이 있으면 날짜 기준 최신 파일 반환, 없으면 None.
+    """
+    report_dir = config.PDF_REPORT_DIR
+    if not report_dir.exists():
+        return None
+
+    candidates = []
+    for pdf_path in report_dir.glob("*.pdf"):
+        stem = pdf_path.stem  # 예: "삼성전자_2024Q3"
+        if stock_name in stem or stock_code in stem:
+            # 파일명 뒷부분에서 날짜 파싱 (마지막 _ 이후)
+            parts = stem.rsplit("_", 1)
+            date_sort_key = (0, 0)
+            if len(parts) == 2:
+                date_str = parts[1]
+                m = re.match(r'^(\d{4})Q(\d)$', date_str, re.IGNORECASE)
+                if m:
+                    date_sort_key = (int(m.group(1)), int(m.group(2)))
+                else:
+                    m = re.match(r'^(\d{4})$', date_str)
+                    if m:
+                        date_sort_key = (int(m.group(1)), 0)
+            candidates.append((date_sort_key, pdf_path))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return candidates[0][1]
+
+
+def _upload_pdf_to_files_api(client, pdf_path: Path) -> str | None:
+    """
+    PDF를 Anthropic Files API에 업로드하고 file_id를 반환.
+    업로드 실패 시 None 반환 (graceful degradation).
+    """
+    try:
+        with open(pdf_path, "rb") as f:
+            file_meta = client.beta.files.upload(
+                file=(pdf_path.name, f, "application/pdf"),
+            )
+        log.info("사업보고서 PDF 업로드 완료: %s → file_id=%s", pdf_path.name, file_meta.id)
+        return file_meta.id
+    except Exception as e:
+        log.warning("사업보고서 PDF 업로드 실패 (%s): %s", pdf_path.name, str(e)[:200])
+        return None
+
+
 def format_quant_data(stock: dict) -> str:
     """종목 데이터를 분석용 텍스트로 포맷팅."""
     lines = []
@@ -389,11 +449,14 @@ def _try_repair_json(s: str) -> str:
     return s
 
 
-def _call_with_retry(client, *, max_retries: int = 5, **kwargs):
-    """Anthropic API 호출 + 과부하(529)/서버오류(5xx) 시 자동 재시도."""
+def _call_with_retry(client, *, max_retries: int = 5, use_beta: bool = False, **kwargs):
+    """Anthropic API 호출 + 과부하(529)/서버오류(5xx) 시 자동 재시도.
+    use_beta=True이면 client.beta.messages.create 사용 (Files API 문서 블록 지원).
+    """
+    api_create = client.beta.messages.create if use_beta else client.messages.create
     for attempt in range(1, max_retries + 1):
         try:
-            return client.messages.create(**kwargs)
+            return api_create(**kwargs)
         except anthropic.APIStatusError as e:
             if e.status_code in (429, 529, 500, 502, 503) and attempt < max_retries:
                 wait = min(2 ** attempt * 3, 60)  # 6s, 12s, 24s, 48s
@@ -445,13 +508,50 @@ def generate_report(stock: dict, mode: str = "claude") -> dict:
         timeout=httpx.Timeout(300.0, connect=30.0),
     )
 
-    log.info("종목 AI 분석 시작 (%s %s, model=%s, web_search max_uses=3)", code, name, config.ANALYSIS_MODEL)
+    # --- 사업보고서 PDF 탐색 및 업로드 ---
+    pdf_path = _find_report_pdf(name, code)
+    pdf_file_id = None
+    if pdf_path:
+        log.info("사업보고서 PDF 발견: %s", pdf_path.name)
+        pdf_file_id = _upload_pdf_to_files_api(client, pdf_path)
+
+    # --- 메시지 content 구성 ---
+    user_content: list = []
+    if pdf_file_id:
+        user_content.append({
+            "type": "document",
+            "source": {"type": "file", "file_id": pdf_file_id},
+            "title": f"{name} 사업보고서",
+            "context": "이 문서는 분석 대상 기업의 공식 사업보고서입니다. Stage 0 핵심 사업 모델 분석의 1차 근거로 활용하세요.",
+        })
+    user_content.append({"type": "text", "text": user_prompt})
+
+    # --- Prompt caching: 시스템 프롬프트 캐시 적용 ---
+    system_with_cache = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
+
+    web_search_max_uses = config.WEB_SEARCH_MAX_USES
+    log.info("종목 AI 분석 시작 (%s %s, model=%s, pdf=%s, web_search max_uses=%d)",
+             code, name, config.ANALYSIS_MODEL,
+             pdf_path.name if pdf_path else "없음", web_search_max_uses)
+
     message = _call_with_retry(
-        client, model=config.ANALYSIS_MODEL, max_tokens=16384,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_prompt}],
-        tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
+        client,
+        use_beta=bool(pdf_file_id),
+        model=config.ANALYSIS_MODEL,
+        max_tokens=config.ANALYSIS_MAX_TOKENS,
+        system=system_with_cache,
+        messages=[{"role": "user", "content": user_content}],
+        tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": web_search_max_uses}],
+        **({"betas": ["files-api-2025-04-14"]} if pdf_file_id else {}),
     )
+
+    # --- 토큰 사용량 로깅 (prompt cache hit/miss 포함) ---
+    if hasattr(message, "usage") and message.usage:
+        u = message.usage
+        cache_read = getattr(u, "cache_read_input_tokens", 0) or 0
+        cache_write = getattr(u, "cache_creation_input_tokens", 0) or 0
+        log.info("토큰 사용 (%s %s): input=%d output=%d cache_read=%d cache_write=%d",
+                 code, name, u.input_tokens, u.output_tokens, cache_read, cache_write)
 
     block_types = [getattr(b, "type", "?") for b in message.content]
     log.info("종목 AI 분석 완료 (%s %s, stop_reason=%s, blocks=%s)",

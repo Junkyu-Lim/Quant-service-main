@@ -554,6 +554,62 @@ tr.row-new { background-color: rgba(25, 135, 84, 0.04) !important; }
   #compare-category-tabs .nav-link { font-size: .7rem; padding: 4px 8px; }
 }
 
+/* ── Portfolio Sub-tabs ── */
+.pf-sub-nav .nav-link {
+  font-size: .82rem;
+  padding: 5px 10px;
+  color: #495057;
+}
+.pf-sub-nav .nav-link.active {
+  background-color: #0d6efd;
+  color: #fff;
+}
+.pf-sub-nav .nav-link:not(.active):hover {
+  background-color: #e9ecef;
+}
+
+/* ── Health Status Dots ── */
+.health-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  vertical-align: middle;
+  margin-right: 2px;
+}
+.health-green { background-color: #198754; }
+.health-yellow { background-color: #ffc107; }
+.health-red { background-color: #dc3545; }
+
+/* ── Transaction History Row Colors ── */
+tr.tx-buy td:first-child { border-left: 3px solid #198754; }
+tr.tx-sell td:first-child { border-left: 3px solid #dc3545; }
+tr.tx-adjust td:first-child { border-left: 3px solid #6c757d; }
+
+/* ── Rebalance Bars ── */
+.rebal-bar-wrap {
+  position: relative;
+  height: 6px;
+  background: #e9ecef;
+  border-radius: 3px;
+  overflow: visible;
+}
+.rebal-bar-cur {
+  position: absolute;
+  height: 100%;
+  background: #0d6efd;
+  border-radius: 3px;
+  opacity: 0.7;
+}
+.rebal-bar-tgt {
+  position: absolute;
+  top: -3px;
+  width: 2px;
+  height: 12px;
+  background: #dc3545;
+  transform: translateX(-1px);
+}
+
 /* ── Portfolio Analysis Report ── */
 .portfolio-analysis .pf-action-badge {
   display: inline-block;

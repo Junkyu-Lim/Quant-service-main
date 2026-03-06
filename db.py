@@ -157,6 +157,27 @@ _SCHEMA_STATEMENTS = [
     amount     DOUBLE NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
 )""",
+    """CREATE TABLE IF NOT EXISTS portfolio_transactions (
+    id         INTEGER PRIMARY KEY,
+    종목코드    TEXT NOT NULL,
+    종목명      TEXT,
+    거래유형    TEXT NOT NULL,
+    수량        INTEGER NOT NULL,
+    단가        DOUBLE NOT NULL,
+    거래일      TEXT,
+    메모        TEXT,
+    before_qty  INTEGER,
+    before_avg  DOUBLE,
+    after_qty   INTEGER,
+    after_avg   DOUBLE,
+    created_at  TEXT NOT NULL
+)""",
+    "CREATE INDEX IF NOT EXISTS idx_pftx_code ON portfolio_transactions (종목코드, created_at DESC)",
+    """CREATE TABLE IF NOT EXISTS portfolio_targets (
+    종목코드    TEXT PRIMARY KEY,
+    목표비중    DOUBLE NOT NULL DEFAULT 0,
+    updated_at  TEXT NOT NULL
+)""",
     """CREATE TABLE IF NOT EXISTS dashboard_result (
     종목코드      TEXT PRIMARY KEY,
     종목명        TEXT,
@@ -544,31 +565,52 @@ def load_portfolio() -> list[dict]:
 
 
 def upsert_portfolio_item(code: str, qty: int, price: float,
-                          buy_date: str, memo: str):
+                          buy_date: str, memo: str, name: str = ""):
     """포트폴리오 항목 추가/수정 (INSERT OR REPLACE)"""
     from datetime import datetime
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     code = code.zfill(6)
+    before_qty, before_avg = None, None
     with get_conn() as conn:
-        # 기존 항목이 있으면 created_at 유지
+        # 기존 항목이 있으면 created_at 유지 + 이전 수량/가격 캡처
         cur = conn.execute(
-            "SELECT created_at FROM portfolio WHERE 종목코드 = ?", [code]
+            "SELECT created_at, 수량, 평균매입가 FROM portfolio WHERE 종목코드 = ?", [code]
         )
         row = cur.fetchone()
         created = row[0] if row else now
+        if row:
+            before_qty, before_avg = row[1], row[2]
         conn.execute(
             """INSERT OR REPLACE INTO portfolio
                (종목코드, 수량, 평균매입가, 매입일, 메모, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             [code, qty, price, buy_date, memo, created, now],
         )
+    # 거래 유형 결정 및 로깅
+    if before_qty is None:
+        tx_type = "BUY"
+    elif qty > before_qty:
+        tx_type = "BUY"
+    elif qty < before_qty:
+        tx_type = "SELL"
+    else:
+        tx_type = "ADJUST"
+    log_transaction(code, name, tx_type, qty, price, buy_date, memo,
+                    before_qty, before_avg, qty, price)
     log.info("포트폴리오 저장: %s (수량=%d, 단가=%.0f)", code, qty, price)
 
 
-def delete_portfolio_item(code: str):
+def delete_portfolio_item(code: str, name: str = ""):
     """포트폴리오에서 종목 삭제"""
     code = code.zfill(6)
     with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT 수량, 평균매입가 FROM portfolio WHERE 종목코드 = ?", [code]
+        )
+        row = cur.fetchone()
+        if row:
+            log_transaction(code, name, "SELL", row[0], row[1], None, "전량매도",
+                            row[0], row[1], 0, 0)
         conn.execute("DELETE FROM portfolio WHERE 종목코드 = ?", [code])
     log.info("포트폴리오 삭제: %s", code)
 
@@ -588,9 +630,70 @@ def save_cash(amount: float):
         conn.execute(
             """INSERT OR REPLACE INTO portfolio_cash (id, amount, updated_at)
                VALUES (1, ?, ?)""",
-            [max(0.0, float(amount)), now],
+            [float(amount), now],
         )
     log.info("예수금 저장: %.0f원", amount)
+
+
+def execute_trade(code: str, name: str, tx_type: str,
+                  trade_qty: int, trade_price: float,
+                  tx_date: str, memo: str) -> dict:
+    """매수(BUY)/매도(SELL) 실행: portfolio 갱신 + 거래 기록 + 예수금 자동 반영"""
+    from datetime import datetime
+    code = code.zfill(6)
+
+    # 현재 보유 상태 조회
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT 수량, 평균매입가 FROM portfolio WHERE 종목코드 = ?", [code]
+        )
+        row = cur.fetchone()
+    before_qty = int(row[0]) if row else 0
+    before_avg = float(row[1]) if row else 0.0
+
+    if tx_type == "BUY":
+        after_qty = before_qty + trade_qty
+        if before_qty == 0:
+            after_avg = trade_price
+        else:
+            after_avg = (before_qty * before_avg + trade_qty * trade_price) / after_qty
+        after_avg = round(after_avg, 2)
+        # portfolio 갱신 (upsert_portfolio_item은 내부에서 log_transaction 호출)
+        upsert_portfolio_item(code, after_qty, after_avg, tx_date, memo, name=name)
+        # 예수금 차감
+        save_cash(load_cash() - trade_qty * trade_price)
+
+    elif tx_type == "SELL":
+        if trade_qty > before_qty:
+            return {"error": f"매도 수량({trade_qty:,}주)이 보유 수량({before_qty:,}주)을 초과합니다."}
+        after_qty = before_qty - trade_qty
+        after_avg = before_avg  # 매도 시 평균매입가 유지
+
+        if after_qty == 0:
+            # 전량 매도: delete_portfolio_item이 SELL 거래 기록 자동 생성
+            delete_portfolio_item(code, name=name)
+        else:
+            # 부분 매도: 수량만 줄이고 실제 매도 단가를 정확히 기록
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with get_conn() as conn:
+                conn.execute(
+                    "UPDATE portfolio SET 수량=?, updated_at=? WHERE 종목코드=?",
+                    [after_qty, now, code],
+                )
+            log_transaction(code, name, "SELL", trade_qty, trade_price, tx_date, memo,
+                            before_qty, before_avg, after_qty, after_avg)
+        # 예수금 증가
+        save_cash(load_cash() + trade_qty * trade_price)
+
+    else:
+        return {"error": f"지원하지 않는 거래 유형: {tx_type}"}
+
+    return {
+        "status": "ok",
+        "after_qty": after_qty,
+        "after_avg": after_avg,
+        "cash": load_cash(),
+    }
 
 
 def save_portfolio_analysis(html: str, scores_json: str, portfolio_hash: str,
@@ -665,6 +768,76 @@ def load_portfolio_analysis_by_id(report_id: int) -> dict | None:
             return dict(zip(cols, row))
         except Exception:
             return None
+
+
+# ── Portfolio Transactions ──────────────────────────────────────────────
+
+def log_transaction(code: str, name: str, tx_type: str, qty: int, price: float,
+                    tx_date: str | None, memo: str | None,
+                    before_qty: int | None, before_avg: float | None,
+                    after_qty: int | None, after_avg: float | None):
+    """포트폴리오 거래 이력 기록 (BUY/SELL/ADJUST)"""
+    from datetime import datetime
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_conn() as conn:
+        new_id = conn.execute(
+            "SELECT COALESCE(MAX(id), 0) + 1 FROM portfolio_transactions"
+        ).fetchone()[0]
+        conn.execute(
+            """INSERT INTO portfolio_transactions
+               (id, 종목코드, 종목명, 거래유형, 수량, 단가, 거래일, 메모,
+                before_qty, before_avg, after_qty, after_avg, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [new_id, code, name, tx_type, qty, price, tx_date, memo,
+             before_qty, before_avg, after_qty, after_avg, now],
+        )
+    log.info("거래 기록: %s %s %d주 @%.0f", tx_type, code, qty, price)
+
+
+def load_transactions(code: str | None = None, limit: int = 100) -> list[dict]:
+    """포트폴리오 거래 이력 조회"""
+    with get_conn() as conn:
+        try:
+            if code:
+                cur = conn.execute(
+                    "SELECT * FROM portfolio_transactions WHERE 종목코드 = ? ORDER BY created_at DESC LIMIT ?",
+                    [code.zfill(6), limit],
+                )
+            else:
+                cur = conn.execute(
+                    "SELECT * FROM portfolio_transactions ORDER BY created_at DESC LIMIT ?",
+                    [limit],
+                )
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+        except Exception:
+            return []
+
+
+# ── Portfolio Targets (Rebalancing) ────────────────────────────────────
+
+def save_targets(targets: list[dict]):
+    """리밸런싱 목표 비중 저장"""
+    from datetime import datetime
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_conn() as conn:
+        for t in targets:
+            conn.execute(
+                """INSERT OR REPLACE INTO portfolio_targets (종목코드, 목표비중, updated_at)
+                   VALUES (?, ?, ?)""",
+                [str(t["종목코드"]).zfill(6), float(t["목표비중"]), now],
+            )
+
+
+def load_targets() -> list[dict]:
+    """리밸런싱 목표 비중 조회"""
+    with get_conn() as conn:
+        try:
+            cur = conn.execute("SELECT * FROM portfolio_targets")
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+        except Exception:
+            return []
 
 
 def upsert_price_supplement(records: list[dict]):
@@ -763,6 +936,36 @@ def load_price_history_multi(codes: list[str], n_days: int = 250) -> pd.DataFram
     if len(pivot) > n_days:
         pivot = pivot.iloc[-n_days:]
     return pivot
+
+
+def load_index_history(index_code: str = "KOSPI", n_days: int = 250) -> pd.DataFrame:
+    """지수 최근 n_days 일간 종가를 반환.
+
+    반환: DataFrame (날짜 index, 종가 column)
+    """
+    with get_conn() as conn:
+        try:
+            row = conn.execute(
+                "SELECT MAX(collected_date) FROM index_history"
+            ).fetchone()
+            if not row or not row[0]:
+                return pd.DataFrame()
+            latest = row[0]
+            df = conn.execute(
+                """SELECT 날짜, 종가
+                   FROM index_history
+                   WHERE 지수코드 = ? AND collected_date = ?
+                   ORDER BY 날짜""",
+                [index_code, latest],
+            ).df()
+        except Exception:
+            return pd.DataFrame()
+    if df.empty:
+        return pd.DataFrame()
+    df = df.set_index("날짜").sort_index()
+    if len(df) > n_days:
+        df = df.iloc[-n_days:]
+    return df
 
 
 def get_data_status() -> dict:

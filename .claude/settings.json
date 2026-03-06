@@ -39,7 +39,8 @@
       "mcp__context7__query-docs",
       "mcp__context7__resolve-library-id",
       "Bash(TASKLIST /FI \"IMAGENAME eq python.exe\")",
-      "Bash(wmic process where \"name=''python.exe''\" get ProcessId,CommandLine)"
+      "Bash(wmic process where \"name=''python.exe''\" get ProcessId,CommandLine)",
+      "Read(//c/Users/limjk/**)"
     ],
     "additionalDirectories": [
       "c:\\Users\\limjk\\.claude\\projects\\c--Users-limjk-Quant-service-main\\memory"

@@ -1459,14 +1459,16 @@
 
     // 포트폴리오 탭은 전용 API 사용
     if (currentScreen === "portfolio") {
+      document.getElementById("portfolio-subtabs").style.display = "";
       const pf = await loadPortfolio();
       renderPortfolioSummary();
-      if (!pf || !pf.items.length) {
-        renderPortfolioTable([]);
-        pageInfo.textContent = "0건";
-      } else {
-        renderPortfolioTable(pf.items);
-        pageInfo.textContent = `${pf.items.length}건`;
+      await renderPfSubTab(pfSubTab);
+      if (pfSubTab === "table") {
+        if (!pf || !pf.items.length) {
+          pageInfo.textContent = "0건";
+        } else {
+          pageInfo.textContent = `${pf.items.length}건`;
+        }
       }
       btnPrev.disabled = true;
       btnNext.disabled = true;
@@ -2612,6 +2614,10 @@
 
   // ─── 포트폴리오 ──────────────────────────────────────────────────────
   let portfolioData = null;
+  let pfSubTab = "table";   // "table"|"performance"|"health"|"transactions"|"rebalance"
+  let pfPerfChart = null;
+  let pfPerfRange = "3M";
+  let pfRebalTargets = {}; // {종목코드: 목표비중}
 
   async function loadPortfolio() {
     try {
@@ -2710,7 +2716,7 @@
     let colgroup = tableEl.querySelector("colgroup");
     if (!colgroup) { colgroup = document.createElement("colgroup"); tableEl.prepend(colgroup); }
     colgroup.innerHTML =
-      `<col style="width:55px">` +
+      `<col style="width:130px">` +
       cols.map(c => `<col style="width:${c.w || 'auto'}">`).join("");
     tableEl.style.tableLayout = "fixed";
     tableEl.style.minWidth = "";
@@ -2739,9 +2745,11 @@
 
     tbodyEl.innerHTML = items.map(e => {
       const plClass = (e["수익률"] || 0) >= 0 ? "val-pos" : "val-neg";
-      const actionBtns = `<td class="text-center p-1">
-        <button class="btn btn-sm btn-outline-secondary pf-edit-btn" data-code="${e["종목코드"]}" title="편집" style="font-size:.7rem;padding:1px 5px;">✎</button>
-        <button class="btn btn-sm btn-outline-danger pf-del-btn" data-code="${e["종목코드"]}" title="삭제" style="font-size:.7rem;padding:1px 5px;">✕</button>
+      const actionBtns = `<td class="text-center p-1" style="white-space:nowrap;">
+        <button class="btn btn-sm btn-success pf-buy-btn" data-code="${e["종목코드"]}" title="매수" style="font-size:.65rem;padding:1px 5px;">매수</button>
+        <button class="btn btn-sm btn-danger pf-sell-btn" data-code="${e["종목코드"]}" title="매도" style="font-size:.65rem;padding:1px 5px;">매도</button>
+        <button class="btn btn-sm btn-outline-secondary pf-edit-btn" data-code="${e["종목코드"]}" title="편집" style="font-size:.65rem;padding:1px 5px;">✎</button>
+        <button class="btn btn-sm btn-outline-danger pf-del-btn" data-code="${e["종목코드"]}" title="삭제" style="font-size:.65rem;padding:1px 5px;">✕</button>
       </td>`;
       const cells = cols.map(c => {
         let cls = c.align === "left" ? "text-start" : "";
@@ -2772,6 +2780,14 @@
       });
     });
 
+    // 매수 버튼
+    tbodyEl.querySelectorAll(".pf-buy-btn").forEach(btn =>
+      btn.addEventListener("click", e => { e.stopPropagation(); openTradeModal(btn.dataset.code, "BUY"); })
+    );
+    // 매도 버튼
+    tbodyEl.querySelectorAll(".pf-sell-btn").forEach(btn =>
+      btn.addEventListener("click", e => { e.stopPropagation(); openTradeModal(btn.dataset.code, "SELL"); })
+    );
     // 수정 버튼
     tbodyEl.querySelectorAll(".pf-edit-btn").forEach(btn =>
       btn.addEventListener("click", e => { e.stopPropagation(); openPortfolioEdit(btn.dataset.code); })
@@ -2786,7 +2802,7 @@
     // 행 클릭 → 상세 모달
     tbodyEl.querySelectorAll("tr[data-code]").forEach(tr =>
       tr.addEventListener("click", e => {
-        if (e.target.closest(".pf-edit-btn, .pf-del-btn")) return;
+        if (e.target.closest(".pf-edit-btn, .pf-del-btn, .pf-buy-btn, .pf-sell-btn")) return;
         openDetail(tr.dataset.code);
       })
     );
@@ -2862,6 +2878,124 @@
     } catch (e) { alert("삭제 실패: " + e.message); }
   }
 
+  // ─── 매수/매도 모달 ────────────────────────────────────────────────────
+
+  function openTradeModal(code, txType) {
+    if (!portfolioData || !portfolioData.items) return;
+    const entry = portfolioData.items.find(e => e["종목코드"] === code);
+    if (!entry) return;
+
+    const isBuy = txType === "BUY";
+    const holdQty = entry["수량"] || 0;
+    const holdAvg = entry["평균매입가"] || 0;
+
+    document.getElementById("trade-code").value = code;
+    document.getElementById("trade-type").value = txType;
+    document.getElementById("trade-stock-name").textContent = entry["종목명"] || code;
+    document.getElementById("trade-stock-code").textContent = code;
+    document.getElementById("trade-hold-info").innerHTML =
+      `보유: <strong>${holdQty.toLocaleString()}주</strong> · 평균매입가: <strong>${Math.round(holdAvg).toLocaleString()}원</strong>`;
+    document.getElementById("trade-qty").value = "";
+    document.getElementById("trade-price").value = entry["현재가"] ? Math.round(entry["현재가"]) : "";
+    document.getElementById("trade-date").value = new Date().toISOString().slice(0, 10);
+    document.getElementById("trade-memo").value = "";
+    document.getElementById("trade-cash-preview").style.display = "none";
+    document.getElementById("trade-cash-warn").style.display = "none";
+    document.getElementById("trade-max-qty-hint").textContent = isBuy ? "" : `(최대 ${holdQty.toLocaleString()}주)`;
+
+    const title = document.getElementById("trade-modal-title");
+    title.textContent = `${entry["종목명"] || code} ${isBuy ? "매수" : "매도"}`;
+    title.className = `modal-title ${isBuy ? "text-success" : "text-danger"}`;
+    const confirmBtn = document.getElementById("btn-trade-confirm");
+    confirmBtn.className = `btn btn-sm ${isBuy ? "btn-success" : "btn-danger"}`;
+    confirmBtn.textContent = isBuy ? "매수 확인" : "매도 확인";
+
+    // 이전에 등록된 리스너 제거 후 재등록 (중복 방지)
+    ["trade-qty", "trade-price"].forEach(id => {
+      const el = document.getElementById(id);
+      el.replaceWith(el.cloneNode(true));
+    });
+    ["trade-qty", "trade-price"].forEach(id => {
+      document.getElementById(id).addEventListener("input", updateTradeCashPreview);
+    });
+
+    new bootstrap.Modal(document.getElementById("trade-modal")).show();
+  }
+
+  function updateTradeCashPreview() {
+    const txType = document.getElementById("trade-type").value;
+    const qty    = parseFloat(document.getElementById("trade-qty").value) || 0;
+    const price  = parseFloat(document.getElementById("trade-price").value) || 0;
+    const preview = document.getElementById("trade-cash-preview");
+    const warn    = document.getElementById("trade-cash-warn");
+
+    if (!qty || !price) {
+      preview.style.display = "none";
+      warn.style.display = "none";
+      return;
+    }
+
+    const currentCash = (portfolioData && portfolioData["예수금"]) || 0;
+    const tradeAmount = qty * price;
+    const afterCash   = txType === "BUY" ? currentCash - tradeAmount : currentCash + tradeAmount;
+
+    document.getElementById("trade-cash-before").textContent = Math.round(currentCash).toLocaleString() + "원";
+    document.getElementById("trade-cash-after").textContent  = Math.round(afterCash).toLocaleString() + "원";
+    preview.style.display = "";
+    preview.className = `alert py-1 px-2 mb-0 mt-2 ${afterCash < 0 ? "alert-warning" : "alert-info"}`;
+    warn.style.display = afterCash < 0 ? "" : "none";
+  }
+
+  async function executeTrade() {
+    const code   = document.getElementById("trade-code").value;
+    const txType = document.getElementById("trade-type").value;
+    const qty    = parseInt(document.getElementById("trade-qty").value);
+    const price  = parseFloat(document.getElementById("trade-price").value);
+    const date   = document.getElementById("trade-date").value;
+    const memo   = document.getElementById("trade-memo").value.trim();
+
+    if (!code || !qty || qty <= 0 || !price || price <= 0) {
+      alert("수량과 단가를 올바르게 입력하세요."); return;
+    }
+    const entry = portfolioData?.items?.find(e => e["종목코드"] === code);
+    if (txType === "SELL" && qty > (entry?.["수량"] || 0)) {
+      alert(`보유 수량(${(entry?.["수량"] || 0).toLocaleString()}주)을 초과할 수 없습니다.`); return;
+    }
+
+    try {
+      const res = await fetch("/api/portfolio/trade", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          종목코드: code,
+          종목명: entry?.["종목명"] || "",
+          거래유형: txType,
+          수량: qty,
+          단가: price,
+          거래일: date,
+          메모: memo,
+        }),
+      });
+      const result = await res.json();
+      if (!res.ok) { alert(result.error || "거래 실패"); return; }
+
+      bootstrap.Modal.getInstance(document.getElementById("trade-modal"))?.hide();
+
+      // 예수금 즉시 반영
+      if (portfolioData && result.cash !== undefined) {
+        portfolioData["예수금"] = result.cash;
+        if (portfolioData.summary) {
+          portfolioData.summary["예수금"] = result.cash;
+          portfolioData.summary["총자산"] = (portfolioData.summary["총평가금액"] || 0) + result.cash;
+        }
+      }
+      await loadPortfolio();
+      if (currentScreen === "portfolio") loadStocks();
+    } catch (e) {
+      alert("거래 처리 실패: " + e.message);
+    }
+  }
+
   // ─── DOM 참조 ─────────────────────────────────────────────────────────
   const tbody    = document.getElementById("stock-tbody");
   const headerRow = document.getElementById("table-header");
@@ -2935,6 +3069,9 @@
 
   // 포트폴리오 저장 버튼
   document.getElementById("btn-portfolio-save")?.addEventListener("click", savePortfolioEntry);
+
+  // 매수/매도 확인 버튼
+  document.getElementById("btn-trade-confirm")?.addEventListener("click", executeTrade);
 
   // 포트폴리오 추가 버튼 (세부 모달) - 상세 모달을 먼저 닫고 포트폴리오 모달 열기
   document.getElementById("btn-portfolio-detail")?.addEventListener("click", function () {
@@ -3069,6 +3206,408 @@
       }
     }
   }
+
+  // ─── 포트폴리오 서브탭 라우터 ──────────────────────────────────────
+  const PF_PANELS = {
+    table: null,
+    performance: "pf-performance-panel",
+    health: "pf-health-panel",
+    transactions: "pf-tx-panel",
+    rebalance: "pf-rebalance-panel",
+  };
+
+  async function renderPfSubTab(tab) {
+    // 메인 테이블 영역 (카드)
+    const mainCard = document.querySelector(".card.shadow-sm");
+    if (mainCard) mainCard.style.display = tab === "table" ? "" : "none";
+
+    // 각 패널 토글
+    for (const [key, id] of Object.entries(PF_PANELS)) {
+      if (!id) continue;
+      const el = document.getElementById(id);
+      if (el) el.style.display = key === tab ? "" : "none";
+    }
+
+    // 서브탭 활성 상태
+    document.querySelectorAll("#pf-sub-nav .nav-link").forEach(a => {
+      a.classList.toggle("active", a.dataset.pfsub === tab);
+    });
+
+    if (tab === "table" && portfolioData) {
+      renderPortfolioTable(portfolioData.items || []);
+    } else if (tab === "performance") {
+      await renderPerformanceChart(pfPerfRange);
+    } else if (tab === "health") {
+      await renderHealthMonitor();
+    } else if (tab === "transactions") {
+      await renderTransactionHistory();
+    } else if (tab === "rebalance") {
+      await renderRebalanceGuide();
+    }
+  }
+
+  // 서브탭 클릭 이벤트
+  document.getElementById("pf-sub-nav")?.addEventListener("click", async function(e) {
+    const a = e.target.closest("[data-pfsub]");
+    if (!a) return;
+    e.preventDefault();
+    pfSubTab = a.dataset.pfsub;
+    await renderPfSubTab(pfSubTab);
+  });
+
+  // ─── 수익률 추이 차트 ───────────────────────────────────────────────
+  async function renderPerformanceChart(range) {
+    pfPerfRange = range;
+    // 버튼 활성 상태
+    document.querySelectorAll("#pf-range-btns button").forEach(b => {
+      b.classList.toggle("active", b.dataset.range === range);
+    });
+
+    const loadingEl = document.getElementById("pf-perf-loading");
+    const canvas = document.getElementById("pf-equity-chart");
+    if (!canvas) return;
+    if (loadingEl) loadingEl.style.display = "";
+    canvas.style.display = "none";
+
+    try {
+      const res = await fetch(`/api/portfolio/performance?range=${range}`);
+      if (!res.ok) { if (loadingEl) loadingEl.textContent = "데이터 없음"; return; }
+      const data = await res.json();
+
+      if (loadingEl) loadingEl.style.display = "none";
+      canvas.style.display = "";
+
+      // 기존 차트 제거
+      if (pfPerfChart) { try { pfPerfChart.destroy(); } catch(e) {} pfPerfChart = null; }
+
+      if (!data.dates || !data.dates.length) {
+        canvas.style.display = "none";
+        if (loadingEl) { loadingEl.style.display = ""; loadingEl.textContent = "가격 데이터가 없습니다."; }
+        return;
+      }
+
+      const palette = ["#e74c3c","#3498db","#2ecc71","#9b59b6","#f39c12","#1abc9c","#e67e22","#34495e"];
+      const datasets = [
+        {
+          label: "포트폴리오",
+          data: data.portfolio,
+          borderColor: "#2980b9",
+          borderWidth: 2.5,
+          tension: 0.3,
+          pointRadius: 0,
+          fill: false,
+        },
+        {
+          label: "KOSPI",
+          data: data.benchmark,
+          borderColor: "#aaa",
+          borderWidth: 1.5,
+          borderDash: [5, 3],
+          tension: 0.3,
+          pointRadius: 0,
+          fill: false,
+        },
+      ];
+
+      let pi = 0;
+      for (const [code, info] of Object.entries(data.stocks || {})) {
+        datasets.push({
+          label: info.name || code,
+          data: info.returns,
+          borderColor: palette[pi % palette.length],
+          borderWidth: 1,
+          tension: 0.3,
+          pointRadius: 0,
+          fill: false,
+          hidden: true,
+        });
+        pi++;
+      }
+
+      pfPerfChart = new Chart(canvas, {
+        type: "line",
+        data: { labels: data.dates, datasets },
+        options: {
+          responsive: true,
+          interaction: { mode: "index", intersect: false },
+          plugins: {
+            legend: { position: "bottom", labels: { font: { size: 11 }, boxWidth: 20 } },
+            tooltip: { callbacks: {
+              label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)}%`,
+            }},
+          },
+          scales: {
+            x: { ticks: { maxTicksLimit: 8, font: { size: 10 } }, grid: { display: false } },
+            y: { ticks: { callback: v => v + "%", font: { size: 10 } }, grid: { color: "#eee" } },
+          },
+        },
+      });
+    } catch(e) {
+      if (loadingEl) { loadingEl.style.display = ""; loadingEl.textContent = "로딩 실패: " + e.message; }
+    }
+  }
+
+  document.getElementById("pf-range-btns")?.addEventListener("click", function(e) {
+    const btn = e.target.closest("button[data-range]");
+    if (btn) renderPerformanceChart(btn.dataset.range);
+  });
+
+  // ─── 건강 상태 모니터 ──────────────────────────────────────────────
+  async function renderHealthMonitor() {
+    const grid = document.getElementById("pf-health-grid");
+    const alertsEl = document.getElementById("pf-health-alerts");
+    const aiCard = document.getElementById("pf-ai-summary-card");
+    if (!grid) return;
+    grid.innerHTML = '<div class="text-muted text-center py-3">로딩 중...</div>';
+
+    try {
+      const res = await fetch("/api/portfolio/health");
+      if (!res.ok) { grid.innerHTML = '<div class="text-danger">로딩 실패</div>'; return; }
+      const data = await res.json();
+
+      // AI 분석 요약 카드
+      if (aiCard) {
+        const ai = data.ai_summary;
+        if (ai) {
+          let badgeHtml = "";
+          if (ai.hash_mismatch) badgeHtml += `<span class="badge bg-danger ms-1">포트폴리오 변경</span>`;
+          else if (ai.stale) badgeHtml += `<span class="badge bg-warning text-dark ms-1">7일 이상 경과</span>`;
+          else badgeHtml += `<span class="badge bg-success ms-1">최신</span>`;
+          aiCard.style.display = "";
+          aiCard.innerHTML = `
+            <div class="alert alert-light border d-flex align-items-center gap-2 py-2 mb-0" style="font-size:0.85rem;">
+              <span>AI 포트폴리오 분석: <strong>${ai.generated_date ? ai.generated_date.slice(0,10) : "없음"}</strong>${badgeHtml}</span>
+              <button class="btn btn-xs btn-outline-primary ms-auto" style="font-size:0.78rem;padding:2px 8px;"
+                id="btn-health-reanalysis">재분석</button>
+            </div>`;
+          document.getElementById("btn-health-reanalysis")?.addEventListener("click", () => {
+            document.getElementById("btn-portfolio-analysis")?.click();
+          });
+        } else {
+          aiCard.style.display = "none";
+        }
+      }
+
+      // 경고 배너
+      if (alertsEl) {
+        if (data.alerts && data.alerts.length) {
+          alertsEl.innerHTML = data.alerts.map(a => `
+            <div class="alert alert-${a.severity} py-2 mb-1" style="font-size:0.82rem;">
+              <strong>${a.종목명}</strong> — ${a.message}
+            </div>`).join("");
+        } else {
+          alertsEl.innerHTML = `<div class="alert alert-success py-2 mb-1" style="font-size:0.82rem;">이상 징후 없음</div>`;
+        }
+      }
+
+      // 건강 상태 테이블
+      const indicatorKeys = ["수익률","RS등급","종합점수","고가대비","F스코어","AI거장평균","해자등급"];
+      const indicatorLabels = {
+        "수익률": "수익률", "RS등급": "RS등급", "종합점수": "퀀트점수",
+        "고가대비": "52주고가", "F스코어": "F스코어", "AI거장평균": "AI거장", "해자등급": "해자",
+      };
+      const formatVal = (key, v) => {
+        if (v === null || v === undefined) return "-";
+        if (key === "수익률" || key === "고가대비") return (v > 0 ? "+" : "") + v.toFixed(1) + "%";
+        if (key === "AI거장평균") return v.toFixed(1) + "/10";
+        if (key === "해자등급") return v;
+        return typeof v === "number" ? v.toFixed(1) : v;
+      };
+
+      let rows = data.stocks.map(s => {
+        const cells = indicatorKeys.map(k => {
+          const ind = s.indicators[k] || {};
+          const st = ind.status || "na";
+          const val = formatVal(k, ind.value);
+          const dot = st === "na" ? "⚬" : `<span class="health-dot health-${st}"></span>`;
+          return `<td class="text-center" style="font-size:0.8rem;">${dot} ${val}</td>`;
+        }).join("");
+        const rowClass = s.alert_count >= 3 ? "table-danger" : s.alert_count >= 2 ? "table-warning" : "";
+        return `<tr class="${rowClass}">
+          <td style="font-size:0.82rem;white-space:nowrap;">${s.종목명}<br><small class="text-muted">${s.종목코드}</small></td>
+          ${cells}
+        </tr>`;
+      }).join("");
+
+      grid.innerHTML = `
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0" style="font-size:0.82rem;">
+            <thead class="table-light">
+              <tr>
+                <th>종목</th>
+                ${indicatorKeys.map(k => `<th class="text-center">${indicatorLabels[k]}</th>`).join("")}
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+    } catch(e) {
+      grid.innerHTML = `<div class="text-danger">오류: ${e.message}</div>`;
+    }
+  }
+
+  // ─── 거래 기록 ─────────────────────────────────────────────────────
+  async function renderTransactionHistory() {
+    const wrap = document.getElementById("pf-tx-table-wrap");
+    if (!wrap) return;
+    wrap.innerHTML = '<div class="text-muted text-center py-3">로딩 중...</div>';
+
+    try {
+      const res = await fetch("/api/portfolio/transactions?limit=200");
+      if (!res.ok) { wrap.innerHTML = '<div class="text-danger">로딩 실패</div>'; return; }
+      const data = await res.json();
+      const txs = data.transactions || [];
+
+      if (!txs.length) {
+        wrap.innerHTML = '<div class="text-muted text-center py-3">거래 기록이 없습니다.</div>';
+        return;
+      }
+
+      const typeLabel = { BUY: "매수", SELL: "매도", ADJUST: "조정" };
+      const typeCls = { BUY: "tx-buy", SELL: "tx-sell", ADJUST: "tx-adjust" };
+      const rows = txs.map(tx => {
+        const cls = typeCls[tx.거래유형] || "";
+        const label = typeLabel[tx.거래유형] || tx.거래유형;
+        const amount = tx.수량 && tx.단가 ? (tx.수량 * tx.단가).toLocaleString() : "-";
+        return `<tr class="${cls}">
+          <td style="white-space:nowrap;">${(tx.created_at || "").slice(0,10)}</td>
+          <td>${tx.종목명 || tx.종목코드}</td>
+          <td><span class="badge bg-${tx.거래유형==='BUY'?'success':tx.거래유형==='SELL'?'danger':'secondary'}">${label}</span></td>
+          <td class="text-end">${(tx.수량||0).toLocaleString()}</td>
+          <td class="text-end">${(tx.단가||0).toLocaleString()}</td>
+          <td class="text-end">${amount}</td>
+          <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${tx.메모||''}">${tx.메모||''}</td>
+        </tr>`;
+      }).join("");
+
+      wrap.innerHTML = `
+        <table class="table table-sm table-hover mb-0" style="font-size:0.8rem;">
+          <thead class="table-light sticky-top">
+            <tr>
+              <th>날짜</th><th>종목</th><th>유형</th>
+              <th class="text-end">수량</th><th class="text-end">단가</th>
+              <th class="text-end">거래금액</th><th>메모</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>`;
+    } catch(e) {
+      wrap.innerHTML = `<div class="text-danger">오류: ${e.message}</div>`;
+    }
+  }
+
+  // ─── 리밸런싱 가이드 ───────────────────────────────────────────────
+  async function renderRebalanceGuide() {
+    const content = document.getElementById("pf-rebal-content");
+    if (!content) return;
+    content.innerHTML = '<div class="text-muted text-center py-3">로딩 중...</div>';
+
+    try {
+      const res = await fetch("/api/portfolio/rebalance");
+      if (!res.ok) { content.innerHTML = '<div class="text-danger">로딩 실패</div>'; return; }
+      const data = await res.json();
+      const items = data.items || [];
+
+      // pfRebalTargets 초기화 (현재 목표비중으로)
+      pfRebalTargets = {};
+      items.forEach(it => { pfRebalTargets[it.종목코드] = it.목표비중; });
+
+      if (!items.length) {
+        content.innerHTML = '<div class="text-muted text-center py-3">포트폴리오가 비어 있습니다.</div>';
+        return;
+      }
+
+      const rows = items.map(it => {
+        const devCls = Math.abs(it.편차) >= 5 ? "fw-bold text-danger" : Math.abs(it.편차) >= 2 ? "text-warning" : "text-muted";
+        const dirBadge = it.조정방향 === "매수"
+          ? `<span class="badge bg-success">${it.조정방향}</span>`
+          : it.조정방향 === "매도"
+          ? `<span class="badge bg-danger">${it.조정방향}</span>`
+          : `<span class="text-muted">-</span>`;
+
+        const barWidth = Math.min(100, Math.max(0, it.현재비중));
+        const targetWidth = Math.min(100, Math.max(0, it.목표비중));
+
+        return `<tr data-code="${it.종목코드}">
+          <td style="font-size:0.82rem;">${it.종목명}<br>
+            <div class="rebal-bar-wrap mt-1">
+              <div class="rebal-bar-cur" style="width:${barWidth}%;"></div>
+              <div class="rebal-bar-tgt" style="left:${targetWidth}%;"></div>
+            </div>
+          </td>
+          <td class="text-end">${it.현재비중.toFixed(1)}%</td>
+          <td class="text-center">
+            <input type="number" class="form-control form-control-sm rebal-target-input"
+              data-code="${it.종목코드}" value="${it.목표비중.toFixed(1)}"
+              min="0" max="100" step="0.5" style="width:70px;display:inline-block;font-size:0.8rem;">%
+          </td>
+          <td class="text-end ${devCls}">${it.편차 > 0 ? "+" : ""}${it.편차.toFixed(1)}%</td>
+          <td class="text-center">${dirBadge}</td>
+          <td class="text-end">${it.조정수량 > 0 ? it.조정수량.toLocaleString() + "주" : "-"}</td>
+          <td class="text-end">${it.조정금액 > 0 ? "₩" + it.조정금액.toLocaleString() : "-"}</td>
+        </tr>`;
+      }).join("");
+
+      content.innerHTML = `
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0" style="font-size:0.82rem;">
+            <thead class="table-light">
+              <tr>
+                <th>종목</th>
+                <th class="text-end">현재비중</th>
+                <th class="text-center">목표비중</th>
+                <th class="text-end">편차</th>
+                <th class="text-center">조정</th>
+                <th class="text-end">수량</th>
+                <th class="text-end">금액</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <div class="text-muted mt-2" style="font-size:0.78rem;">* 편차 ±2% 이상 종목만 조정 제안. 현재가 기준 추산값.</div>`;
+
+      // 입력 변경 이벤트
+      content.querySelectorAll(".rebal-target-input").forEach(inp => {
+        inp.addEventListener("input", () => {
+          pfRebalTargets[inp.dataset.code] = parseFloat(inp.value) || 0;
+        });
+      });
+    } catch(e) {
+      content.innerHTML = `<div class="text-danger">오류: ${e.message}</div>`;
+    }
+  }
+
+  // 동일비중 버튼
+  document.getElementById("btn-rebal-equal")?.addEventListener("click", async () => {
+    const items = Object.keys(pfRebalTargets);
+    if (!items.length) return;
+    const eq = parseFloat((100 / items.length).toFixed(1));
+    items.forEach(code => { pfRebalTargets[code] = eq; });
+    // 입력 필드 업데이트
+    document.querySelectorAll(".rebal-target-input").forEach(inp => {
+      inp.value = eq.toFixed(1);
+    });
+  });
+
+  // 목표 저장 버튼
+  document.getElementById("btn-rebal-save")?.addEventListener("click", async () => {
+    const targets = Object.entries(pfRebalTargets).map(([code, w]) => ({
+      종목코드: code, 목표비중: w,
+    }));
+    try {
+      const res = await fetch("/api/portfolio/rebalance/targets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targets }),
+      });
+      if (res.ok) {
+        const btn = document.getElementById("btn-rebal-save");
+        if (btn) { btn.textContent = "저장됨!"; setTimeout(() => { btn.textContent = "목표 저장"; }, 2000); }
+        await renderRebalanceGuide();
+      }
+    } catch(e) { alert("저장 실패: " + e.message); }
+  });
 
   // ─── 포트폴리오 AI 분석 ────────────────────────────────────────────
   let _pfAnalysisInProgress = false;
@@ -3326,6 +3865,11 @@
         document.getElementById("portfolio-summary-bar").style.display = "";
       } else {
         document.getElementById("portfolio-summary-bar").style.display = "none";
+        document.getElementById("portfolio-subtabs").style.display = "none";
+        ["pf-performance-panel","pf-health-panel","pf-tx-panel","pf-rebalance-panel"].forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.style.display = "none";
+        });
         if (prevScreen === "portfolio") loadMarketSummary();
       }
 

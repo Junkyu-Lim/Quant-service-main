@@ -652,7 +652,12 @@ def api_portfolio_add():
     )
     if not code_known:
         return jsonify({"error": f"종목코드 {code}를 DB에서 찾을 수 없습니다. 데이터 수집 후 다시 시도하세요."}), 404
-    _db.upsert_portfolio_item(code, qty, price, buy_date, memo)
+    name = body.get("종목명", body.get("name", ""))
+    if not name and not df.empty:
+        rows = df[df["종목코드"] == code]
+        if not rows.empty:
+            name = rows.iloc[0].get("종목명", "")
+    _db.upsert_portfolio_item(code, qty, price, buy_date, memo, name=name)
     return jsonify({"status": "ok", "종목코드": code})
 
 
@@ -675,6 +680,36 @@ def api_portfolio_cash_post():
     return jsonify({"status": "ok", "amount": amount})
 
 
+@app.route("/api/portfolio/trade", methods=["POST"])
+def api_portfolio_trade():
+    """매수/매도 직접 실행: portfolio 갱신 + 예수금 자동 반영"""
+    body = request.get_json(silent=True) or {}
+    code = (body.get("종목코드") or body.get("code", "")).strip()
+    if not code:
+        return jsonify({"error": "종목코드가 필요합니다."}), 400
+    code = code.zfill(6)
+    tx_type = (body.get("거래유형") or body.get("type", "")).upper()
+    if tx_type not in ("BUY", "SELL"):
+        return jsonify({"error": "거래유형은 BUY 또는 SELL이어야 합니다."}), 400
+    try:
+        qty = int(float(body.get("수량", body.get("qty", 0))))
+        price = float(body.get("단가", body.get("price", 0)))
+    except (ValueError, TypeError):
+        return jsonify({"error": "수량과 단가는 숫자여야 합니다."}), 400
+    if qty <= 0 or price <= 0:
+        return jsonify({"error": "수량과 단가는 0보다 커야 합니다."}), 400
+    tx_date = body.get("거래일", body.get("date", ""))
+    memo = (body.get("메모", body.get("memo", "")) or "")[:200]
+    name = body.get("종목명", body.get("name", ""))
+    if not name:
+        entries = _db.load_portfolio()
+        name = next((e.get("종목명", "") or "" for e in entries if e["종목코드"] == code), "")
+    result = _db.execute_trade(code, name, tx_type, qty, price, tx_date, memo)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
 @app.route("/api/portfolio/<code>", methods=["PUT"])
 def api_portfolio_update(code: str):
     """포트폴리오 항목 수정"""
@@ -689,15 +724,283 @@ def api_portfolio_update(code: str):
     memo = (body.get("메모", body.get("memo", "")) or "")[:200]
     if qty <= 0 or price <= 0:
         return jsonify({"error": "수량과 매입가는 0보다 커야 합니다."}), 400
-    _db.upsert_portfolio_item(code, qty, price, buy_date, memo)
+    name = body.get("종목명", body.get("name", ""))
+    _db.upsert_portfolio_item(code, qty, price, buy_date, memo, name=name)
     return jsonify({"status": "ok"})
 
 
 @app.route("/api/portfolio/<code>", methods=["DELETE"])
 def api_portfolio_delete(code: str):
     """포트폴리오에서 종목 삭제"""
-    _db.delete_portfolio_item(code)
+    # 종목명 조회 (거래 기록용)
+    entries = _db.load_portfolio()
+    name = next((e.get("종목명", "") or "" for e in entries if e["종목코드"] == code.zfill(6)), "")
+    _db.delete_portfolio_item(code, name=name)
     return jsonify({"status": "ok"})
+
+
+# ── Portfolio Management: Performance / Health / Transactions / Rebalance ─
+
+@app.route("/api/portfolio/performance", methods=["GET"])
+def api_portfolio_performance():
+    """포트폴리오 수익률 추이 (에퀴티 커브)"""
+    range_param = request.args.get("range", "3M")
+    n_days_map = {"1M": 22, "3M": 66, "6M": 132, "1Y": 250}
+    n_days = n_days_map.get(range_param, 66)
+
+    entries = _db.load_portfolio()
+    if not entries:
+        return jsonify({"dates": [], "portfolio": [], "benchmark": [], "stocks": {}})
+
+    codes = [e["종목코드"] for e in entries]
+    qty_map = {e["종목코드"]: int(e.get("수량", 0)) for e in entries}
+    name_map = {}
+    df_dash = _db.load_dashboard()
+    if not df_dash.empty:
+        for _, row in df_dash[df_dash["종목코드"].isin(codes)].iterrows():
+            name_map[row["종목코드"]] = row.get("종목명", row["종목코드"])
+
+    price_df = _db.load_price_history_multi(codes, n_days)
+    kospi_df = _db.load_index_history("KOSPI", n_days)
+
+    if price_df.empty:
+        return jsonify({"dates": [], "portfolio": [], "benchmark": [], "stocks": {}})
+
+    # 공통 날짜 기준 (price_df 기준)
+    dates = price_df.index.tolist()
+
+    # 포트폴리오 에퀴티 커브 (보유 수량 기반)
+    portfolio_values = []
+    for date in dates:
+        total = 0.0
+        for code in codes:
+            if code not in price_df.columns:
+                continue
+            p = price_df.loc[date, code]
+            if p and not (p != p):  # NaN 체크
+                total += qty_map.get(code, 0) * float(p)
+        portfolio_values.append(total)
+
+    base = portfolio_values[0] if portfolio_values and portfolio_values[0] > 0 else 1
+    portfolio_returns = [round((v / base - 1) * 100, 2) if base > 0 else 0 for v in portfolio_values]
+
+    # KOSPI 벤치마크
+    benchmark_returns = []
+    if not kospi_df.empty:
+        # price_df 날짜와 매칭
+        kospi_series = kospi_df["종가"].reindex(dates, method="ffill")
+        k_base = kospi_series.iloc[0] if len(kospi_series) > 0 else 1
+        benchmark_returns = [
+            round((float(v) / float(k_base) - 1) * 100, 2) if k_base and not (v != v) else 0
+            for v in kospi_series
+        ]
+
+    # 개별 종목 수익률
+    stocks_data = {}
+    for code in codes:
+        if code not in price_df.columns:
+            continue
+        series = price_df[code].fillna(method="ffill")
+        s_base = series.iloc[0] if len(series) > 0 and series.iloc[0] else 1
+        rets = [round((float(v) / float(s_base) - 1) * 100, 2) if s_base else 0 for v in series]
+        stocks_data[code] = {"name": name_map.get(code, code), "returns": rets}
+
+    return jsonify({
+        "dates": dates,
+        "portfolio": portfolio_returns,
+        "benchmark": benchmark_returns,
+        "stocks": stocks_data,
+    })
+
+
+@app.route("/api/portfolio/health", methods=["GET"])
+def api_portfolio_health():
+    """포트폴리오 종목 건강 상태 모니터링"""
+    entries = _db.load_portfolio()
+    if not entries:
+        return jsonify({"stocks": [], "alerts": [], "ai_summary": None})
+
+    df_dash = _db.load_dashboard()
+    supp = _db.load_price_supplement()
+    pf_res = _build_portfolio_response(entries, df_dash, supp)
+    pf_items = {item["종목코드"]: item for item in pf_res.get("items", [])}
+
+    # 포트폴리오 AI 분석 요약
+    pf_analysis = _db.load_portfolio_analysis()
+    ai_summary = None
+    if pf_analysis:
+        from datetime import datetime
+        gen_date = pf_analysis.get("generated_date", "")
+        stale = False
+        try:
+            delta = datetime.now() - datetime.strptime(gen_date[:10], "%Y-%m-%d")
+            stale = delta.days > 7
+        except Exception:
+            pass
+        # 포트폴리오 변경 여부 확인
+        current_hash = _portfolio_hash(entries)
+        hash_mismatch = pf_analysis.get("portfolio_hash") != current_hash
+        ai_summary = {
+            "generated_date": gen_date,
+            "model": pf_analysis.get("model_used", ""),
+            "stale": stale,
+            "hash_mismatch": hash_mismatch,
+        }
+
+    def _status(val, green, yellow):
+        if val is None:
+            return "na"
+        if val >= green:
+            return "green"
+        if val >= yellow:
+            return "yellow"
+        return "red"
+
+    stocks = []
+    alerts = []
+    for entry in entries:
+        code = entry["종목코드"]
+        pf_item = pf_items.get(code, {})
+        ret_pct = pf_item.get("수익률")
+
+        # dashboard_result 메트릭
+        rs = None
+        score = None
+        high52 = None
+        fscore = None
+        if not df_dash.empty:
+            rows = df_dash[df_dash["종목코드"] == code]
+            if not rows.empty:
+                r = rows.iloc[0]
+                rs = _safe_val(r.get("RS_등급"))
+                score = _safe_val(r.get("종합점수"))
+                high52 = _safe_val(r.get("52주_최고대비(%)"))
+                fscore = _safe_val(r.get("F스코어"))
+
+        # 개별 종목 AI 분석
+        ai_master_avg = None
+        ai_moat = None
+        report_row = _db.load_report(code)
+        if report_row and report_row.get("scores_json"):
+            try:
+                sc = json.loads(report_row["scores_json"])
+                masters = sc.get("stage7_masters", {})
+                if masters:
+                    scores_list = [v.get("score", 0) for v in masters.values() if isinstance(v, dict)]
+                    if scores_list:
+                        ai_master_avg = round(sum(scores_list) / len(scores_list), 1)
+                moat_info = sc.get("stage3_moat", {})
+                ai_moat = moat_info.get("moat_rating") if isinstance(moat_info, dict) else None
+            except Exception:
+                pass
+
+        indicators = {
+            "수익률": {"value": ret_pct, "status": _status(ret_pct, 0, -10) if ret_pct is not None else "na"},
+            "RS등급": {"value": rs, "status": _status(rs, 70, 40) if rs is not None else "na"},
+            "종합점수": {"value": score, "status": _status(score, 70, 40) if score is not None else "na"},
+            "고가대비": {"value": high52, "status": _status(high52, -10, -25) if high52 is not None else "na"},
+            "F스코어": {"value": fscore, "status": _status(fscore, 6, 4) if fscore is not None else "na"},
+            "AI거장평균": {"value": ai_master_avg, "status": _status(ai_master_avg, 7, 5) if ai_master_avg is not None else "na"},
+            "해자등급": {
+                "value": ai_moat,
+                "status": "green" if ai_moat in ("Wide", "Narrow") else ("red" if ai_moat == "None" else "na"),
+            },
+        }
+
+        red_count = sum(1 for v in indicators.values() if v["status"] == "red")
+        yellow_count = sum(1 for v in indicators.values() if v["status"] == "yellow")
+
+        stock_info = {
+            "종목코드": code,
+            "종목명": pf_item.get("종목명", entry.get("종목명", code)),
+            "수익률": ret_pct,
+            "indicators": indicators,
+            "alert_count": red_count,
+        }
+        stocks.append(stock_info)
+
+        if red_count >= 2 or (red_count >= 1 and yellow_count >= 2):
+            issues = [k for k, v in indicators.items() if v["status"] == "red"]
+            alerts.append({
+                "종목코드": code,
+                "종목명": stock_info["종목명"],
+                "message": f"주의 지표: {', '.join(issues)}",
+                "severity": "danger" if red_count >= 3 else "warning",
+            })
+
+    stocks.sort(key=lambda x: x["alert_count"], reverse=True)
+    return jsonify({"stocks": stocks, "alerts": alerts, "ai_summary": ai_summary})
+
+
+@app.route("/api/portfolio/transactions", methods=["GET"])
+def api_portfolio_transactions():
+    """포트폴리오 거래 이력 조회"""
+    code = request.args.get("code")
+    limit = int(request.args.get("limit", 100))
+    txs = _db.load_transactions(code=code, limit=limit)
+    return jsonify({"transactions": txs})
+
+
+@app.route("/api/portfolio/rebalance", methods=["GET"])
+def api_portfolio_rebalance():
+    """리밸런싱 가이드 조회"""
+    entries = _db.load_portfolio()
+    if not entries:
+        return jsonify({"mode": "equal", "total_eval": 0, "items": []})
+
+    df_dash = _db.load_dashboard()
+    supp = _db.load_price_supplement()
+    pf_res = _build_portfolio_response(entries, df_dash, supp)
+    pf_items = pf_res.get("items", [])
+    total_eval = pf_res.get("summary", {}).get("총평가금액", 0)
+
+    targets_list = _db.load_targets()
+    targets_map = {t["종목코드"]: t["목표비중"] for t in targets_list}
+    mode = "custom" if targets_map else "equal"
+
+    n = len(pf_items)
+    equal_weight = round(100 / n, 2) if n > 0 else 0
+
+    result_items = []
+    for item in pf_items:
+        code = item["종목코드"]
+        cur_weight = item.get("비중", 0) or 0
+        target_weight = targets_map.get(code, equal_weight)
+        deviation = round(cur_weight - target_weight, 2)
+        cur_price = item.get("현재가") or 0
+        adjust_shares = 0
+        adjust_amount = 0
+        direction = "-"
+        if abs(deviation) >= 2 and total_eval > 0 and cur_price > 0:
+            adjust_amount = round(abs(deviation) / 100 * total_eval)
+            adjust_shares = max(1, round(adjust_amount / cur_price))
+            direction = "매도" if deviation > 0 else "매수"
+
+        result_items.append({
+            "종목코드": code,
+            "종목명": item.get("종목명", code),
+            "현재가": cur_price,
+            "현재비중": round(cur_weight, 2),
+            "목표비중": round(target_weight, 2),
+            "편차": deviation,
+            "조정방향": direction,
+            "조정수량": adjust_shares,
+            "조정금액": adjust_amount,
+        })
+
+    return jsonify({"mode": mode, "total_eval": total_eval, "items": result_items})
+
+
+@app.route("/api/portfolio/rebalance/targets", methods=["POST"])
+def api_portfolio_rebalance_targets():
+    """리밸런싱 목표 비중 저장"""
+    body = request.get_json(silent=True) or {}
+    targets = body.get("targets", [])
+    if not isinstance(targets, list):
+        return jsonify({"error": "targets must be a list"}), 400
+    valid = [t for t in targets if "종목코드" in t and "목표비중" in t]
+    _db.save_targets(valid)
+    return jsonify({"status": "ok", "saved": len(valid)})
 
 
 # ── Portfolio AI Analysis ─────────────────────────────────────────────
