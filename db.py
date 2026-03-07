@@ -108,12 +108,15 @@ _SCHEMA_STATEMENTS = [
     scores_json   TEXT,
     model_used    TEXT,
     generated_date TEXT NOT NULL,
+    input_hash    TEXT,
     diff_html     TEXT,
     PRIMARY KEY (종목코드)
 )""",
+    "ALTER TABLE analysis_reports ADD COLUMN IF NOT EXISTS input_hash TEXT",
     "ALTER TABLE analysis_reports ADD COLUMN IF NOT EXISTS diff_html TEXT",
     """CREATE TABLE IF NOT EXISTS portfolio (
     종목코드      TEXT PRIMARY KEY,
+    종목명        TEXT,
     수량          INTEGER NOT NULL DEFAULT 0,
     평균매입가    DOUBLE NOT NULL DEFAULT 0,
     매입일        TEXT,
@@ -121,6 +124,7 @@ _SCHEMA_STATEMENTS = [
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 )""",
+    "ALTER TABLE portfolio ADD COLUMN IF NOT EXISTS 종목명 TEXT",
     """CREATE TABLE IF NOT EXISTS price_supplement (
     종목코드      TEXT PRIMARY KEY,
     종목명        TEXT,
@@ -430,7 +434,8 @@ def load_dashboard_prev() -> pd.DataFrame:
 # ─────────────────────────────────────────────
 
 def save_report(code: str, name: str, html: str, scores_json: str,
-                 model: str, date: str, diff_html: str = None):
+                 model: str, date: str, input_hash: str | None = None,
+                 diff_html: str = None):
     with get_conn() as conn:
         # 기존 보고서가 있으면 히스토리에 보관
         cur = conn.execute(
@@ -450,9 +455,9 @@ def save_report(code: str, name: str, html: str, scores_json: str,
             )
         conn.execute(
             """INSERT OR REPLACE INTO analysis_reports
-               (종목코드, 종목명, report_html, scores_json, model_used, generated_date, diff_html)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            [code, name, html, scores_json, model, date, diff_html],
+               (종목코드, 종목명, report_html, scores_json, model_used, generated_date, input_hash, diff_html)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            [code, name, html, scores_json, model, date, input_hash, diff_html],
         )
     log.info("보고서 저장: %s %s (이전 버전 보관)", code, name)
 
@@ -468,6 +473,30 @@ def load_report(code: str) -> dict | None:
             return None
         cols = [d[0] for d in cur.description]
         return dict(zip(cols, row))
+
+
+def get_analysis_data_version() -> str:
+    """종목 AI 분석 캐시 무효화에 사용할 데이터 버전 문자열."""
+    tables = [
+        "daily",
+        "financial_statements",
+        "indicators",
+        "shares",
+        "price_history",
+        "investor_trading",
+        "index_history",
+    ]
+    versions = []
+    with get_conn() as conn:
+        for table in tables:
+            try:
+                row = conn.execute(
+                    f"SELECT MAX(collected_date) FROM {table}"
+                ).fetchone()
+            except Exception:
+                row = None
+            versions.append(f"{table}:{row[0] if row and row[0] else '-'}")
+    return "|".join(versions)
 
 
 def list_reports() -> list[dict]:
@@ -565,8 +594,10 @@ def load_portfolio() -> list[dict]:
 
 
 def upsert_portfolio_item(code: str, qty: int, price: float,
-                          buy_date: str, memo: str, name: str = ""):
-    """포트폴리오 항목 추가/수정 (INSERT OR REPLACE)"""
+                          buy_date: str, memo: str, name: str = "", adjust_cash: bool = False):
+    """포트폴리오 항목 추가/수정 (INSERT OR REPLACE)
+    adjust_cash=True이면 종목 추가/수정 시 예수금도 자동 반영
+    """
     from datetime import datetime
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     code = code.zfill(6)
@@ -582,9 +613,9 @@ def upsert_portfolio_item(code: str, qty: int, price: float,
             before_qty, before_avg = row[1], row[2]
         conn.execute(
             """INSERT OR REPLACE INTO portfolio
-               (종목코드, 수량, 평균매입가, 매입일, 메모, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            [code, qty, price, buy_date, memo, created, now],
+               (종목코드, 종목명, 수량, 평균매입가, 매입일, 메모, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            [code, name, qty, price, buy_date, memo, created, now],
         )
     # 거래 유형 결정 및 로깅
     if before_qty is None:
@@ -597,21 +628,43 @@ def upsert_portfolio_item(code: str, qty: int, price: float,
         tx_type = "ADJUST"
     log_transaction(code, name, tx_type, qty, price, buy_date, memo,
                     before_qty, before_avg, qty, price)
+
+    # 예수금 자동 반영 (adjust_cash=True인 경우)
+    if adjust_cash:
+        if tx_type == "BUY":
+            # 신규 매수 또는 추가 매수: 예수금 차감
+            if before_qty is None:
+                # 신규: 전체 금액 차감
+                save_cash(load_cash() - qty * price)
+            else:
+                # 추가: 증가분만 차감
+                qty_increase = qty - before_qty
+                save_cash(load_cash() - qty_increase * price)
+        elif tx_type == "SELL":
+            # 수량 감소: 예수금 증가
+            qty_decrease = before_qty - qty
+            save_cash(load_cash() + qty_decrease * price)
+
     log.info("포트폴리오 저장: %s (수량=%d, 단가=%.0f)", code, qty, price)
 
 
-def delete_portfolio_item(code: str, name: str = ""):
+def delete_portfolio_item(code: str, name: str = "", adjust_cash: bool = False):
     """포트폴리오에서 종목 삭제"""
     code = code.zfill(6)
+    deleted_qty, deleted_avg = 0, 0.0
     with get_conn() as conn:
         cur = conn.execute(
             "SELECT 수량, 평균매입가 FROM portfolio WHERE 종목코드 = ?", [code]
         )
         row = cur.fetchone()
         if row:
+            deleted_qty, deleted_avg = row[0], row[1]
             log_transaction(code, name, "SELL", row[0], row[1], None, "전량매도",
                             row[0], row[1], 0, 0)
         conn.execute("DELETE FROM portfolio WHERE 종목코드 = ?", [code])
+    # 예수금 반영 (adjust_cash=True인 경우만)
+    if adjust_cash and deleted_qty > 0:
+        save_cash(load_cash() + deleted_qty * deleted_avg)
     log.info("포트폴리오 삭제: %s", code)
 
 

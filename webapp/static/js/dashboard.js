@@ -429,7 +429,7 @@
 
   // ─── 탭별 기본 컬럼 정의 ─────────────────────────────────────────────
   const COLUMNS = {
-    // 1. 전체 종목 - 균형잡힌 종합 정보 (26개)
+    // 1. 전체 종목 - 균형잡힌 종합 정보 (28개)
     all: [
       // 기본
       { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" }, { key: "시장구분", label: "시장" },
@@ -451,10 +451,12 @@
       { key: "거래대금_20일평균", label: "거래(평)", fmt: "eok" },
       // 배당
       { key: "배당수익률(%)", label: "배당%", fmt: "f2" },
+      // 타이밍
+      { key: "과열도", label: "과열도", fmt: "f1" }, { key: "타이밍_점수", label: "타이밍", fmt: "f1" },
       // 종합
       { key: "종합점수", label: "점수", fmt: "f1" }
     ],
-    // 2. 시장 주도주 - 수급+모멘텀+실적 (18개)
+    // 2. 시장 주도주 - 수급+모멘텀+실적 (20개)
     leaders: [
       // 기본
       { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" },
@@ -469,6 +471,9 @@
       // 실적
       { key: "거래대금_증감(%)", label: "거래증감%", fmt: "f1" },
       { key: "Q_영업이익_YoY(%)", label: "Q OP YoY", fmt: "f1" }, { key: "실적가속_연속", label: "실적가속" },
+      { key: "실적감속_경고", label: "감속경고", fmt: "flag" },
+      // 타이밍
+      { key: "과열도", label: "과열도", fmt: "f1" },
       // 점수
       { key: "주도주_점수", label: "주도점수", fmt: "f1" }
     ],
@@ -492,7 +497,7 @@
       // 점수
       { key: "우량가치_점수", label: "우량점수", fmt: "f1" }
     ],
-    // 4. 고성장 모멘텀 - CAGR, YoY, 추세, 가속도 (21개)
+    // 4. 고성장 모멘텀 - CAGR, YoY, 추세, 가속도 (24개)
     growth_mom: [
       // 기본
       { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" },
@@ -503,14 +508,16 @@
       // 분기 YoY
       { key: "Q_매출_YoY(%)", label: "Q 매출YoY", fmt: "f1" }, { key: "Q_영업이익_YoY(%)", label: "Q OP YoY", fmt: "f1" },
       { key: "Q_순이익_YoY(%)", label: "Q NP YoY", fmt: "f1" },
-      // 가속도
+      // 가속도/감속
       { key: "실적가속_연속", label: "실적가속" }, { key: "영업이익_가속도", label: "OP가속도", fmt: "f1" },
-      { key: "매출_가속도", label: "매출가속도", fmt: "f1" },
+      { key: "매출_가속도", label: "매출가속도", fmt: "f1" }, { key: "실적감속_경고", label: "감속경고", fmt: "flag" },
       // 기술
       { key: "MA20_이격도(%)", label: "MA20이격", fmt: "f1" }, { key: "MA60_이격도(%)", label: "MA60이격", fmt: "f1" },
       { key: "52주_최고대비(%)", label: "고가대비%", fmt: "f1" }, { key: "RS_등급", label: "RS등급", fmt: "f1" },
       // 수익성
       { key: "영업이익률(%)", label: "OPM%", fmt: "f1" },
+      // 타이밍
+      { key: "과열도", label: "과열도", fmt: "f1" }, { key: "상승조짐", label: "상승조짐", fmt: "f1" },
       // 점수
       { key: "고성장_점수", label: "성장점수", fmt: "f1" }
     ],
@@ -536,7 +543,7 @@
       // 점수
       { key: "현금배당_점수", label: "배당점수", fmt: "f1" }
     ],
-    // 6. 턴어라운드 - 전환신호, 이익률, 수급 (21개)
+    // 6. 턴어라운드 - 전환신호, 이익률, 수급 (23개)
     turnaround: [
       // 기본
       { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" },
@@ -555,10 +562,12 @@
       { key: "RSI_14", label: "RSI", fmt: "f1" }, { key: "52주_최저대비(%)", label: "저가대비%", fmt: "f1" },
       // 밸류 (턴 후 저평가 확인)
       { key: "PBR", label: "PBR", fmt: "f2" },
+      // 타이밍 (진입 타이밍 핵심)
+      { key: "상승조짐", label: "상승조짐", fmt: "f1" }, { key: "타이밍_점수", label: "타이밍", fmt: "f1" },
       // 점수
       { key: "턴어라운드_점수", label: "턴점수", fmt: "f1" }
     ],
-    // 7. Multi-Strategy (3관왕) - 5개 전략 점수 (18개)
+    // 7. Multi-Strategy (3관왕) - 5개 전략 점수 (19개)
     multi_strategy: [
       // 기본
       { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" },
@@ -568,7 +577,8 @@
       // 전략별 점수
       { key: "종합점수", label: "종합점수", fmt: "f1" },
       { key: "성장성_점수", label: "성장점수", fmt: "f1" }, { key: "안정성_점수", label: "안정점수", fmt: "f1" },
-      { key: "가격_점수", label: "가격점수", fmt: "f1" }, { key: "주도주_점수", label: "주도점수", fmt: "f1" },
+      { key: "가격_점수", label: "가격점수", fmt: "f1" }, { key: "타이밍_점수", label: "타이밍점수", fmt: "f1" },
+      { key: "주도주_점수", label: "주도점수", fmt: "f1" },
       { key: "우량가치_점수", label: "우량점수", fmt: "f1" }, { key: "고성장_점수", label: "성장전략점수", fmt: "f1" },
       { key: "현금배당_점수", label: "배당점수", fmt: "f1" },
       // 핵심 팩터
@@ -576,7 +586,7 @@
       { key: "부채비율(%)", label: "부채%", fmt: "f1" }, { key: "RS_등급", label: "RS등급", fmt: "f1" },
       { key: "F스코어", label: "F-Score", fmt: "int" }
     ],
-    // 8. Forward 추정치 - 커버리지 종목 내 모멘텀 (18개)
+    // 8. Forward 추정치 - 커버리지 종목 내 모멘텀 (20개)
     forward_covered: [
       // 기본
       { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" },
@@ -593,10 +603,13 @@
       { key: "Fwd_2yr_영업이익_성장(%)", label: "2yr OP성장%", fmt: "f1" },
       // 실적 현황
       { key: "Q_영업이익_YoY(%)", label: "Q OP YoY", fmt: "f1" }, { key: "ROE(%)", label: "ROE%(현)", fmt: "f2" },
+      { key: "실적감속_경고", label: "감속경고", fmt: "flag" },
+      // 타이밍
+      { key: "과열도", label: "과열도", fmt: "f1" },
       // 점수
       { key: "Fwd_모멘텀_점수", label: "Fwd점수", fmt: "f1" }
     ],
-    // 9. 관심종목 - 종합 모니터링 (30개)
+    // 9. 관심종목 - 종합 모니터링 (34개)
     watchlist: [
       // 기본
       { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" },
@@ -611,6 +624,7 @@
       // 성장성
       { key: "매출_CAGR", label: "매출CAGR", fmt: "f1" }, { key: "영업이익_CAGR", label: "OP CAGR", fmt: "f1" },
       { key: "Q_영업이익_YoY(%)", label: "Q OP YoY", fmt: "f1" }, { key: "실적가속_연속", label: "실적가속" },
+      { key: "실적감속_경고", label: "감속경고", fmt: "flag" },
       // 안정성
       { key: "부채비율(%)", label: "부채%", fmt: "f1" }, { key: "F스코어", label: "F-Score", fmt: "int" },
       { key: "이익품질_양호", label: "이익품질", fmt: "flag" },
@@ -620,6 +634,9 @@
       { key: "RS_등급", label: "RS등급", fmt: "f1" }, { key: "수급강도", label: "수급", fmt: "f1" },
       { key: "52주_최고대비(%)", label: "고가대비%", fmt: "f1" }, { key: "RSI_14", label: "RSI", fmt: "f1" },
       { key: "거래대금_20일평균", label: "거래(평)", fmt: "eok" },
+      // 타이밍 (모니터링 핵심)
+      { key: "과열도", label: "과열도", fmt: "f1" }, { key: "상승조짐", label: "상승조짐", fmt: "f1" },
+      { key: "타이밍_점수", label: "타이밍", fmt: "f1" },
       // 종합
       { key: "종합점수", label: "점수", fmt: "f1" }
     ],
@@ -642,31 +659,34 @@
 
   // ─── 탭별 그룹 구분선 경계 컬럼 ──────────────────────────────────────────
   const TAB_GROUP_STARTS = {
-    all:            new Set(["PER", "ROE(%)", "영업이익_CAGR", "부채비율(%)", "수급강도", "배당수익률(%)", "종합점수"]),
-    leaders:        new Set(["수급강도", "RS_등급", "거래대금_증감(%)", "주도주_점수"]),
+    all:            new Set(["PER", "ROE(%)", "영업이익_CAGR", "부채비율(%)", "수급강도", "배당수익률(%)", "과열도", "종합점수"]),
+    leaders:        new Set(["수급강도", "RS_등급", "거래대금_증감(%)", "과열도", "주도주_점수"]),
     quality_value:  new Set(["PER", "ROE(%)", "F스코어", "영업이익_CAGR", "우량가치_점수"]),
-    growth_mom:     new Set(["매출_CAGR", "Q_매출_YoY(%)", "실적가속_연속", "MA20_이격도(%)", "영업이익률(%)", "고성장_점수"]),
+    growth_mom:     new Set(["매출_CAGR", "Q_매출_YoY(%)", "실적가속_연속", "MA20_이격도(%)", "영업이익률(%)", "과열도", "고성장_점수"]),
     cash_div:       new Set(["배당수익률(%)", "FCF수익률(%)", "ROIC(%)", "PER", "부채비율(%)", "현금배당_점수"]),
-    turnaround:     new Set(["흑자전환", "이익률_변동폭", "TTM_순이익", "스마트머니_승률", "PBR", "턴어라운드_점수"]),
+    turnaround:     new Set(["흑자전환", "이익률_변동폭", "TTM_순이익", "스마트머니_승률", "PBR", "상승조짐", "턴어라운드_점수"]),
     multi_strategy: new Set(["전략수", "종합점수", "ROE(%)", "F스코어"]),
-    forward_covered:new Set(["PER", "Fwd_PER", "Fwd_매출_성장률(%)", "Q_영업이익_YoY(%)", "Fwd_모멘텀_점수"]),
-    watchlist:      new Set(["PER", "ROE(%)", "매출_CAGR", "부채비율(%)", "배당수익률(%)", "RS_등급", "종합점수"]),
+    forward_covered:new Set(["PER", "Fwd_PER", "Fwd_매출_성장률(%)", "Q_영업이익_YoY(%)", "과열도", "Fwd_모멘텀_점수"]),
+    watchlist:      new Set(["PER", "ROE(%)", "매출_CAGR", "부채비율(%)", "배당수익률(%)", "RS_등급", "과열도", "종합점수"]),
   };
   const TAB_GROUP_LABELS = {
     all: {
       "PER": "— 가치평가 —", "ROE(%)": "— 수익성 —", "영업이익_CAGR": "— 성장 —",
-      "부채비율(%)": "— 안정성 —", "수급강도": "— 수급/기술 —", "배당수익률(%)": "— 배당 —", "종합점수": "— 종합 —"
+      "부채비율(%)": "— 안정성 —", "수급강도": "— 수급/기술 —", "배당수익률(%)": "— 배당 —",
+      "과열도": "— 타이밍 —", "종합점수": "— 종합 —"
     },
     leaders: {
-      "수급강도": "— 수급 —", "RS_등급": "— RS/기술 —", "거래대금_증감(%)": "— 거래/실적 —", "주도주_점수": "— 점수 —"
+      "수급강도": "— 수급 —", "RS_등급": "— RS/기술 —", "거래대금_증감(%)": "— 거래/실적 —",
+      "과열도": "— 타이밍 —", "주도주_점수": "— 점수 —"
     },
     quality_value: {
       "PER": "— 밸류 —", "ROE(%)": "— 수익성 —", "F스코어": "— 안정성 —",
       "영업이익_CAGR": "— 성장 —", "우량가치_점수": "— 점수 —"
     },
     growth_mom: {
-      "매출_CAGR": "— CAGR —", "Q_매출_YoY(%)": "— 분기YoY —", "실적가속_연속": "— 가속도 —",
-      "MA20_이격도(%)": "— 기술 —", "영업이익률(%)": "— 수익성 —", "고성장_점수": "— 점수 —"
+      "매출_CAGR": "— CAGR —", "Q_매출_YoY(%)": "— 분기YoY —", "실적가속_연속": "— 가속도/감속 —",
+      "MA20_이격도(%)": "— 기술 —", "영업이익률(%)": "— 수익성 —",
+      "과열도": "— 타이밍 —", "고성장_점수": "— 점수 —"
     },
     cash_div: {
       "배당수익률(%)": "— 배당 —", "FCF수익률(%)": "— 현금흐름 —", "ROIC(%)": "— 수익성 —",
@@ -674,19 +694,20 @@
     },
     turnaround: {
       "흑자전환": "— 전환신호 —", "이익률_변동폭": "— 이익률 —", "TTM_순이익": "— TTM —",
-      "스마트머니_승률": "— 수급/기술 —", "PBR": "— 밸류 —", "턴어라운드_점수": "— 점수 —"
+      "스마트머니_승률": "— 수급/기술 —", "PBR": "— 밸류 —",
+      "상승조짐": "— 타이밍 —", "턴어라운드_점수": "— 점수 —"
     },
     multi_strategy: {
       "전략수": "— 전략수 —", "종합점수": "— 전략점수 —", "ROE(%)": "— 핵심팩터 —"
     },
     forward_covered: {
       "PER": "— 현재 —", "Fwd_PER": "— Fwd밸류 —", "Fwd_매출_성장률(%)": "— Fwd성장 —",
-      "Q_영업이익_YoY(%)": "— 실적 —", "Fwd_모멘텀_점수": "— 점수 —"
+      "Q_영업이익_YoY(%)": "— 실적 —", "과열도": "— 타이밍 —", "Fwd_모멘텀_점수": "— 점수 —"
     },
     watchlist: {
       "PER": "— 가치평가 —", "ROE(%)": "— 수익성 —", "매출_CAGR": "— 성장성 —",
       "부채비율(%)": "— 안정성 —", "배당수익률(%)": "— 배당 —",
-      "RS_등급": "— 기술/수급 —", "종합점수": "— 종합 —"
+      "RS_등급": "— 기술/수급 —", "과열도": "— 타이밍 —", "종합점수": "— 종합 —"
     },
   };
 
@@ -792,6 +813,13 @@
       "ROIC_개선": [v => v==1, v => v==0],
       "퀄리티_턴어라운드": [v => v==1, v => v==0],
       "VCP_신호": [v => v==1, v => v==0],
+
+      // 신규: 타이밍 지표
+      "과열도":       [v => v <= 30, v => v >= 70],   // Low = Safe, High = Danger
+      "상승조짐":     [v => v >= 70, v => v <= 30],   // High = Opportunity
+      "타이밍_점수":  [v => v >= 75, v => v <= 40],
+      "실적감속_경고":[v => v == 0,  v => v == 1],    // 0=Normal, 1=Warning
+      "거래량_가격_괴리": [v => v == 0, v => v >= 30], // 0=Normal, High=Divergence
     };
 
     function getMetricColor(key, val) {
@@ -954,7 +982,16 @@
       "고성장_점수": "고성장 모멘텀 점수.",
       "현금배당_점수": "배당주 점수.",
       "턴어라운드_점수": "턴어라운드 점수.",
+      "타이밍_점수": "타이밍 점수 (0-100). 과열 회피(40%) + 상승조짐(45%) + 실적감속 패널티로 구성.",
       "전략수": "해당되는 전략 개수.",
+
+      // 신규 타이밍 지표
+      "과열도": "과열도 (0-100). 52주고가 근접+MA이격+RSI+거래량괴리 종합. 높을수록 이미 많이 오른 상태. (Good: ≤30, Bad: ≥70)",
+      "상승조짐": "상승조짐 (0-100). 펀더멘털 우수+비과열+수급유입+가격패턴 종합. 높을수록 상승 직전 조짐. (Good: ≥70, Neutral: 50-69)",
+      "실적감속_경고": "실적 감속 경고. 영업이익 YoY가 3분기 연속 양수이지만 단조 감소 → 피크 실적 신호. (Good: 0=정상, Bad: 1=감속)",
+      "영업이익_감속경고": "영업이익 YoY 감속 여부. 1이면 피크 실적 위험.",
+      "영업이익_감속폭(pp)": "영업이익 YoY 감속폭. 3분기 전 YoY - 최근 YoY (pp).",
+      "거래량_가격_괴리": "거래량-가격 괴리 지수. 가격↑+거래량↓ 동시 발생 시 양수. 높을수록 상승 동력 소진 신호.",
     };
 
   // ─── 세부 모달의 지표 그룹 ────────────────────────────────────────────
@@ -1089,12 +1126,15 @@
         { key: "성장성_점수",   label: "성장성 점수",   fmt: "f1" },
         { key: "안정성_점수",   label: "안정성 점수",   fmt: "f1" },
         { key: "가격_점수",     label: "가격 점수",     fmt: "f1" },
+        { key: "타이밍_점수",   label: "타이밍 점수",   fmt: "f1" },
         { key: "주도주_점수",   label: "주도주 점수",   fmt: "f1" },
         { key: "우량가치_점수", label: "우량가치 점수", fmt: "f1" },
         { key: "고성장_점수",   label: "고성장 점수",   fmt: "f1" },
         { key: "현금배당_점수", label: "현금배당 점수", fmt: "f1" },
         { key: "턴어라운드_점수", label: "턴어라운드 점수", fmt: "f1" },
         { key: "전략수",        label: "전략수",        fmt: "int" },
+        { key: "과열도",        label: "과열도",        fmt: "f1" },
+        { key: "상승조짐",      label: "상승조짐",      fmt: "f1" },
       ]
     },
     {
@@ -1113,7 +1153,20 @@
         { key: "이익률_변동폭",    label: "이익률 변동폭",  fmt: "f1" },
         { key: "영업이익_가속도",  label: "OP 가속도",      fmt: "f1" },
         { key: "매출_가속도",      label: "매출 가속도",    fmt: "f1" },
-        { key: "실적가속_연속",    label: "실적 가속 연속", fmt: "flag" },
+        { key: "실적가속_연속",       label: "실적 가속 연속",    fmt: "flag" },
+        { key: "실적감속_경고",       label: "실적 감속 경고",    fmt: "flag" },
+        { key: "영업이익_감속경고",   label: "OP 감속 경고",      fmt: "flag" },
+        { key: "영업이익_감속폭(pp)", label: "OP 감속폭(pp)",     fmt: "f1" },
+      ]
+    },
+    {
+      title: "타이밍 신호",
+      metrics: [
+        { key: "과열도",              label: "과열도",            fmt: "f1" },
+        { key: "상승조짐",            label: "상승조짐",          fmt: "f1" },
+        { key: "타이밍_점수",         label: "타이밍 점수",       fmt: "f1" },
+        { key: "거래량_가격_괴리",    label: "거래량-가격 괴리",  fmt: "f1" },
+        { key: "실적감속_경고",       label: "실적 감속 경고",    fmt: "flag" },
       ]
     },
     {
@@ -1290,12 +1343,15 @@
         { col: "성장성_점수",      label: "성장성점수" },
         { col: "안정성_점수",      label: "안정성점수" },
         { col: "가격_점수",        label: "가격점수" },
+        { col: "타이밍_점수",      label: "타이밍점수" },
         { col: "주도주_점수",      label: "주도주점수" },
         { col: "우량가치_점수",    label: "우량가치점수" },
         { col: "고성장_점수",      label: "고성장점수" },
         { col: "현금배당_점수",    label: "현금배당점수" },
         { col: "턴어라운드_점수",  label: "턴어라운드점수" },
         { col: "전략수",           label: "통과전략수" },
+        { col: "과열도",           label: "과열도" },
+        { col: "상승조짐",         label: "상승조짐" },
       ]
     },
     {
@@ -1552,12 +1608,31 @@
              "매출_CAGR", "영업이익_CAGR", "순이익_CAGR", "괴리율(%)"].includes(c.key)) {
           cls += (cls ? " " : "") + valClass(s[c.key]);
         }
+        // 타이밍 지표 색상 (METRIC_CRITERIA 기반)
+        if (["과열도", "상승조짐", "타이밍_점수", "실적감속_경고"].includes(c.key)) {
+          cls += (cls ? " " : "") + getMetricColor(c.key, s[c.key]);
+        }
         const newBadge = (isNew && c.key === "종목명")
           ? ' <span class="badge badge-new bg-success">NEW</span>' : "";
         const rep = reportMap[code];
         const aiBadge = (rep && c.key === "종목명")
           ? ` <span class="badge badge-ai" title="${rep.model} · ${rep.date}">AI</span>` : "";
-        return `<td class="${cls}">${fmt(s[c.key], c.fmt)}${newBadge}${aiBadge}</td>`;
+        let overheatBadge = "";
+        let breakoutBadge = "";
+        if (c.key === "종목명") {
+          const oh = s["과열도"];
+          const br = s["상승조짐"];
+          if (oh != null && oh !== "") {
+            if (oh >= 81)      overheatBadge = ` <span class="badge" style="background:#dc3545;color:#fff;font-size:.6rem;" title="과열도 ${oh}">과열</span>`;
+            else if (oh >= 61) overheatBadge = ` <span class="badge" style="background:#fd7e14;color:#fff;font-size:.6rem;" title="과열도 ${oh}">주의</span>`;
+            else if (oh >= 41) overheatBadge = ` <span class="badge" style="background:#ffc107;color:#000;font-size:.6rem;" title="과열도 ${oh}">경계</span>`;
+          }
+          if (br != null && br !== "") {
+            if (br >= 70)      breakoutBadge = ` <span class="badge" style="background:#0d6efd;color:#fff;font-size:.6rem;" title="상승조짐 ${br}">조짐</span>`;
+            else if (br >= 50) breakoutBadge = ` <span class="badge" style="background:#6ea8fe;color:#000;font-size:.6rem;" title="상승조짐 ${br}">관심</span>`;
+          }
+        }
+        return `<td class="${cls}">${fmt(s[c.key], c.fmt)}${newBadge}${aiBadge}${overheatBadge}${breakoutBadge}</td>`;
       }).join("");
       return `<tr data-code="${code}" class="${isNew ? "row-new" : ""}">${pfBtn}${compareCb}${star}${cells}</tr>`;
     }).join("");
@@ -1778,16 +1853,19 @@
   let scoreRadarChart = null;
 
   function renderScoreBreakdown(stock) {
-    // 레이더 축 정의: 3개 기본 + 5개 전략
+    // 레이더 축 정의: 3개 기본 + 타이밍 + 5개 전략
+    // 과열도는 역방향(100-과열도)으로 표시하여 "낮을수록 좋음"을 레이더에서 시각화
+    const overheatVal = stock["과열도"] != null ? Math.round(100 - stock["과열도"]) : 50;
     const RADAR_AXES = [
-      { key: "성장성_점수",    label: "성장성" },
-      { key: "안정성_점수",    label: "안정성" },
-      { key: "가격_점수",      label: "가치" },
-      { key: "주도주_점수",    label: "주도주" },
-      { key: "우량가치_점수",  label: "우량가치" },
-      { key: "고성장_점수",    label: "고성장" },
-      { key: "현금배당_점수",  label: "배당" },
-      { key: "턴어라운드_점수",label: "턴어라운드" },
+      { key: "성장성_점수",    label: "성장성",   _override: null },
+      { key: "안정성_점수",    label: "안정성",   _override: null },
+      { key: "가격_점수",      label: "가치",     _override: null },
+      { key: "타이밍_점수",    label: "타이밍",   _override: null },
+      { key: "주도주_점수",    label: "주도주",   _override: null },
+      { key: "우량가치_점수",  label: "우량가치", _override: null },
+      { key: "고성장_점수",    label: "고성장",   _override: null },
+      { key: "현금배당_점수",  label: "배당",     _override: null },
+      { key: "턴어라운드_점수",label: "턴어라운드",_override: null },
     ];
 
     const values = RADAR_AXES.map(a => {
@@ -1837,23 +1915,45 @@
 
     // 바 리스트 (우측 패널)
     const BAR_ITEMS = [
-      { key: "종합점수",      label: "종합 점수" },
-      { key: "성장성_점수",   label: "성장성" },
-      { key: "안정성_점수",   label: "안정성" },
-      { key: "가격_점수",     label: "가치" },
-      { key: "주도주_점수",   label: "주도주" },
-      { key: "우량가치_점수", label: "우량가치" },
-      { key: "고성장_점수",   label: "고성장" },
-      { key: "현금배당_점수", label: "배당" },
-      { key: "턴어라운드_점수", label: "턴어라운드" },
+      { key: "종합점수",      label: "종합 점수",  special: null },
+      { key: "성장성_점수",   label: "성장성",     special: null },
+      { key: "안정성_점수",   label: "안정성",     special: null },
+      { key: "가격_점수",     label: "가치",       special: null },
+      { key: "타이밍_점수",   label: "타이밍",     special: null },
+      { key: "주도주_점수",   label: "주도주",     special: null },
+      { key: "우량가치_점수", label: "우량가치",   special: null },
+      { key: "고성장_점수",   label: "고성장",     special: null },
+      { key: "현금배당_점수", label: "배당",       special: null },
+      { key: "턴어라운드_점수", label: "턴어라운드", special: null },
+      // 과열도/상승조짐: 구분선 후 별도 표시
+      { key: "상승조짐",      label: "↑ 상승조짐", special: "breakout" },
+      { key: "과열도",        label: "↑ 과열도",   special: "overheat" },
     ];
 
-    const barHtml = BAR_ITEMS.map(item => {
+    function overheatColor(v) {
+      if (v == null || isNaN(v)) return "#6c757d";
+      if (v <= 30) return "#198754";
+      if (v <= 60) return "#ffc107";
+      if (v <= 80) return "#fd7e14";
+      return "#dc3545";
+    }
+    function breakoutColor(v) {
+      if (v == null || isNaN(v)) return "#6c757d";
+      if (v >= 70) return "#0d6efd";
+      if (v >= 50) return "#6ea8fe";
+      return "#adb5bd";
+    }
+
+    const barHtml = BAR_ITEMS.map((item, idx) => {
       const v = stock[item.key];
       const pct = (v != null && !isNaN(v)) ? Math.min(100, Math.max(0, v)) : 0;
-      const color = scoreColor(v);
+      let color;
+      if (item.special === "overheat") color = overheatColor(v);
+      else if (item.special === "breakout") color = breakoutColor(v);
+      else color = scoreColor(v);
       const isBold = item.key === "종합점수";
-      return `<div class="score-bd-row${isBold ? " fw-bold" : ""}">
+      const divider = item.special === "breakout" ? `<hr class="score-bd-divider my-1">` : "";
+      return `${divider}<div class="score-bd-row${isBold ? " fw-bold" : ""}">
         <div class="score-bd-label">${item.label}</div>
         <div class="score-bd-track">
           <div class="score-bd-fill" style="width:${pct}%; background:${color};"></div>
@@ -2138,6 +2238,9 @@
         _setAnalysisLock(true, code, name);
         // 3초 간격 폴링 시작
         _analysisPollingTimer = setTimeout(() => _pollAnalysisStatus(code, mode, 3), 3000);
+      } else if (postData.status === "done" && postData.report_html) {
+        document.getElementById("report-loading").style.display = "none";
+        _showAnalysisResult(code, mode, postData);
       } else if (postData.error) {
         document.getElementById("report-loading").style.display = "none";
         document.getElementById("report-content").innerHTML =
@@ -2635,7 +2738,15 @@
       if (!res.ok) return;
       const data = await res.json();
       const input = document.getElementById("input-cash-balance");
-      if (input && data.amount > 0) input.value = data.amount;
+      if (input) input.value = data.amount || 0;
+      // portfolioData 예수금도 최신값으로 동기화
+      if (portfolioData) {
+        portfolioData["예수금"] = data.amount || 0;
+        if (portfolioData.summary) {
+          portfolioData.summary["예수금"] = data.amount || 0;
+          portfolioData.summary["총자산"] = (portfolioData.summary["총평가금액"] || 0) + (data.amount || 0);
+        }
+      }
     } catch (e) { console.error("loadCashBalance:", e); }
   }
 
@@ -2846,7 +2957,8 @@
   }
 
   async function savePortfolioEntry() {
-    const code  = (document.getElementById("pf-code").value || "").trim().padStart(6, "0");
+    const rawCode = (document.getElementById("pf-code").value || "").trim();
+    const code  = /^[0-9]+$/.test(rawCode) ? rawCode.padStart(6, "0") : rawCode;
     const qty   = parseFloat(document.getElementById("pf-qty").value);
     const price = parseFloat(document.getElementById("pf-price").value);
     const date  = document.getElementById("pf-date").value;
@@ -2860,7 +2972,7 @@
     try {
       const res = await fetch(url, {
         method, headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ "종목코드": code, "수량": qty, "평균매입가": price, "매입일": date, "메모": memo }),
+        body: JSON.stringify({ "종목코드": code, "종목명": (document.getElementById("pf-stock-name")?.textContent || "").trim(), "수량": qty, "평균매입가": price, "매입일": date, "메모": memo }),
       });
       if (!res.ok) { const err = await res.json(); alert(err.error || "저장 실패"); return; }
       bootstrap.Modal.getInstance(document.getElementById("portfolio-modal"))?.hide();
@@ -2873,6 +2985,17 @@
     try {
       const res = await fetch(`/api/portfolio/${code}`, { method: "DELETE" });
       if (!res.ok) { alert("삭제 실패"); return; }
+      const result = await res.json();
+      // 예수금 즉시 반영
+      if (result.cash !== undefined && portfolioData) {
+        portfolioData["예수금"] = result.cash;
+        if (portfolioData.summary) {
+          portfolioData.summary["예수금"] = result.cash;
+          portfolioData.summary["총자산"] = (portfolioData.summary["총평가금액"] || 0) + result.cash;
+        }
+        const input = document.getElementById("input-cash-balance");
+        if (input) input.value = result.cash;
+      }
       await loadPortfolio();
       if (currentScreen === "portfolio") loadStocks();
     } catch (e) { alert("삭제 실패: " + e.message); }
@@ -3107,8 +3230,8 @@
   // 포트폴리오 모달: 종목코드 입력 시 종목명/종목구분 자동 조회
   document.getElementById("pf-code")?.addEventListener("blur", async function () {
     const raw = this.value.trim();
-    if (raw.length === 0 || raw.length > 6) return;
-    const code = raw.padStart(6, "0");
+    if (raw.length === 0 || raw.length > 7) return;
+    const code = /^[0-9]+$/.test(raw) ? raw.padStart(6, "0") : raw;
     if (code === "000000") return;
     const noteEl = document.getElementById("pf-stock-note");
     try {

@@ -16,6 +16,8 @@ from quant_screener import (
     calc_valuation,
     calc_technical_indicators,
     calc_investor_strength,
+    calc_overheat_score,
+    calc_breakout_signal,
     calc_strategy_scores,
     apply_leaders_screen,
     apply_quality_value_screen,
@@ -83,6 +85,8 @@ def run_update_prices():
                 lambda c: sector_map_dict.get(c[:-1] + "0")
             )
 
+    full_df = calc_overheat_score(full_df)
+    full_df = calc_breakout_signal(full_df)
     full_df = calc_strategy_scores(full_df)
 
     _db.save_dashboard(full_df)
@@ -185,6 +189,8 @@ def run_pipeline(skip_collect: bool = False, test_mode: bool = False, skip_price
 
     # 전략별 종합점수 사전 계산 (기술적 지표 이후, DB 저장 전)
     _progress("전략 점수 계산 중", 84)
+    full_df = calc_overheat_score(full_df)
+    full_df = calc_breakout_signal(full_df)
     full_df = calc_strategy_scores(full_df)
 
     # ── Save dashboard to DB ──

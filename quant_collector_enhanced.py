@@ -337,7 +337,7 @@ def collect_daily(biz_day: str) -> pd.DataFrame:
     return df_krx
 
 
-def collect_price_history(tickers: list[str], days: int = 260) -> pd.DataFrame:
+def collect_price_history(tickers: list[str], days: int = 400) -> pd.DataFrame:
     """FinanceDataReader + pykrx 병용으로 최근 N거래일 주가/거래량 히스토리 수집.
 
     1차: fdr (동시 8개, 네이버 금융)
@@ -345,7 +345,7 @@ def collect_price_history(tickers: list[str], days: int = 260) -> pd.DataFrame:
 
     Args:
         tickers: 종목코드 리스트
-        days: 수집 기간 (캘린더 일 기준, 기본 260일 ≈ 52주)
+        days: 수집 기간 (캘린더 일 기준, 기본 400일 ≈ 270+ 거래일, RS_250d 계산에 필요)
 
     Returns:
         DataFrame with 종목코드, 날짜, 시가, 고가, 저가, 종가, 거래량, 거래대금
@@ -471,10 +471,10 @@ def collect_price_history(tickers: list[str], days: int = 260) -> pd.DataFrame:
 # 2-a2. KOSPI / KOSDAQ 지수 히스토리 (RS Rating용)
 # ═════════════════════════════════════════════
 
-def collect_index_history(days: int = 365) -> pd.DataFrame:
+def collect_index_history(days: int = 400) -> pd.DataFrame:
     """KOSPI/KOSDAQ 지수 히스토리 수집 (1차 FDR, 2차 yfinance fallback).
 
-    RS_250d 계산에 250거래일이 필요하므로 365 캘린더일 기준으로 수집.
+    RS_250d 계산에 250거래일이 필요하므로 400 캘린더일(≈270 거래일) 기준으로 수집.
 
     Returns:
         DataFrame with 지수코드, 날짜, 종가
@@ -562,6 +562,7 @@ def _fetch_investor_trading_naver(ticker: str, days: int) -> list[dict]:
 
     cutoff = date.today() - timedelta(days=days)
     rows = []
+    seen_dates = set()
     page = 1
 
     while True:
@@ -569,7 +570,7 @@ def _fetch_investor_trading_naver(ticker: str, days: int) -> list[dict]:
             url = f"https://finance.naver.com/item/frgn.nhn?code={ticker}&page={page}"
             r = session.get(url, timeout=REQUEST_TIMEOUT)
             r.raise_for_status()
-            
+
             # 차단 여부 확인
             if "b_panel" in r.text or "spam" in r.text.lower() or "captcha" in r.text.lower():
                 log.warning(f"투자자 매매동향: {ticker} -> 네이버 접속 차단 감지")
@@ -582,6 +583,7 @@ def _fetch_investor_trading_naver(ticker: str, days: int) -> list[dict]:
 
             # 데이터가 있는 테이블(보통 2번 또는 3번) 찾기
             target_table = None
+            start_row = 0  # 매 페이지마다 초기화
             for idx in [2, 3]:
                 if idx >= len(tables): continue
                 t = tables[idx]
@@ -594,7 +596,7 @@ def _fetch_investor_trading_naver(ticker: str, days: int) -> list[dict]:
                             start_row = row_idx
                             break
                 if target_table is not None: break
-            
+
             if target_table is None:
                 break
 
@@ -609,10 +611,15 @@ def _fetch_investor_trading_naver(ticker: str, days: int) -> list[dict]:
                     continue
                 if dt < cutoff:
                     return rows
-                
+
+                dt_str_key = dt.strftime("%Y-%m-%d")
+                if dt_str_key in seen_dates:
+                    continue
+                seen_dates.add(dt_str_key)
+
                 rows.append({
                     "종목코드": ticker,
-                    "날짜": dt.strftime("%Y-%m-%d"),
+                    "날짜": dt_str_key,
                     "외국인순매수": safe_float(row.iloc[6]),
                     "기관순매수": safe_float(row.iloc[5]),
                     "개인순매수": None,

@@ -387,6 +387,25 @@ def analyze_one_stock(ticker, ind_grp, fs_grp):
         res["영업이익_가속도"] = op_accel
         res["매출_가속도"] = rev_accel
 
+        # ── 실적 감속 경고 (Earnings Deceleration Warning) ──
+        # YoY가 3분기 연속 양수이지만 단조감소 → 피크 실적 신호
+        def _calc_deceleration(qyoy_result):
+            yoy_s = qyoy_result.get("yoy_series", {})
+            if len(yoy_s) < 3:
+                return 0, np.nan
+            dates = sorted(yoy_s.keys())
+            recent_3 = [yoy_s[d] for d in dates[-3:]]
+            if all(v > 0 for v in recent_3) and recent_3[0] > recent_3[1] > recent_3[2]:
+                return 1, recent_3[0] - recent_3[2]
+            return 0, np.nan
+
+        op_decel, op_decel_mag = _calc_deceleration(op_qyoy)
+        rev_decel, _ = _calc_deceleration(rev_qyoy)
+        res["영업이익_감속경고"] = op_decel
+        res["영업이익_감속폭(pp)"] = op_decel_mag
+        res["매출_감속경고"] = rev_decel
+        res["실적감속_경고"] = 1 if op_decel == 1 else 0
+
         # 4분기 빅배스 Fallback: 최신 분기가 Q4이고 영업이익 가속 꺾였어도
         # 매출 가속 유지 + GPM 훼손 없으면 실적가속_연속 = 1 인정 (GPM은 아래서 산출)
         # → 일단 연속 여부 잠정 저장, GPM 계산 후 최종 결정
@@ -930,6 +949,20 @@ def calc_technical_indicators(df, price_hist, index_hist=None, master=None):
         v5 = (ph[v_col].tail(5).mean() if v_col else (ph["종가"]*ph["거래량"]).tail(5).mean())
         vol60 = ph["종가"].pct_change().tail(60).std() * np.sqrt(252) * 100 if len(ph)>=60 else np.nan
 
+        # ── 거래량-가격 괴리 (약세 다이버전스) ──
+        # 가격↑ + 거래량↓ = 상승 동력 소진 신호
+        vp_divergence = np.nan
+        if len(ph) >= 40 and v_col:
+            price_ret_20 = (ph["종가"].iloc[-1] / ph["종가"].iloc[-20] - 1) * 100 if ph["종가"].iloc[-20] > 0 else np.nan
+            vol_first = ph[v_col].iloc[-40:-20].mean()
+            vol_second = ph[v_col].iloc[-20:].mean()
+            if pd.notna(price_ret_20) and vol_first > 0:
+                vol_chg = (vol_second / vol_first - 1) * 100
+                if price_ret_20 > 0 and vol_chg < 0:
+                    vp_divergence = min(abs(price_ret_20) + abs(vol_chg), 100)
+                else:
+                    vp_divergence = 0
+
         # ── Raw RS (기간별 초과수익률) — composite는 루프 후 선랭킹 방식으로 계산 ──
         rs_60d = rs_120d = rs_250d = np.nan
         if idx_map:
@@ -955,11 +988,14 @@ def calc_technical_indicators(df, price_hist, index_hist=None, master=None):
                 rs_250d = stock_ret_250 - idx_ret_250
 
         techs.append({
-            "종목코드": code, "RSI_14": rsi, "MA20_이격도(%)": (close/ma20-1)*100 if pd.notna(ma20) else np.nan,
-            "MA60_이격도(%)": (close/ma60-1)*100 if pd.notna(ma60) else np.nan,
-            "52주_최고대비(%)": (close/h52-1)*100, "52주_최저대비(%)": (close/l52-1)*100,
+            "종목코드": code, "RSI_14": rsi,
+            "MA20_이격도(%)": (close/ma20-1)*100 if pd.notna(ma20) and ma20 > 0 else np.nan,
+            "MA60_이격도(%)": (close/ma60-1)*100 if pd.notna(ma60) and ma60 > 0 else np.nan,
+            "52주_최고대비(%)": (close/h52-1)*100 if h52 > 0 else np.nan,
+            "52주_최저대비(%)": (close/l52-1)*100 if l52 > 0 else np.nan,
             "거래대금_20일평균": v20, "거래대금_증감(%)": (v5/v20-1)*100 if pd.notna(v20) and v20 > 0 else np.nan,
             "변동성_60일(%)": vol60,
+            "거래량_가격_괴리": vp_divergence,
             "RS_60d": rs_60d, "RS_120d": rs_120d, "RS_250d": rs_250d,
         })
 
@@ -1011,7 +1047,9 @@ def calc_investor_strength(inv_df, daily, price_hist=None):
     res = []
     
     inv_grouped = {k: v for k, v in inv_df.groupby("종목코드")}
-    daily_mcap = daily.drop_duplicates("종목코드").set_index("종목코드")["시가총액"].to_dict()
+    daily_dedup = daily.drop_duplicates("종목코드").set_index("종목코드")
+    daily_mcap = daily_dedup["시가총액"].to_dict()
+    daily_close = daily_dedup["종가"].to_dict() if "종가" in daily_dedup.columns else {}
     ph_grouped = {k: v for k, v in price_hist.groupby("종목코드")} if price_hist is not None and not price_hist.empty else {}
 
     for code in inv_df["종목코드"].unique():
@@ -1019,7 +1057,12 @@ def calc_investor_strength(inv_df, daily, price_hist=None):
         df_code = inv_grouped[code].sort_values("날짜", ascending=False).head(20)
         f_sum, i_sum = df_code["외국인순매수"].sum(), df_code["기관순매수"].sum()
         mcap = daily_mcap.get(code, np.nan)
-        strength = ((f_sum + i_sum) / mcap) * 100 if pd.notna(mcap) and mcap > 0 else np.nan
+        close_price = daily_close.get(code, np.nan)
+        # 순매수는 주(株) 단위 → 금액으로 변환 후 시가총액 대비 비율 계산
+        if pd.notna(mcap) and mcap > 0 and pd.notna(close_price) and close_price > 0:
+            strength = ((f_sum + i_sum) * close_price / mcap) * 100
+        else:
+            strength = np.nan
 
         # ── 스마트머니 매집 연속성 ──
         n = len(df_code)
@@ -1054,16 +1097,136 @@ def calc_investor_strength(inv_df, daily, price_hist=None):
                 sm_ok = pd.notna(smart_ratio) and smart_ratio >= 0.6
                 vcp = 1 if (price_compress and vol_compress and sm_ok) else 0
 
+        # 순매수: 주(株) 단위 → 금액(원) 변환 (종가 기준)
+        if pd.notna(close_price) and close_price > 0:
+            f_amount = f_sum * close_price
+            i_amount = i_sum * close_price
+        else:
+            f_amount = np.nan
+            i_amount = np.nan
+
         res.append({
             "종목코드": code,
             "수급강도": strength,
-            "외인순매수_20d": f_sum,
-            "기관순매수_20d": i_sum,
+            "외인순매수_20d": f_amount,
+            "기관순매수_20d": i_amount,
             "스마트머니_승률": smart_ratio,
             "양매수_비율": both_ratio,
             "VCP_신호": vcp,
         })
     return pd.DataFrame(res)
+
+
+def calc_overheat_score(df):
+    """과열도 복합지표 (0-100). 높을수록 이미 많이 오른 위험 상태.
+
+    구성:
+    - 52주 고가 근접도 (30%): 0% = 고가 = 100점, -20% 이하 = 0점
+    - MA20 이격도 (25%): 0% 이하 = 0점, +20% = 100점
+    - RSI 과매수 (25%): 50 이하 = 0점, 80+ = 100점
+    - 거래량-가격 괴리 (20%): 가격↑+거래량↓ 동시 신호
+    """
+    h52 = df["52주_최고대비(%)"].fillna(-100) if "52주_최고대비(%)" in df.columns else pd.Series(-100, index=df.index)
+    s_h52 = np.clip((h52 + 20) / 20 * 100, 0, 100)
+
+    s_ma = np.clip(df["MA20_이격도(%)"].fillna(0) / 20 * 100, 0, 100) if "MA20_이격도(%)" in df.columns else pd.Series(0, index=df.index)
+
+    s_rsi = np.clip((df["RSI_14"].fillna(50) - 50) / 30 * 100, 0, 100) if "RSI_14" in df.columns else pd.Series(0, index=df.index)
+
+    s_vpd = np.clip(df["거래량_가격_괴리"].fillna(0), 0, 100) if "거래량_가격_괴리" in df.columns else pd.Series(0, index=df.index)
+
+    df["과열도"] = (s_h52 * 0.30 + s_ma * 0.25 + s_rsi * 0.25 + s_vpd * 0.20).round(1)
+
+    # 실적감속 동시 발생 시 +10 (과열+감속 = 복합 경고)
+    if "실적감속_경고" in df.columns:
+        mask = df["실적감속_경고"].fillna(0) == 1
+        df.loc[mask, "과열도"] = np.clip(df.loc[mask, "과열도"] + 10, 0, 100)
+
+    return df
+
+
+def calc_breakout_signal(df):
+    """상승조짐 점수 (0-100). 높을수록 상승 직전 조짐이 강함.
+
+    조건: 펀더멘털 우수 + 아직 과열 아님 + 수급 유입 시작 + 가격 패턴 형성 중
+
+    구성:
+    1. 펀더멘털 품질 (30%): 실적가속 + ROIC개선 + GPM개선 + 흑자전환 + F스코어
+    2. 비과열 확인 (20%): 과열도가 낮을수록 = 주가 미반영 = 기회
+    3. 수급 유입 조짐 (30%): 스마트머니 승률 + 양매수 비율 + 수급강도 + 거래대금 증가
+    4. 가격 패턴 조짐 (20%): VCP + MA20 근접 상향 + RSI 50~60 전환 구간
+    """
+    # ── 축 1: 펀더멘털 품질 (30%) ──
+    fund = pd.Series(0.0, index=df.index)
+
+    fund += df.get("실적가속_연속", pd.Series(0, index=df.index)).fillna(0) * 30
+    fund += df.get("ROIC_개선", pd.Series(0, index=df.index)).fillna(0) * 20
+
+    gpm = df.get("GPM_변화(pp)", pd.Series(0, index=df.index)).fillna(0)
+    fund += np.where(gpm > 0, np.clip(gpm / 3 * 15, 0, 15), 0)
+
+    fund += df.get("흑자전환", pd.Series(0, index=df.index)).fillna(0) * 15
+
+    fscore = df.get("F스코어", pd.Series(0, index=df.index)).fillna(0)
+    fund += np.where(fscore >= 7, 20, np.where(fscore >= 5, 10, 0))
+
+    s_fund = np.clip(fund, 0, 100)
+
+    # ── 축 2: 비과열 확인 (20%) ──
+    # 과열도 0 → 100점, 과열도 50 → 37.5점, 과열도 80 → 0점
+    overheat = df.get("과열도", pd.Series(50, index=df.index)).fillna(50)
+    s_cool = np.clip((80 - overheat) / 80 * 100, 0, 100)
+
+    # ── 축 3: 수급 유입 조짐 (30%) ──
+    supply = pd.Series(0.0, index=df.index)
+
+    # 스마트머니 승률: 0.5→0, 0.7→17.5, 0.9→35
+    sm = df.get("스마트머니_승률", pd.Series(0, index=df.index)).fillna(0)
+    supply += np.clip((sm - 0.5) / 0.4 * 35, 0, 35)
+
+    # 양매수 비율: 0.2→0, 0.5→25
+    both = df.get("양매수_비율", pd.Series(0, index=df.index)).fillna(0)
+    supply += np.clip((both - 0.2) / 0.3 * 25, 0, 25)
+
+    # 수급강도 양수: 최대 20점
+    strength = df.get("수급강도", pd.Series(0, index=df.index)).fillna(0)
+    supply += np.where(strength > 0, np.clip(strength / 2 * 20, 0, 20), 0)
+
+    # 거래대금 증감 양수: 최대 20점 (50% 증가 시 만점)
+    vol_chg = df.get("거래대금_증감(%)", pd.Series(0, index=df.index)).fillna(0)
+    supply += np.where(vol_chg > 0, np.clip(vol_chg / 50 * 20, 0, 20), 0)
+
+    s_supply = np.clip(supply, 0, 100)
+
+    # ── 축 4: 가격 패턴 조짐 (20%) ──
+    pattern = pd.Series(0.0, index=df.index)
+
+    # VCP 신호: 돌파 직전 패턴 (+40)
+    pattern += df.get("VCP_신호", pd.Series(0, index=df.index)).fillna(0) * 40
+
+    # MA20 근접 상향: 이격도 0~10% 구간, 3% 부근 최적 (+30)
+    ma20 = df.get("MA20_이격도(%)", pd.Series(0, index=df.index)).fillna(0)
+    pattern += np.where(
+        (ma20 >= 0) & (ma20 <= 10),
+        np.clip(30 - np.abs(ma20 - 3) * 3, 0, 30),
+        0
+    )
+
+    # RSI 50~60 전환 구간 (+30): 과매수 아님 + 상승 전환 초기
+    rsi = df.get("RSI_14", pd.Series(50, index=df.index)).fillna(50)
+    rsi_score = np.where(
+        (rsi >= 50) & (rsi <= 60), 30,
+        np.where((rsi >= 40) & (rsi < 50), 15,
+        np.where((rsi > 60) & (rsi <= 70), 15, 0))
+    )
+    pattern += rsi_score
+
+    s_pattern = np.clip(pattern, 0, 100)
+
+    # ── 최종 합산 ──
+    df["상승조짐"] = (s_fund * 0.30 + s_cool * 0.20 + s_supply * 0.30 + s_pattern * 0.20).round(1)
+
+    return df
 
 # ═════════════════════════════════════════════
 # 스코어링 & 저장 (v8 스타일 유지)
@@ -1168,18 +1331,40 @@ def calc_strategy_scores(df):
         + get_rank("괴리율(%)")  * 0.10    # S-RIM 안전마진
     )  # 합계: 10+15+15+10+15+10+15+10 = 100%
 
-    # ── 종합점수: 성장성 / 안정성 / 주가 세 축 균형 (각 0-100, 합산 평균 → 0-100) ──
-    # 성장성 (33%): 영업이익CAGR 35% + 매출CAGR 30% + 최근분기YoY 25% + 실적가속도 10%
+    # ── 과열도 소프트 페널티 (전략별 차등 적용) ──
+    # 과열도 40 이하: 페널티 없음 | 40~100: 선형 적용
+    if "과열도" in df.columns and df["과열도"].notna().any():
+        _oh = df["과열도"].fillna(0)
+        _effective = np.clip((_oh - 40) / 60, 0, 1)
+        _sensitivity = {
+            "주도주_점수": 0.15,      # 모멘텀 전략 → 낮은 민감도
+            "고성장_점수": 0.20,
+            "턴어라운드_점수": 0.25,
+            "현금배당_점수": 0.30,
+            "우량가치_점수": 0.35,    # 가치 전략 → 높은 민감도
+        }
+        for _col, _s in _sensitivity.items():
+            if _col in df.columns:
+                df[_col] = df[_col] * (1 - _effective * _s)
+
+    # ── 종합점수: 성장성 / 안정성 / 주가 / 타이밍 4축 (30/30/30/10) ──
+    # 성장성 (30%): 영업이익CAGR 35% + 매출CAGR 30% + 최근분기YoY 25% + 실적가속도 10%
     성장성_점수 = S_OpCAGR * 0.35 + get_rank("매출_CAGR") * 0.30 + S_QOpYoY * 0.25 + S_Accel * 0.10
-    # 안정성 (33%): ROE 40% + F스코어(재무건전성) 35% + FCF수익률 25%
+    # 안정성 (30%): ROE 40% + F스코어(재무건전성) 35% + FCF수익률 25%
     안정성_점수 = S_ROE * 0.40 + get_rank("F스코어") * 0.35 + S_FCF * 0.25
-    # 주가 (33%): PER역순 40% + S-RIM괴리율 35% + PBR역순 25%
+    # 주가 (30%): PER역순 40% + S-RIM괴리율 35% + PBR역순 25%
     가격_점수   = S_PER_inv * 0.40 + get_rank("괴리율(%)") * 0.35 + S_PBR_inv * 0.25
+    # 타이밍 (10%): 과열 회피(40%) + 상승조짐(45%) + 실적감속 패널티
+    _anti_oh  = 100 - df.get("과열도", pd.Series(50, index=df.index)).fillna(50)
+    _breakout = df.get("상승조짐", pd.Series(0, index=df.index)).fillna(0)
+    _decel    = np.where(df.get("실적감속_경고", pd.Series(0, index=df.index)).fillna(0) == 1, -15, 0)
+    타이밍_점수 = np.clip(_anti_oh * 0.40 + _breakout * 0.45 + _decel, 0, 100)
 
     df["성장성_점수"] = 성장성_점수
     df["안정성_점수"] = 안정성_점수
     df["가격_점수"]   = 가격_점수
-    df["종합점수"]    = (성장성_점수 + 안정성_점수 + 가격_점수) / 3
+    df["타이밍_점수"] = pd.Series(타이밍_점수, index=df.index).round(1)
+    df["종합점수"]    = 성장성_점수 * 0.30 + 안정성_점수 * 0.30 + 가격_점수 * 0.30 + df["타이밍_점수"] * 0.10
 
     # 임시 컬럼 정리
     if "_순이익_CAGR_adj" in df.columns:
@@ -1362,6 +1547,8 @@ def run():
         calc_investor_strength(inv, daily, price_hist=hist if not hist.empty else None),
         on="종목코드", how="left",
     )
+    full = calc_overheat_score(full)
+    full = calc_breakout_signal(full)
     full = calc_strategy_scores(full)
     save_to_excel(full.sort_values("종합점수", ascending=False), DATA_DIR / "quant_all_stocks.xlsx", "All")
     save_to_excel(apply_leaders_screen(full), DATA_DIR / "quant_leaders.xlsx", "Leaders")

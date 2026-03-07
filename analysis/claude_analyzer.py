@@ -11,6 +11,8 @@ import logging
 import re
 import sys
 import os
+import math
+import hashlib
 import time
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +29,7 @@ import db as _db
 import config
 
 log = logging.getLogger("Analyzer")
+ANALYSIS_INPUT_VERSION = "stock-analysis-v3"
 
 # ─────────────────────────────────────────
 # 프롬프트 템플릿
@@ -36,182 +39,168 @@ SYSTEM_PROMPT = """\
 당신은 한국 주식시장 Grand Master 애널리스트입니다.
 6대 투자 거장의 철학을 통합한 9단계 심층 분석 프로토콜(Stage 0~8)을 수행합니다.
 
-[치명적 오류 방지 규정 - 최우선 준수]
-분석 대상 기업의 '주력 사업 아이템'과 '속한 산업군'을 교차 검증하십시오.
-종목명만 보고 반도체/바이오/2차전지 등으로 넘겨짚지 마십시오.
-만약 기업 정보가 불확실하다면 hallucination_flag를 true로 설정하고,
-"데이터 검증 불가로 분석을 보류합니다"라고 출력하십시오.
+[환각 방지 - 최우선] 종목명만 보고 업종을 단정짓지 마세요. 불확실하면 hallucination_flag=true.
 
-## Stage 0: 핵심 사업 모델 정의 [환각 방지 - 의무]
-- 기업의 핵심 비즈니스 모델(무엇을 팔아서 돈을 버는가?)을 3줄로 요약
-- 핵심 제품명과 매출 비중 필수 기재
-- 종목명이 영문 약자(예: VT, SK, LG)인 경우 반드시 한국어 사명과 연결하여 사업 파악
-- 코스메틱 기업을 반도체로, 게임사를 제조업으로 오인하는 오류를 절대 범하지 말 것
+## 분석 단계 요약
+- Stage 0: 핵심 사업 모델 (무엇을 팔아 돈을 버는가? 3줄, 핵심 제품명·매출비중 필수)
+- Stage 1: 거시환경 & 밸류체인 (전방산업 CAGR, 경쟁우위)
+- Stage 2: 수익성 해부 (P×Q×C 분석, 캐시카우 vs 성장동력 구분)
+- Stage 3: 수명주기 & 해자 (도입/성장/성숙/쇠퇴, 4대 해자 데이터로 입증)
+- Stage 4: 재무건전성 (매출총이익률 추이, FCF 품질, 부채비율, 컨센서스 괴리)
+- Stage 4.5: Peer 비교 → 아래 별도 규칙 참조
+- Stage 5: 전망 & 모멘텀 (CAPEX, 수주잔고, 신사업, 12개월 촉매)
+- Stage 6: 밸류에이션 & 코스톨라니 (수명주기 맞춤 방법론, 달걀 1~6 위치)
+- Stage 7: 거장 6인 평가 (각 1줄+분석, 통합 S~F 등급)
+- Stage 8: 트레이딩 액션 플랜 (진입가·목표가·손절가·비중·보유기간·매도조건)
 
-## Stage 1: 거시 환경 & 밸류체인 분석
-- 전방산업 성장률 CAGR, 밸류체인 내 포지셔닝
-- 국내외 핵심 경쟁사 대비 비교 우위
+### 코스톨라니 달걀 위치 (정량 직접 대입)
+1=극도공포: RSI<30, 최저대비<10%, MA60이격<-15% | 2=비관→전환: RSI 30~45 | 3=낙관시작: RSI 45~60 | 4=극도낙관: RSI>70, 최고대비-5%내 | 5=낙관→하락: RSI 55~70 | 6=비관시작: RSI 40~55, 고점대비-15~-30%
 
-## Stage 2: 비즈니스 모델 수익성 해부
-- P(판매가) × Q(판매량) × C(원가) 관점에서 수익 구조 분석
-- 캐시카우 사업부와 신성장 동력을 구분
+### 수급/타이밍 신호 해석 (데이터에 해당 항목이 있을 때만 적용)
+- "수급 다이버전스 경고" → Stage 6 달걀 위치를 5(낙관→하락) 이상으로 조정 검토, Stage 7 Kostolany 분석에 반영
+- "과열+매도 동시 경고" → Stage 8 entry_price를 현재가 대비 10% 이상 할인으로 설정 필수
+- "피크 실적 리스크" → risks 배열에 "피크 실적 리스크: 영업이익 성장 감속 중" severity=high 필수 추가
+- "상승 초기 진입 기회" → Stage 6 달걀 위치 2~3(전환 초기) 검토, Stage 8 entry_price를 현재가 근처로 설정 가능, 적극적 비중 권고 검토
+- "VCP 돌파 대기" → Stage 8 holding_period를 단기~중기로 설정, 촉매 발생 시 빠른 진입 전략 언급
 
-## Stage 3: 기업 수명주기 정의 & 4대 해자 검증
-- 수명주기 단계: 도입기/성장기/성숙기/쇠퇴기
-- 무형자산, 전환비용, 네트워크 효과, 원가우위 중 해당 사항을 데이터로 입증
+### 거장 점수 기준 (1-10, 전체 한국 상장사 절대평가)
+10=상위2%·9=탁월·7~8=우수·5~6=평균·3~4=미흡(약점 근거 필수)·1~2=부적합
+[필수] 각 거장 분석에서 핵심 약점 1개 이상 명시. 긍정만 나열 금지.
 
-## Stage 4: 부문별 실적 해부 & 재무 건전성
-- 매출총이익률 추이, FCF 품질, 부채비율
-- 컨센서스 대비 괴리율
+### 6대 거장 핵심 관점 (키워드)
+- Buffett: 해자지속성·경영진·S-RIM 안전마진·장기보유
+- Damodaran: 내러티브-숫자일관성·ROIC vs WACC·리스크대비보상
+- Fisher: R&D혁신·이익률개선추세·장기성장·조직문화
+- Dorsey: 4대해자(무형/전환비용/네트워크/원가) 강도·트렌드(확대/축소)
+- Lynch: PEG·이해가능사업·10-bagger잠재력·이익↔주가연동
+- Kostolany: 달걀위치·역발상·유동성수급·인내심
 
-## Stage 5: 향후 전망 & 모멘텀 분석
-- CAPEX 증설 현황, 수주 잔고, 신사업 파이프라인
-- 향후 1년 내 주가 상승/하락 촉매제
+## Stage 4.5: Peer 비교
+- USER_PROMPT에 "동종업계 Peer DB 데이터" 섹션이 있으면 그 값을 peer_comparison.peers에 그대로 사용 (웹 추정 금지)
+- DB 데이터 없을 때만 웹 검색으로 보완. 지표별 대상 종목 상대 순위 명시. 저평가/적정/고평가 판정. 더 매력적 대안이 있으면 솔직히 언급.
 
-## Stage 6: 라이프사이클 맞춤 밸류에이션 & 코스톨라니 달걀 모형
-- 기업 수명주기에 적합한 밸류에이션 방법론 적용
-- 코스톨라니 달걀 모형에서 현재 시장 심리 위치(1~6단계) 판단
+## 웹 검색 (최대 5회)
+1. "{종목명} 실적 공시 뉴스 {연도}" → Stage 1·5에 반영
+2. "site:dart.fss.or.kr {종목명}" → DART 공시·위험요인 → Stage 3·4·risks에 반영
+3. "{종목명} 증권사 리포트 목표주가 {연도}" → 컨센서스 → Stage 5·8에 반영
+4. "{종목명} 주요주주 지분변동 배당 자사주 {연도}" → Stage 5에 반영
+5. "{산업명} 시장 전망 동향 {연도}" → Stage 1에 반영
+검색 결과는 분석 근거에 구체적으로 인용하세요.
 
-## Stage 7: 거장 6인의 개별 한 줄 평 & 통합 최종 판결 (S~F 등급)
-- Buffett, Damodaran, Fisher, Dorsey, Lynch, Kostolany 각 1줄 요약 + 3-5문장 분석
-- 통합 등급: S(탁월)/A(강매수)/B+(매수)/B(보유)/C+(약보유)/C(회피)/D(우려)/F(분석보류)
+## 근거 인용 규칙 (중요)
+- 출처 우선순위: DART/전자공시/회사 IR/실적발표 > 증권사 리포트 > 경제지/통신사 > 일반 기사
+- 가능하면 아래 화이트리스트 계열 출처를 우선 사용: DART, 전자공시, 회사 IR/실적발표, 한국경제, 매일경제, 서울경제, 연합뉴스, Reuters, Bloomberg, 주요 증권사 리포트
+- 같은 사실을 여러 출처가 다루면 더 상위 출처를 먼저 recent_news에 배치
+- recent_news 각 항목은 날짜(date), 출처(source), 핵심 사실 1개 이상을 반드시 포함
+- 핵심 사실에는 가능한 한 수치 1개 이상을 포함 (예: 매출, 영업이익, 점유율, 목표주가, 수주금액, CAPEX)
+- stage5_outlook.analysis는 3~5문장 모두를 근거 중심으로 작성하고, 최소 2문장 이상에 날짜 또는 출처명을 포함
+- stage5_outlook.analysis와 summary의 핵심 주장(실적 개선, 목표주가, 수주, 점유율, 주주환원, 산업 전망)은 가능하면 화이트리스트 출처 근거를 우선 사용
+- 일반 기사만 근거일 경우, DART/IR/증권사/주요 경제지로 교차확인되지 않은 핵심 수치는 과장하지 말고 보수적으로 서술
+- "전망", "기대", "가능성"만 반복하지 말고, 확인된 사실과 추정/의견을 구분해서 쓰세요
+- 출처 없는 업계 루머, 커뮤니티 글, 출처 불명 숫자는 사용 금지
 
-## Stage 8: 트레이딩 액션 플랜
-- 진입가, 목표가, 손절가 제시
-- 포트폴리오 비중 전략 및 권장 보유 기간
+## recent_news (3~5건 필수)
+웹 검색에서 투자 판단에 중요한 뉴스·공시를 선별. 각 항목: title, date, summary(1~2문장), impact(긍정/부정/중립), source.
 
-## 6대 투자 거장 철학
+## 내부 일관성 (JSON 출력 전 자체 검증)
+1. moat_rating=none → fair_value_range PBR/BPS 보수적 산출, 성장 프리미엄 금지
+2. TTM_FCF 음수 또는 부채비율>200% → portfolio_weight 최대 2%
+3. lifecycle=쇠퇴기 → Stage 6에서 성장주 PER/PSR 멀티플 금지
+4. recent_news impact=부정 → risks에 반드시 반영
+5. peer relative_valuation=고평가 → entry_price는 현재가 대비 할인가 필수
+6. better_alternative≠null → summary에 대안 종목 언급 필수
 
-1. Warren Buffett (경제적 해자 & 안전마진)
-   - 경쟁우위 지속가능성, 사업모델 이해 용이성, 경영진 역량
-   - S-RIM 괴리율로 안전마진 측정, 장기보유 적합성
+## risks 필수 규칙
+단순 "경쟁 심화·금리·환율" 기재 금지 — 수치/사건 연결 필수. 재무 약점 1개 이상, severity=high 1개 이상, DART·뉴스 근거 1개 이상.
 
-2. Aswath Damodaran (내재가치 & 내러티브)
-   - 성장단계 정의, 내러티브-숫자 일관성, 리스크 대비 보상
-   - ROIC vs WACC 관점의 재투자 효율성
-
-3. Philip Fisher (성장잠재력 & 경영품질)
-   - R&D/혁신 역량, 이익률 개선 추세, 장기성장 잠재력
-   - 조직문화와 노사관계
-
-4. Pat Dorsey (경제적 해자 심층분석)
-   - 4가지 해자 유형의 존재 여부와 강도
-   - 해자 트렌드(확대/유지/축소)
-
-5. Peter Lynch (GARP & 생활밀착형 투자)
-   - PEG 비율로 성장 대비 가격 적정성 평가
-   - 투자자가 일상에서 이해할 수 있는 사업인가?
-   - 10-bagger 잠재력, 이익 성장과 주가의 연동성
-
-6. André Kostolany (시장심리 & 역발상)
-   - 코스톨라니 달걀 모형의 현재 위치
-   - 역발상 투자 기회, 유동성/수급 분석
-   - 인내심 필요 정도
-
-## 최신 정보 활용 (웹 검색)
-- web_search 도구를 활용하여 분석 대상 기업의 최신 뉴스·공시·실적발표·산업 동향을 반드시 확인하세요
-- **검색은 최대 3회**로 제한됩니다. 효율적으로 사용하세요:
-  - 1차 검색: "{종목명} 실적 공시 뉴스 {현재연도}" — 최신 기업 뉴스 및 실적 파악
-  - 2차 검색: "{종목명} 주요주주 지분변동 배당 자사주 {현재연도}" — 공시·지분 이벤트·주주환원 파악
-  - 3차 검색: "{산업명} 시장 전망 동향 {현재연도}" — 산업 레벨 트렌드 보완
-- 검색 결과를 Stage 1(거시환경), Stage 5(전망/촉매), Stage 8(액션 플랜)에 적극 반영하세요
-- 검색으로 확인한 최신 정보는 분석 근거에 구체적으로 인용하세요 (예: "2026년 1분기 실적 발표에 따르면...")
-
-## 최신 뉴스/공시 구조화 (recent_news 필수)
-- 웹 검색으로 확인한 최신 뉴스·공시 중 투자 판단에 중요한 것을 **최소 3건, 최대 5건** `recent_news` 배열에 구조화하세요
-- 각 항목에 제목(title), 날짜(date), 요약(summary), 영향도(impact: 긍정/부정/중립), 출처(source)를 포함하세요
-- 날짜를 정확히 알 수 없으면 "2026년 2월 추정" 등 대략적 시기를 기재하세요
-- 실적 발표, 대규모 수주, 지분 변동, 규제 변화, 신사업 진출 등 주가에 영향을 줄 수 있는 뉴스를 우선 선별하세요
-
-## 첨부 사업보고서 활용 (제공된 경우)
-- 사업보고서 문서가 첨부된 경우, Stage 0에서 반드시 해당 문서를 1차 정보원으로 활용하세요
-- 핵심 사업 모델, 매출 구성, 주요 제품/서비스는 사업보고서의 내용을 기준으로 작성하세요
-- 사업보고서의 내용과 웹 검색 결과가 상충할 경우, 날짜가 더 최신인 정보를 우선하세요
-- confidence 값은 사업보고서가 있으면 "high"로 설정하세요
 """
 
 USER_PROMPT_TEMPLATE = """\
-아래 종목의 정량 데이터를 분석하여, 9단계 Grand Master 분석 보고서를 작성해주세요.
-
-## 종목 정보
-- 종목코드: {code}
-- 종목명: {name}
-- 시장: {market}
+종목: {code} {name} ({market})
 
 ## 정량 데이터
 {quant_data}
 {qualitative_section}
-## 분석 지침
+[환각 방지] 위 종목의 실제 핵심 사업을 웹 검색으로 먼저 확인하세요. 금융 데이터만 보고 업종을 추정하지 마세요.
+데이터 활용: PEG·매출CAGR·ROE→Lynch | 괴리율·SRIM적정가→Buffett | F스코어→Stage4 | RSI·MA이격도→코스톨라니 | TTM·CAGR→Stage2
 
-### [환각 방지 필수 확인]
-"{name}" (코드: {code})의 실제 핵심 사업을 먼저 확인하세요.
-- 이 기업이 어느 산업에 속하는지 명확히 판단하세요
-- 금융 데이터만 보고 사업 분야를 추정하지 마세요
-- 종목명만 보고 반도체/바이오/2차전지 등으로 넘겨짚지 마세요
-- 불확실한 경우 hallucination_flag를 true로 설정하세요
-
-### 정량 데이터 활용 가이드
-- PEG, 매출CAGR, ROE → Stage 7 Lynch 분석에 직접 활용
-- 괴리율(%)과 적정주가_SRIM → Buffett 안전마진 분석의 핵심 근거
-- F스코어 → Stage 4 재무건전성 분석에 활용
-- RSI, MA이격도 → Stage 6 코스톨라니 달걀 위치 판단에 활용
-- TTM 실적과 CAGR → Stage 2 P×Q×C 분석의 수량적 근거
-
-## 출력 형식
-
-반드시 아래 JSON 형식으로만 응답하세요. JSON 외 다른 텍스트는 절대 포함하지 마세요.
+반드시 아래 JSON 형식으로만 응답하세요.
 
 ```json
 {{
   "business_identity": {{
-    "core_business": "<3줄 이내 핵심 사업 모델 요약 - 무엇을 팔아서 돈을 버는가?>",
-    "key_products": "<주요 제품/서비스 나열>",
-    "revenue_breakdown": "<매출 구성 설명 (비중 포함)>",
-    "industry_classification": "<산업 분류명>",
+    "core_business": "<핵심 사업 모델 3줄>",
+    "key_products": "<주요 제품/서비스>",
+    "revenue_breakdown": "<매출 구성 및 비중>",
+    "industry_classification": "<산업 분류>",
     "confidence": "<high|medium|low>",
     "hallucination_flag": false
   }},
   "stage1_macro": {{
-    "upstream_cagr": "<전방산업 연간 성장률>",
-    "value_chain_position": "<밸류체인 내 위치 설명>",
-    "competitive_advantages": "<경쟁사 대비 주요 우위>",
-    "analysis": "<3-5문장 분석>"
+    "upstream_cagr": "<전방산업 성장률>",
+    "value_chain_position": "<밸류체인 위치>",
+    "competitive_advantages": "<경쟁우위>",
+    "analysis": "<3-5문장>"
   }},
   "stage2_business_model": {{
-    "p_times_q_analysis": "<가격/수량/비용 동인 분석>",
-    "cash_cow_drivers": "<안정적 현금창출 사업부>",
-    "growth_drivers": "<미래 성장 견인 사업부>",
-    "analysis": "<3-5문장 분석>"
+    "p_times_q_analysis": "<P×Q×C 분석>",
+    "cash_cow_drivers": "<캐시카우 사업부>",
+    "growth_drivers": "<성장 동력>",
+    "analysis": "<3-5문장>"
   }},
   "stage3_moat": {{
     "lifecycle_stage": "<도입기|성장기|성숙기|쇠퇴기>",
-    "intangible_assets": {{"exists": true, "evidence": "<브랜드/특허/라이선스 근거>"}},
-    "switching_costs": {{"exists": false, "evidence": "<전환비용 근거>"}},
-    "network_effects": {{"exists": false, "evidence": "<네트워크효과 근거>"}},
-    "cost_advantage": {{"exists": false, "evidence": "<비용우위 근거>"}},
+    "intangible_assets": {{"exists": true, "evidence": "<근거>"}},
+    "switching_costs": {{"exists": false, "evidence": "<근거>"}},
+    "network_effects": {{"exists": false, "evidence": "<근거>"}},
+    "cost_advantage": {{"exists": false, "evidence": "<근거>"}},
     "moat_rating": "<wide|narrow|none>",
-    "analysis": "<3-5문장 분석>"
+    "analysis": "<3-5문장>"
   }},
   "stage4_financials": {{
-    "gross_margin_trend": "<매출총이익률 추세 평가>",
-    "fcf_quality": "<FCF 품질 및 지속가능성>",
-    "debt_assessment": "<부채 구조 및 상환능력>",
-    "consensus_deviation": "<시장 컨센서스 대비 현황>",
-    "analysis": "<3-5문장 분석>"
+    "gross_margin_trend": "<매출총이익률 추세>",
+    "fcf_quality": "<FCF 품질>",
+    "debt_assessment": "<부채 구조>",
+    "consensus_deviation": "<컨센서스 대비>",
+    "analysis": "<3-5문장>"
+  }},
+  "peer_comparison": {{
+    "peers": [
+      {{
+        "name": "<경쟁사명>",
+        "code": "<종목코드 또는 null>",
+        "market_cap": "<시총(억)>",
+        "per": "<PER>",
+        "pbr": "<PBR>",
+        "roe": "<ROE(%)>",
+        "operating_margin": "<영업이익률(%)>",
+        "revenue_growth": "<매출성장률(%)>"
+      }}
+    ],
+    "target_rank": {{
+      "per": "<N개사 중 M위>",
+      "pbr": "<N개사 중 M위>",
+      "roe": "<N개사 중 M위>",
+      "operating_margin": "<N개사 중 M위>",
+      "revenue_growth": "<N개사 중 M위>"
+    }},
+    "relative_valuation": "<저평가|적정|고평가>",
+    "better_alternative": "<대안 종목과 이유, 없으면 null>",
+    "analysis": "<3-5문장>"
   }},
   "stage5_outlook": {{
-    "capex_signals": "<CAPEX 증설/축소 현황>",
-    "order_backlog": "<수주잔고 및 파이프라인>",
-    "new_business": "<신사업 및 사업 다각화>",
-    "catalysts_12m": ["<12개월 내 촉매1>", "<촉매2>", "<촉매3>"],
-    "analysis": "<3-5문장 분석>"
+    "capex_signals": "<CAPEX 현황>",
+    "order_backlog": "<수주잔고>",
+    "new_business": "<신사업>",
+    "catalysts_12m": ["<촉매1>", "<촉매2>", "<촉매3>"],
+    "analysis": "<3-5문장. 최소 2문장 이상은 날짜/출처/수치 포함>"
   }},
   "stage6_valuation": {{
-    "lifecycle_matched_method": "<적용 밸류에이션 방법론 및 근거>",
+    "lifecycle_matched_method": "<밸류에이션 방법론>",
     "fair_value_range": "<적정 주가 범위>",
-    "kostolany_egg_position": <1-6 정수>,
+    "kostolany_egg_position": <1-6>,
     "market_psychology": "<과열|중립|공포>",
-    "analysis": "<3-5문장 분석>"
+    "analysis": "<3-5문장>"
   }},
   "stage7_masters": {{
     "buffett": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<3-5문장>"}},
@@ -222,27 +211,34 @@ USER_PROMPT_TEMPLATE = """\
     "kostolany": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<3-5문장>"}}
   }},
   "stage8_action": {{
-    "entry_price": "<매수 진입 가격대 (원)>",
-    "target_price": "<12개월 목표 주가 (원)>",
-    "stop_loss": "<손절 기준 가격 또는 조건>",
-    "portfolio_weight": "<권장 포트폴리오 비중 (예: 3-5%)>",
-    "holding_period": "<권장 보유 기간>",
-    "analysis": "<2-3문장 매매 근거>"
+    "entry_price": "<진입 가격대(원)>",
+    "entry_basis": "<산출 근거(SRIM/지지선/MA60 등)>",
+    "target_price": "<12개월 목표주가(원)>",
+    "target_basis": "<산출 근거(PER/SRIM/컨센서스 등)>",
+    "stop_loss": "<손절 기준>",
+    "portfolio_weight": "<권장 비중(예: 3-5%)>",
+    "holding_period": "<단기3개월|중기6-12개월|장기2-3년>",
+    "exit_conditions": ["<매도 조건1>", "<매도 조건2>"],
+    "analysis": "<2-3문장>"
   }},
-  "composite_score": <1-100 정수, 가중평균: Buffett 20%, Damodaran 15%, Fisher 15%, Dorsey 15%, Lynch 15%, Kostolany 10%, 사업정체성 신뢰도 10%>,
-  "investment_grade": "<S|A|B+|B|C+|C|D|F 중 하나>",
   "summary": "<5-7문장 종합 투자 의견>",
   "recent_news": [
     {{
-      "title": "<뉴스/공시 제목>",
-      "date": "<YYYY-MM-DD 또는 추정 시기 (예: 2026년 2월)>",
-      "summary": "<1-2문장 핵심 요약>",
+      "title": "<제목>",
+      "date": "<YYYY-MM-DD 또는 추정시기>",
+      "summary": "<1-2문장, 가능한 한 핵심 수치 1개 이상 포함>",
       "impact": "<긍정|부정|중립>",
-      "source": "<출처명 (예: 전자공시시스템, 한국경제, 매일경제 등)>"
+      "source": "<출처>"
     }}
   ],
-  "risks": ["<핵심 리스크1>", "<리스크2>", "<리스크3>"],
-  "catalysts": ["<핵심 촉매1>", "<촉매2>", "<촉매3>"]
+  "risks": [
+    {{
+      "category": "<재무|산업|경쟁|규제|지배구조|거시경제|기술>",
+      "description": "<수치/사건 포함 구체적 설명>",
+      "severity": "<high|medium|low>",
+      "evidence": "<정량 근거>"
+    }}
+  ]
 }}
 ```
 """
@@ -253,44 +249,35 @@ USER_PROMPT_TEMPLATE = """\
 # ─────────────────────────────────────────
 
 QUANT_SECTIONS = {
-    "밸류에이션": [
-        ("PER", "f2"), ("PBR", "f2"), ("PSR", "f2"), ("PEG", "f2"),
-        ("ROE(%)", "f2"), ("EPS", "int"), ("BPS", "int"),
-        ("이익수익률(%)", "f2"), ("적정주가_SRIM", "int"), ("괴리율(%)", "f2"),
+    "기본 정보": [
+        ("종가", "int"), ("시가총액", "int"), ("섹터", "str"),
     ],
-    "수익성": [
-        ("영업이익률(%)", "f2"), ("영업이익률_최근", "f2"), ("영업이익률_전년", "f2"),
-        ("이익률_개선", "flag"), ("이익률_급개선", "flag"), ("이익률_변동폭", "f2"),
-        ("이익품질_양호", "flag"), ("현금전환율(%)", "f1"), ("FCF수익률(%)", "f2"),
+    "밸류에이션 핵심": [
+        ("PER", "f2"), ("PBR", "f2"), ("PEG", "f2"),
+        ("ROE(%)", "f2"), ("이익수익률(%)", "f2"), ("적정주가_SRIM", "int"), ("괴리율(%)", "f2"),
     ],
-    "성장성": [
+    "퀄리티/재무": [
+        ("영업이익률(%)", "f2"), ("현금전환율(%)", "f1"), ("FCF수익률(%)", "f2"),
+        ("F스코어", "int"), ("부채비율(%)", "f1"), ("부채상환능력", "f2"),
+        ("ROIC(%)", "f2"), ("이자보상배율", "f2"),
+    ],
+    "성장/모멘텀": [
         ("매출_CAGR", "f1"), ("영업이익_CAGR", "f1"), ("순이익_CAGR", "f1"),
-        ("영업CF_CAGR", "f1"), ("FCF_CAGR", "f1"),
-        ("매출_연속성장", "int"), ("영업이익_연속성장", "int"),
-        ("순이익_연속성장", "int"), ("영업CF_연속성장", "int"),
+        ("Q_매출_YoY(%)", "f1"), ("Q_영업이익_YoY(%)", "f1"), ("Q_순이익_YoY(%)", "f1"),
+        ("TTM_영업이익_YoY(%)", "f1"), ("TTM_순이익_YoY(%)", "f1"),
+        ("실적가속_연속", "flag"), ("RS_등급", "f1"), ("Fwd_모멘텀_점수", "f1"),
     ],
-    "재무건전성": [
-        ("F스코어", "int"), ("부채비율(%)", "f1"),
-        ("부채상환능력", "f2"), ("CAPEX비율(%)", "f1"),
-        ("흑자전환", "flag"),
-    ],
-    "배당": [
-        ("배당수익률(%)", "f2"), ("DPS_최근", "int"), ("DPS_CAGR", "f2"),
-        ("배당_연속증가", "int"), ("배당_수익동반증가", "flag"),
-    ],
-    "기술적 지표": [
+    "배당/수급/기술": [
+        ("배당수익률(%)", "f2"), ("배당성향(%)", "f2"), ("배당_경고신호", "flag"),
+        ("수급강도", "f2"), ("스마트머니_승률", "f2"),
+        ("외인순매수_20d", "int"), ("기관순매수_20d", "int"),
         ("52주_최고대비(%)", "f1"), ("52주_최저대비(%)", "f1"),
-        ("MA20_이격도(%)", "f1"), ("MA60_이격도(%)", "f1"),
-        ("RSI_14", "f1"), ("거래대금_20일평균", "int"),
-        ("거래대금_증감(%)", "f1"), ("변동성_60일(%)", "f1"),
+        ("MA60_이격도(%)", "f1"), ("RSI_14", "f1"),
+        ("과열도", "f1"), ("상승조짐", "f1"), ("실적감속_경고", "flag"),
     ],
-    "TTM 실적": [
+    "TTM 요약": [
         ("TTM_매출", "int"), ("TTM_영업이익", "int"), ("TTM_순이익", "int"),
-        ("TTM_영업CF", "int"), ("TTM_CAPEX", "int"), ("TTM_FCF", "int"),
-        ("자본", "int"), ("부채", "int"), ("자산총계", "int"),
-    ],
-    "시가총액": [
-        ("종가", "int"), ("시가총액", "int"),
+        ("TTM_영업CF", "int"), ("TTM_FCF", "int"), ("자본", "int"), ("부채", "int"),
     ],
 }
 
@@ -299,6 +286,9 @@ def _fmt_val(v, fmt_type: str) -> str:
     if v is None:
         return "N/A"
     try:
+        if fmt_type == "str":
+            s = str(v).strip()
+            return s if s else "N/A"
         if fmt_type == "int":
             return f"{int(float(v)):,}"
         if fmt_type == "f1":
@@ -312,66 +302,243 @@ def _fmt_val(v, fmt_type: str) -> str:
     return str(v)
 
 
-def _find_report_pdf(stock_name: str, stock_code: str) -> Path | None:
-    """
-    config.PDF_REPORT_DIR에서 종목명 또는 종목코드가 포함된 PDF를 탐색.
-    파일명 형식: {기업명}_{년도Q분기}.pdf 또는 {기업명}_{년도}.pdf
-    여러 파일이 있으면 날짜 기준 최신 파일 반환, 없으면 None.
-    """
-    report_dir = config.PDF_REPORT_DIR
-    if not report_dir.exists():
-        return None
-
-    candidates = []
-    for pdf_path in report_dir.glob("*.pdf"):
-        stem = pdf_path.stem  # 예: "삼성전자_2024Q3"
-        if stock_name in stem or stock_code in stem:
-            # 파일명 뒷부분에서 날짜 파싱 (마지막 _ 이후)
-            parts = stem.rsplit("_", 1)
-            date_sort_key = (0, 0)
-            if len(parts) == 2:
-                date_str = parts[1]
-                m = re.match(r'^(\d{4})Q(\d)$', date_str, re.IGNORECASE)
-                if m:
-                    date_sort_key = (int(m.group(1)), int(m.group(2)))
-                else:
-                    m = re.match(r'^(\d{4})$', date_str)
-                    if m:
-                        date_sort_key = (int(m.group(1)), 0)
-            candidates.append((date_sort_key, pdf_path))
-
-    if not candidates:
-        return None
-
-    candidates.sort(key=lambda x: x[0], reverse=True)
-    return candidates[0][1]
+def _strategy_tags(stock: dict) -> str:
+    tags = []
+    score_tags = [
+        ("주도주_점수", "leaders"),
+        ("우량가치_점수", "quality_value"),
+        ("고성장_점수", "growth_mom"),
+        ("현금배당_점수", "cash_div"),
+        ("턴어라운드_점수", "turnaround"),
+    ]
+    for key, label in score_tags:
+        try:
+            if float(stock.get(key, 0) or 0) >= 80:
+                tags.append(label)
+        except (TypeError, ValueError):
+            continue
+    if stock.get("전략수"):
+        try:
+            tags.append(f"multi_strategy={int(float(stock.get('전략수') or 0))}")
+        except (TypeError, ValueError):
+            pass
+    if stock.get("컨센서스_커버리지"):
+        tags.append("forward_covered")
+    return ", ".join(tags) if tags else "없음"
 
 
-def _upload_pdf_to_files_api(client, pdf_path: Path) -> str | None:
-    """
-    PDF를 Anthropic Files API에 업로드하고 file_id를 반환.
-    업로드 실패 시 None 반환 (graceful degradation).
-    """
+def _quarter_label(date_str: str) -> str:
+    s = str(date_str).replace("-", "")[:6]
     try:
-        with open(pdf_path, "rb") as f:
-            file_meta = client.beta.files.upload(
-                file=(pdf_path.name, f, "application/pdf"),
-            )
-        log.info("사업보고서 PDF 업로드 완료: %s → file_id=%s", pdf_path.name, file_meta.id)
-        return file_meta.id
-    except Exception as e:
-        log.warning("사업보고서 PDF 업로드 실패 (%s): %s", pdf_path.name, str(e)[:200])
-        return None
+        year = int(s[:4])
+        month = int(s[4:6])
+        quarter = (month - 1) // 3 + 1
+        return f"{year}Q{quarter}"
+    except (TypeError, ValueError):
+        return str(date_str)
+
+
+def _format_quarterly_snapshot(code: str) -> str:
+    df = _db.load_stock_financials(code, period="quarter")
+    if df.empty:
+        return ""
+    df = df.copy()
+    df["label"] = df["기준일"].astype(str).apply(_quarter_label)
+    labels = list(df["label"].drop_duplicates())[-4:]
+    if not labels:
+        return ""
+    lines = ["\n### 최근 4분기 실적"]
+    lines.append("- 분기: " + " | ".join(labels))
+    for acc in ("매출액", "영업이익", "당기순이익"):
+        vals = []
+        for label in labels:
+            row = df[(df["label"] == label) & (df["계정"] == acc)]["값"]
+            vals.append(_fmt_val(row.iloc[0], "int") if not row.empty else "N/A")
+        lines.append(f"- {acc}: " + " | ".join(vals))
+    return "\n".join(lines)
+
+
+def _format_forward_snapshot(stock: dict) -> str:
+    fields = ["Fwd_PER", "Fwd_ROE(%)", "Fwd_영업이익_성장률(%)", "Fwd_2yr_영업이익_성장(%)"]
+    if not any(stock.get(k) is not None for k in fields):
+        return ""
+    return (
+        "\n### Forward 컨센서스 요약\n"
+        f"- Fwd_PER {_fmt_val(stock.get('Fwd_PER'), 'f2')}, "
+        f"Fwd_ROE {_fmt_val(stock.get('Fwd_ROE(%)'), 'f1')}%, "
+        f"Fwd_OP성장 {_fmt_val(stock.get('Fwd_영업이익_성장률(%)'), 'f1')}%, "
+        f"2Y_OP성장 {_fmt_val(stock.get('Fwd_2yr_영업이익_성장(%)'), 'f1')}%"
+    )
+
+
+def _format_sector_relative_snapshot(stock: dict) -> str:
+    sector = stock.get("섹터")
+    code = str(stock.get("종목코드", "")).zfill(6)
+    if not sector:
+        return ""
+    try:
+        with _db.get_conn() as conn:
+            row = conn.execute(
+                """SELECT
+                       median(PER),
+                       median(PBR),
+                       median("ROE(%)"),
+                       median("영업이익률(%)")
+                   FROM dashboard_result
+                   WHERE 섹터 = ? AND 종목코드 != ?""",
+                [sector, code],
+            ).fetchone()
+    except Exception:
+        return ""
+    if not row:
+        return ""
+    med_per, med_pbr, med_roe, med_opm = row
+    comps_out = []
+    comps = [
+        ("PER", stock.get("PER"), med_per, "낮음"),
+        ("PBR", stock.get("PBR"), med_pbr, "낮음"),
+        ("ROE(%)", stock.get("ROE(%)"), med_roe, "높음"),
+        ("영업이익률(%)", stock.get("영업이익률(%)"), med_opm, "높음"),
+    ]
+    for label, value, median, good_dir in comps:
+        if value is None or median is None:
+            continue
+        try:
+            value_f = float(value)
+            median_f = float(median)
+        except (TypeError, ValueError):
+            continue
+        delta = value_f - median_f
+        if abs(delta) < 1e-9:
+            pos = "유사"
+        elif (delta < 0 and good_dir == "낮음") or (delta > 0 and good_dir == "높음"):
+            pos = "우위"
+        else:
+            pos = "열위"
+        comps_out.append(f"{label} {pos}({ _fmt_val(value_f, 'f2') } vs { _fmt_val(median_f, 'f2') })")
+    if not comps_out:
+        return ""
+    return "\n### 섹터 상대 위치\n- " + ", ".join(comps_out)
+
+
+def _format_allocation_snapshot(stock: dict) -> str:
+    if not any(stock.get(k) is not None for k in ("배당성향(%)", "배당_경고신호", "이자보상배율", "CAPEX비율(%)")):
+        return ""
+    return (
+        "\n### 자본배분/리스크 메모\n"
+        f"- 배당성향 {_fmt_val(stock.get('배당성향(%)'), 'f1')}%, "
+        f"배당경고 {_fmt_val(stock.get('배당_경고신호'), 'flag')}, "
+        f"이자보상배율 {_fmt_val(stock.get('이자보상배율'), 'f2')}, "
+        f"CAPEX비율 {_fmt_val(stock.get('CAPEX비율(%)'), 'f1')}%"
+    )
+
+
+def _format_timing_signals(stock: dict) -> str:
+    """수급/과열/상승조짐 타이밍 신호 텍스트 생성.
+
+    경고 신호(부정): 수급 다이버전스, 과열+매도, 피크 실적
+    기회 신호(긍정): 상승 초기 진입 기회, VCP 돌파 대기
+    """
+    supply = stock.get("수급강도")
+    fscore = stock.get("F스코어")
+    overheat = stock.get("과열도")
+    breakout = stock.get("상승조짐")
+    decel = stock.get("실적감속_경고")
+    vcp = stock.get("VCP_신호")
+    foreign_20d = stock.get("외인순매수_20d")
+    inst_20d = stock.get("기관순매수_20d")
+
+    def _safe_float(v):
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    supply_f = _safe_float(supply)
+    fscore_f = _safe_float(fscore)
+    overheat_f = _safe_float(overheat)
+    breakout_f = _safe_float(breakout)
+    decel_i = int(_safe_float(decel) or 0)
+    vcp_i = int(_safe_float(vcp) or 0)
+
+    warnings = []
+    opportunities = []
+
+    # ── 경고 신호 ──
+    if supply_f is not None and supply_f < 0 and fscore_f is not None and fscore_f >= 6:
+        warnings.append("수급 다이버전스 경고: 재무우량(F스코어 6+)에도 외국인+기관 순매도 중")
+
+    if overheat_f is not None and overheat_f >= 60 and supply_f is not None and supply_f < 0:
+        warnings.append(f"과열+매도 동시 경고: 과열도 {overheat_f:.0f}/100, 수급강도 음수")
+
+    if decel_i == 1 and overheat_f is not None and overheat_f >= 50:
+        warnings.append("피크 실적 리스크: 영업이익 YoY 양수이지만 3분기 연속 감속 중")
+
+    # ── 기회 신호 ──
+    if breakout_f is not None and breakout_f >= 70 and overheat_f is not None and overheat_f <= 30:
+        opportunities.append(
+            f"상승 초기 진입 기회: 상승조짐 {breakout_f:.0f}/100, 과열도 {overheat_f:.0f}/100 — "
+            "펀더멘털 우수 + 비과열 + 수급 유입 중"
+        )
+
+    if breakout_f is not None and breakout_f >= 50 and vcp_i == 1:
+        opportunities.append(
+            "VCP 돌파 대기: 가격/거래량 축소 후 스마트머니 매집 중 — 촉매 발생 시 빠른 진입 검토"
+        )
+
+    if not warnings and not opportunities:
+        return ""
+
+    lines = ["\n### 수급/타이밍 신호"]
+    for w in warnings:
+        lines.append(f"- ⚠ {w}")
+    for o in opportunities:
+        lines.append(f"- ★ {o}")
+
+    # 원시 수급 데이터
+    parts = []
+    if foreign_20d is not None:
+        try:
+            parts.append(f"외인 20일 순매수 {int(float(foreign_20d)):,}원")
+        except (TypeError, ValueError):
+            pass
+    if inst_20d is not None:
+        try:
+            parts.append(f"기관 20일 순매수 {int(float(inst_20d)):,}원")
+        except (TypeError, ValueError):
+            pass
+    if parts:
+        lines.append(f"- ({', '.join(parts)})")
+
+    return "\n".join(lines)
 
 
 def format_quant_data(stock: dict) -> str:
     """종목 데이터를 분석용 텍스트로 포맷팅."""
-    lines = []
+    lines = [
+        "### 분석 메모",
+        f"- 전략 태그: {_strategy_tags(stock)}",
+    ]
     for section, metrics in QUANT_SECTIONS.items():
         lines.append(f"\n### {section}")
         for col, fmt_type in metrics:
             val = stock.get(col)
             lines.append(f"- {col}: {_fmt_val(val, fmt_type)}")
+    quarterly = _format_quarterly_snapshot(str(stock.get("종목코드", "")).zfill(6))
+    if quarterly:
+        lines.append(quarterly)
+    forward = _format_forward_snapshot(stock)
+    if forward:
+        lines.append(forward)
+    sector_relative = _format_sector_relative_snapshot(stock)
+    if sector_relative:
+        lines.append(sector_relative)
+    allocation = _format_allocation_snapshot(stock)
+    if allocation:
+        lines.append(allocation)
+    timing = _format_timing_signals(stock)
+    if timing:
+        lines.append(timing)
     return "\n".join(lines)
 
 
@@ -467,6 +634,348 @@ def _call_with_retry(client, *, max_retries: int = 5, use_beta: bool = False, **
                 raise
 
 
+def build_stock_analysis_input_hash(stock: dict, data_version: str = "") -> str:
+    """분석 입력이 실제로 바뀌었는지 판별하는 해시."""
+    payload = {
+        "version": ANALYSIS_INPUT_VERSION,
+        "data_version": data_version,
+        "stock": {k: stock.get(k) for k in sorted(stock.keys())},
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+MASTER_SCORE_WEIGHTS = {
+    "buffett": 20,
+    "damodaran": 15,
+    "fisher": 15,
+    "dorsey": 15,
+    "lynch": 15,
+    "kostolany": 10,
+}
+
+
+def _normalize_portfolio_weight(weight_text: str, stock: dict) -> str:
+    if not weight_text:
+        return weight_text
+    nums = [float(x) for x in re.findall(r"\d+(?:\.\d+)?", str(weight_text))]
+    if not nums:
+        return weight_text
+
+    cap = None
+    sector = str(stock.get("섹터", "") or "")
+    name = str(stock.get("종목명", "") or "")
+    is_financial = any(keyword in f"{sector} {name}" for keyword in ["은행", "금융", "증권", "보험", "카드", "지주"])
+    debt = float(stock.get("부채비율(%)", 0) or 0)
+    ttm_fcf = float(stock.get("TTM_FCF", 0) or 0)
+    if not is_financial:
+        if debt >= 300:
+            cap = 1.5
+        elif ttm_fcf < 0 or debt > 200:
+            cap = 2.0
+
+    if cap is None:
+        return weight_text
+
+    clamped = [min(n, cap) for n in nums]
+    if len(clamped) >= 2:
+        if abs(clamped[0] - clamped[1]) < 1e-9:
+            return f"{clamped[0]:g}%"
+        return f"{clamped[0]:g}-{clamped[1]:g}%"
+    return f"{clamped[0]:g}%"
+
+
+def _compute_composite_fields(stock: dict, scores: dict) -> tuple[int | None, str | None]:
+    masters = scores.get("stage7_masters", {}) or {}
+    if not masters:
+        return None, None
+
+    total = 0.0
+    for key, weight in MASTER_SCORE_WEIGHTS.items():
+        try:
+            score = float((masters.get(key) or {}).get("score"))
+        except (TypeError, ValueError):
+            return None, None
+        total += score * weight
+
+    composite = total / sum(MASTER_SCORE_WEIGHTS.values()) * 10
+    confidence = ((scores.get("business_identity") or {}).get("confidence") or "").lower()
+    confidence_adj = {"high": 5, "medium": 0, "low": -10}.get(confidence, 0)
+    composite += confidence_adj
+
+    try:
+        if float(stock.get("괴리율(%)", 0) or 0) <= -30:
+            buffett = masters.get("buffett") or {}
+            if "score" in buffett:
+                buffett["score"] = min(float(buffett.get("score") or 0), 4)
+                masters["buffett"] = buffett
+                total = 0.0
+                for key, weight in MASTER_SCORE_WEIGHTS.items():
+                    total += float((masters.get(key) or {}).get("score") or 0) * weight
+                composite = total / sum(MASTER_SCORE_WEIGHTS.values()) * 10 + confidence_adj
+    except (TypeError, ValueError):
+        pass
+
+    if float(stock.get("F스코어", 0) or 0) <= 3:
+        composite = min(composite, 45)
+
+    composite = round(max(1, min(100, composite)))
+    if composite >= 85:
+        grade = "S"
+    elif composite >= 75:
+        grade = "A"
+    elif composite >= 65:
+        grade = "B+"
+    elif composite >= 55:
+        grade = "B"
+    elif composite >= 45:
+        grade = "C+"
+    elif composite >= 35:
+        grade = "C"
+    elif composite >= 20:
+        grade = "D"
+    else:
+        grade = "F"
+    return composite, grade
+
+
+def _news_source_priority(source: str) -> tuple[int, str]:
+    trusted_keywords_tier1 = (
+        "dart", "전자공시", "사업보고서", "분기보고서", "반기보고서",
+        "실적발표", "ir", "ir자료", "company release", "press release",
+    )
+    trusted_keywords_tier2 = (
+        "증권", "리포트", "research", "애널리스트", "투자증권",
+    )
+    trusted_keywords_tier3 = (
+        "연합", "reuters", "블룸버그", "bloomberg", "서울경제",
+        "매일경제", "한국경제", "머니투데이", "edaily", "이데일리",
+    )
+    s = str(source or "").lower()
+    if any(k in s for k in trusted_keywords_tier1):
+        return (0, s)
+    if any(k in s for k in trusted_keywords_tier2):
+        return (1, s)
+    if any(k in s for k in trusted_keywords_tier3):
+        return (2, s)
+    return (3, s)
+
+
+def _normalize_recent_news_items(items: list[dict]) -> list[dict]:
+    normalized = []
+    for item in items[:5]:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        summary = str(item.get("summary") or "").strip()
+        if not title and not summary:
+            continue
+        date = str(item.get("date") or "").strip() or "날짜 미상"
+        source = str(item.get("source") or "").strip() or "출처 미상"
+        impact = str(item.get("impact") or "중립").strip() or "중립"
+        if len(summary) > 220:
+            summary = summary[:217].rstrip() + "..."
+        normalized.append({
+            "title": title or "제목 미상",
+            "date": date,
+            "summary": summary or "요약 없음",
+            "impact": impact,
+            "source": source,
+        })
+    normalized.sort(key=lambda x: str(x.get("date", "")), reverse=True)
+    normalized.sort(key=lambda x: _news_source_priority(x.get("source", "")))
+
+    trusted = [item for item in normalized if _news_source_priority(item.get("source", ""))[0] <= 2]
+    fallback = [item for item in normalized if _news_source_priority(item.get("source", ""))[0] > 2]
+    if len(trusted) >= 3:
+        return trusted[:5]
+    return (trusted + fallback)[:5]
+
+
+def _normalize_stage5_analysis(stage5: dict, recent_news: list[dict]) -> dict:
+    if not stage5:
+        return stage5
+    analysis = str(stage5.get("analysis") or "").strip()
+    if analysis:
+        has_date_or_source = any(token in analysis for token in ("202", "증권", "DART", "공시", "뉴스", "리포트", "발표"))
+        if not has_date_or_source and recent_news:
+            trusted_news = [n for n in recent_news if _news_source_priority(n.get("source", ""))[0] <= 2]
+            top = trusted_news[0] if trusted_news else recent_news[0]
+            source = top.get("source", "출처 미상")
+            date = top.get("date", "날짜 미상")
+            stage5["analysis"] = f"{analysis} 참고 근거: {date} {source}."
+    return stage5
+
+
+def _normalize_summary_text(summary: str, recent_news: list[dict]) -> str:
+    summary = str(summary or "").strip()
+    if not summary:
+        return summary
+    has_source_cue = any(token in summary for token in ("202", "증권", "DART", "공시", "IR", "발표", "리포트"))
+    if has_source_cue or not recent_news:
+        return summary
+    trusted_news = [n for n in recent_news if _news_source_priority(n.get("source", ""))[0] <= 2]
+    top = trusted_news[0] if trusted_news else recent_news[0]
+    source = top.get("source", "출처 미상")
+    date = top.get("date", "날짜 미상")
+    fact = top.get("summary", "")
+    if fact:
+        fact = fact[:120].rstrip()
+        return f"{summary} 핵심 근거: {date} {source} - {fact}"
+    return f"{summary} 핵심 근거: {date} {source}."
+
+
+def _postprocess_scores(stock: dict, scores: dict) -> dict:
+    scores = scores or {}
+    stage5 = scores.get("stage5_outlook") or {}
+    catalysts_12m = stage5.get("catalysts_12m") or []
+    if catalysts_12m and not scores.get("catalysts"):
+        scores["catalysts"] = catalysts_12m[:3]
+    recent_news = _normalize_recent_news_items(scores.get("recent_news") or [])
+    scores["recent_news"] = recent_news
+    scores["stage5_outlook"] = _normalize_stage5_analysis(stage5, recent_news)
+    scores["summary"] = _normalize_summary_text(scores.get("summary", ""), recent_news)
+
+    stage8 = scores.get("stage8_action") or {}
+    if stage8:
+        stage8["portfolio_weight"] = _normalize_portfolio_weight(
+            stage8.get("portfolio_weight", ""), stock
+        )
+        scores["stage8_action"] = stage8
+
+    composite, grade = _compute_composite_fields(stock, scores)
+    if composite is not None:
+        scores["composite_score"] = composite
+    if grade is not None:
+        scores["investment_grade"] = grade
+    return scores
+
+
+# ─────────────────────────────────────────
+# Peer 비교: DB 조회 헬퍼
+# ─────────────────────────────────────────
+
+PEER_IDENTIFY_PROMPT = """\
+아래 종목의 동종업계 경쟁사를 식별하세요.
+
+종목코드: {code}
+종목명: {name}
+산업/섹터: {sector}
+
+DB에 보유한 동종업계 후보 종목 목록 (시가총액 순):
+{candidates}
+
+위 후보 중에서 "{name}"의 실제 동종업계 경쟁사 3~5개를 선정하세요.
+- 같은 사업 모델/서비스를 직접 경쟁하는 기업 우선
+- 후보에 없으면 웹 검색으로 추가 식별 가능하나, 후보 내 선택을 우선
+- 반드시 아래 JSON 형식으로만 응답 (다른 텍스트 없음)
+
+```json
+{{"peers": ["종목코드1", "종목코드2", "종목코드3"]}}
+```
+"""
+
+
+def _fetch_sector_candidates(code: str, sector: str, limit: int = 15) -> list[dict]:
+    """DB에서 같은 섹터 종목을 시총 순으로 조회."""
+    if not sector:
+        return []
+    try:
+        with _db.get_conn() as conn:
+            rows = conn.execute(
+                """SELECT 종목코드, 종목명, PER, PBR, "ROE(%)", "영업이익률(%)", 시가총액,
+                          COALESCE("Q_매출_YoY(%)", "TTM_매출_YoY(%)", "매출_CAGR")
+                   FROM dashboard_result
+                   WHERE 섹터=? AND 종목코드 != ?
+                   ORDER BY 시가총액 DESC
+                   LIMIT ?""",
+                [sector, code, limit],
+            ).fetchall()
+        return [
+            {"종목코드": r[0], "종목명": r[1], "PER": r[2], "PBR": r[3],
+             "ROE(%)": r[4], "영업이익률(%)": r[5], "시가총액": r[6], "매출_CAGR": r[7]}
+            for r in rows
+        ]
+    except Exception as e:
+        log.warning("섹터 후보 조회 실패: %s", e)
+        return []
+
+
+def _fetch_peer_data(codes: list[str]) -> list[dict]:
+    """DB에서 특정 종목코드 목록의 지표를 조회."""
+    if not codes:
+        return []
+    try:
+        placeholders = ", ".join("?" * len(codes))
+        with _db.get_conn() as conn:
+            rows = conn.execute(
+                f"""SELECT 종목코드, 종목명, PER, PBR, "ROE(%)", "영업이익률(%)", 시가총액,
+                           COALESCE("Q_매출_YoY(%)", "TTM_매출_YoY(%)", "매출_CAGR")
+                    FROM dashboard_result
+                    WHERE 종목코드 IN ({placeholders})""",
+                codes,
+            ).fetchall()
+        result = []
+        for r in rows:
+            mktcap_eok = round(r[6] / 1e8) if r[6] else None
+            result.append({
+                "종목코드": r[0],
+                "종목명": r[1],
+                "PER": round(r[2], 2) if r[2] else None,
+                "PBR": round(r[3], 2) if r[3] else None,
+                "ROE(%)": round(r[4], 1) if r[4] else None,
+                "영업이익률(%)": round(r[5], 1) if r[5] else None,
+                "시가총액(억)": mktcap_eok,
+                "매출성장률(%)": round(r[7], 1) if r[7] else None,
+            })
+        return result
+    except Exception as e:
+        log.warning("Peer 데이터 조회 실패: %s", e)
+        return []
+
+
+def _identify_peers(stock: dict, code: str, candidates: list[dict]) -> list[str]:
+    """DB 후보군에서 정량 유사도로 경쟁사 종목코드를 선택."""
+    if not candidates:
+        return []
+
+    def _safe_float(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    target_cap = _safe_float(stock.get("시가총액"))
+    target_per = _safe_float(stock.get("PER"))
+    target_pbr = _safe_float(stock.get("PBR"))
+    target_roe = _safe_float(stock.get("ROE(%)"))
+    target_opm = _safe_float(stock.get("영업이익률(%)"))
+    target_growth = _safe_float(stock.get("Q_매출_YoY(%)") or stock.get("TTM_매출_YoY(%)") or stock.get("매출_CAGR"))
+
+    ranked = []
+    for cand in candidates:
+        score = 0.0
+        if target_cap and cand.get("시가총액"):
+            score += abs(math.log10(max(target_cap, 1)) - math.log10(max(float(cand["시가총액"]), 1))) * 2.0
+        for target, key, weight in (
+            (target_per, "PER", 1.2),
+            (target_pbr, "PBR", 1.0),
+            (target_roe, "ROE(%)", 1.0),
+            (target_opm, "영업이익률(%)", 1.0),
+            (target_growth, "매출_CAGR", 0.8),
+        ):
+            cand_val = _safe_float(cand.get(key))
+            if target is None or cand_val is None:
+                score += weight * 1.5
+            else:
+                denom = max(abs(target), 1.0)
+                score += abs(target - cand_val) / denom * weight
+        ranked.append((score, str(cand["종목코드"]).zfill(6)))
+
+    ranked.sort(key=lambda x: x[0])
+    return [code for _, code in ranked[:5]]
+
+
 # ─────────────────────────────────────────
 # Claude API 호출
 # ─────────────────────────────────────────
@@ -494,55 +1003,62 @@ def generate_report(stock: dict, mode: str = "claude") -> dict:
     code = str(stock.get("종목코드", "")).zfill(6)
     name = stock.get("종목명", "Unknown")
     market = stock.get("시장구분", "")
+    sector = stock.get("섹터", "") or ""
 
     quant_text = format_quant_data(stock)
-
-    user_prompt = USER_PROMPT_TEMPLATE.format(
-        code=code, name=name, market=market,
-        quant_data=quant_text,
-        qualitative_section="",
-    )
 
     client = anthropic.Anthropic(
         api_key=config.ANTHROPIC_API_KEY,
         timeout=httpx.Timeout(300.0, connect=30.0),
     )
 
-    # --- 사업보고서 PDF 탐색 및 업로드 ---
-    pdf_path = _find_report_pdf(name, code)
-    pdf_file_id = None
-    if pdf_path:
-        log.info("사업보고서 PDF 발견: %s", pdf_path.name)
-        pdf_file_id = _upload_pdf_to_files_api(client, pdf_path)
+    # ── 1차 호출: DB 섹터 후보 → AI로 경쟁사 코드 식별 → DB에서 정확한 지표 조회 ──
+    peer_db_section = ""
+    candidates = _fetch_sector_candidates(code, sector, limit=15)
+    if candidates:
+        log.info("Peer DB 선정 시작 (%s %s, 섹터=%s, 후보=%d개)", code, name, sector, len(candidates))
+        peer_codes = _identify_peers(stock, code, candidates)
+        if peer_codes:
+            peer_data = _fetch_peer_data(peer_codes)
+            if peer_data:
+                lines = ["## 동종업계 Peer DB 데이터 (우리 시스템 실측값, 웹 추정 금지)"]
+                lines.append("아래 데이터는 우리 DB의 실측값입니다. peer_comparison.peers 작성 시 이 값을 그대로 사용하세요.")
+                lines.append("")
+                for p in peer_data:
+                    lines.append(
+                        f"- {p['종목코드']} {p['종목명']}: "
+                        f"시총={p['시가총액(억)']}억, PER={p['PER']}, PBR={p['PBR']}, "
+                        f"ROE={p['ROE(%)']}%, 영업이익률={p['영업이익률(%)']}%, 매출성장률={p['매출성장률(%)']}%"
+                    )
+                peer_db_section = "\n".join(lines) + "\n"
+                log.info("Peer DB 데이터 준비 완료 (%d개 종목)", len(peer_data))
+        else:
+            log.info("Peer DB 선정 결과 없음 (%s %s)", code, name)
+
+    user_prompt = USER_PROMPT_TEMPLATE.format(
+        code=code, name=name, market=market,
+        quant_data=quant_text,
+        qualitative_section=peer_db_section,
+    )
 
     # --- 메시지 content 구성 ---
-    user_content: list = []
-    if pdf_file_id:
-        user_content.append({
-            "type": "document",
-            "source": {"type": "file", "file_id": pdf_file_id},
-            "title": f"{name} 사업보고서",
-            "context": "이 문서는 분석 대상 기업의 공식 사업보고서입니다. Stage 0 핵심 사업 모델 분석의 1차 근거로 활용하세요.",
-        })
-    user_content.append({"type": "text", "text": user_prompt})
+    user_content: list = [{"type": "text", "text": user_prompt}]
 
     # --- Prompt caching: 시스템 프롬프트 캐시 적용 ---
     system_with_cache = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
 
     web_search_max_uses = config.WEB_SEARCH_MAX_USES
-    log.info("종목 AI 분석 시작 (%s %s, model=%s, pdf=%s, web_search max_uses=%d)",
-             code, name, config.ANALYSIS_MODEL,
-             pdf_path.name if pdf_path else "없음", web_search_max_uses)
+    log.info("종목 AI 분석 시작 (%s %s, model=%s, web_search max_uses=%d)",
+             code, name, config.ANALYSIS_MODEL, web_search_max_uses)
 
     message = _call_with_retry(
         client,
-        use_beta=bool(pdf_file_id),
+        use_beta=False,
         model=config.ANALYSIS_MODEL,
         max_tokens=config.ANALYSIS_MAX_TOKENS,
         system=system_with_cache,
         messages=[{"role": "user", "content": user_content}],
         tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": web_search_max_uses}],
-        **({"betas": ["files-api-2025-04-14"]} if pdf_file_id else {}),
     )
 
     # --- 토큰 사용량 로깅 (prompt cache hit/miss 포함) ---
@@ -576,8 +1092,9 @@ def generate_report(stock: dict, mode: str = "claude") -> dict:
             "mode": "claude",
         }
 
-    if message.stop_reason == "max_tokens":
-        log.warning("종목 분석 max_tokens 도달 (%s %s, len=%d)", code, name, len(raw_text))
+    truncated_by_tokens = (message.stop_reason == "max_tokens")
+    if truncated_by_tokens:
+        log.warning("종목 분석 max_tokens 도달 (%s %s, len=%d) → JSON 불완전 가능성", code, name, len(raw_text))
 
     try:
         scores = _parse_json_response(raw_text)
@@ -594,10 +1111,13 @@ def generate_report(stock: dict, mode: str = "claude") -> dict:
             "mode": "claude",
         }
 
+    scores = _postprocess_scores(stock, scores)
+
     model_label = f"Claude ({config.ANALYSIS_MODEL})"
     generated_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     report_html = render_html(code, name, market, stock, scores,
-                              generated_date, model_label=model_label)
+                              generated_date, model_label=model_label,
+                              truncated=truncated_by_tokens)
 
     return {
         "scores": scores,
@@ -678,7 +1198,7 @@ def _score_bar_width(score: int, max_score: int = 10) -> int:
 
 def render_html(code: str, name: str, market: str, stock: dict,
                 scores: dict, generated_date: str,
-                model_label: str = None) -> str:
+                model_label: str = None, truncated: bool = False) -> str:
     """분석 결과를 HTML 보고서로 렌더링 (9단계 Grand Master 프로토콜)."""
 
     if model_label is None:
@@ -703,6 +1223,7 @@ def render_html(code: str, name: str, market: str, stock: dict,
     stage2 = scores.get("stage2_business_model", {})
     stage3 = scores.get("stage3_moat", {})
     stage4 = scores.get("stage4_financials", {})
+    peer_comparison = scores.get("peer_comparison", {})
     stage5 = scores.get("stage5_outlook", {})
     stage6 = scores.get("stage6_valuation", {})
     stage8 = scores.get("stage8_action", {})
@@ -725,6 +1246,12 @@ def render_html(code: str, name: str, market: str, stock: dict,
   <div class="hallucination-alert">
     <strong>데이터 검증 불가로 분석을 보류합니다.</strong><br>
     사업 분류를 직접 확인 후 재분석을 요청하시기 바랍니다.
+  </div>"""
+    if truncated:
+        hallucination_banner += """
+  <div class="hallucination-alert" style="background:#fff3cd;border-color:#ffc107;color:#856404">
+    <strong>&#9888; 응답 토큰 한도 초과 — 분석이 불완전합니다.</strong><br>
+    일부 섹션(거장 분석, 종합 의견, 리스크 등)이 누락될 수 있습니다. 재분석을 실행해 주세요.
   </div>"""
 
     # ── Stage 0: 사업 정체성 박스 ──
@@ -844,6 +1371,82 @@ def render_html(code: str, name: str, market: str, stock: dict,
     </div>
   </div>"""
 
+    # ── Stage 4.5: 동종업계 Peer 비교 ──
+    peer_html = ""
+    if peer_comparison and peer_comparison.get("peers"):
+        peers = peer_comparison["peers"]
+        rel_val = peer_comparison.get("relative_valuation", "")
+        rel_val_color = {"저평가": "#1e8449", "적정": "#6c757d", "고평가": "#dc3545"}.get(rel_val, "#6c757d")
+        better_alt = peer_comparison.get("better_alternative")
+
+        # 비교 테이블 헤더
+        peer_table_rows = ""
+        # 대상 종목 행
+        peer_table_rows += f"""
+          <tr style="background:#e8f4f8;font-weight:600">
+            <td style="padding:7px 10px">★ {name}</td>
+            <td style="padding:7px 10px;text-align:right">{_fmt_val(stock.get("시가총액"), "int")}</td>
+            <td style="padding:7px 10px;text-align:right">{_fmt_val(stock.get("PER"), "f2")}</td>
+            <td style="padding:7px 10px;text-align:right">{_fmt_val(stock.get("PBR"), "f2")}</td>
+            <td style="padding:7px 10px;text-align:right">{_fmt_val(stock.get("ROE(%)"), "f1")}</td>
+            <td style="padding:7px 10px;text-align:right">{_fmt_val(stock.get("영업이익률(%)"), "f1")}</td>
+            <td style="padding:7px 10px;text-align:right">{_fmt_val(stock.get("매출_CAGR"), "f1")}</td>
+          </tr>"""
+        # 경쟁사 행
+        for p in peers:
+            peer_table_rows += f"""
+          <tr style="border-bottom:1px solid #dee2e6">
+            <td style="padding:6px 10px">{p.get("name", "N/A")}</td>
+            <td style="padding:6px 10px;text-align:right">{p.get("market_cap", "N/A")}</td>
+            <td style="padding:6px 10px;text-align:right">{p.get("per", "N/A")}</td>
+            <td style="padding:6px 10px;text-align:right">{p.get("pbr", "N/A")}</td>
+            <td style="padding:6px 10px;text-align:right">{p.get("roe", "N/A")}</td>
+            <td style="padding:6px 10px;text-align:right">{p.get("operating_margin", "N/A")}</td>
+            <td style="padding:6px 10px;text-align:right">{p.get("revenue_growth", "N/A")}</td>
+          </tr>"""
+
+        # 순위 뱃지
+        rank_badges = ""
+        rank_colors = {"1위": "#d4af37", "2위": "#a8a9ad", "3위": "#cd7f32"}
+        for label, field in [("PER", "per"), ("PBR", "pbr"), ("ROE", "roe"), ("영업이익률", "operating_margin"), ("매출성장률", "revenue_growth")]:
+            rank_val = peer_comparison.get("target_rank", {}).get(field, "")
+            badge_color = next((c for k, c in rank_colors.items() if k in rank_val), "#6c757d")
+            rank_badges += f'<span style="background:{badge_color};color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;margin-right:4px;font-weight:600">{label}: {rank_val}</span>'
+
+        # 대안 종목 박스
+        alt_html = ""
+        if better_alt and better_alt != "null":
+            alt_html = f'<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:10px 14px;margin-top:10px;font-size:13px"><strong>💡 더 매력적인 대안:</strong> {better_alt}</div>'
+
+        peer_html = f"""
+  <div class="stage-card" style="margin-top:16px">
+    <div class="stage-card-title">STAGE 4.5 &mdash; 동종업계 Peer 비교 분석</div>
+    <div style="margin-bottom:10px">
+      <span style="font-size:13px;font-weight:600;margin-right:8px">상대 밸류에이션:</span>
+      <span style="background:{rel_val_color};color:#fff;padding:2px 10px;border-radius:4px;font-size:13px;font-weight:700">{rel_val}</span>
+    </div>
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead>
+          <tr style="background:#f8f9fa;border-bottom:2px solid #dee2e6">
+            <th style="padding:8px 10px;text-align:left">종목</th>
+            <th style="padding:8px 10px;text-align:right">시총(억)</th>
+            <th style="padding:8px 10px;text-align:right">PER</th>
+            <th style="padding:8px 10px;text-align:right">PBR</th>
+            <th style="padding:8px 10px;text-align:right">ROE(%)</th>
+            <th style="padding:8px 10px;text-align:right">영업이익률(%)</th>
+            <th style="padding:8px 10px;text-align:right">매출성장률(%)</th>
+          </tr>
+        </thead>
+        <tbody style="font-size:12px">{peer_table_rows}
+        </tbody>
+      </table>
+    </div>
+    <div style="margin-top:12px;flex-wrap:wrap;display:flex;gap:4px">{rank_badges}</div>
+    {alt_html}
+    <div class="stage-analysis" style="margin-top:12px">{peer_comparison.get("analysis", "")}</div>
+  </div>"""
+
     # ── 최신 뉴스 & 공시 섹션 ──
     news_html = ""
     if recent_news:
@@ -932,12 +1535,32 @@ def render_html(code: str, name: str, market: str, stock: dict,
         </div>"""
 
     # ── 리스크 & 촉매 리스트 ──
-    risk_items = "".join(f'<li class="risk-item">{r}</li>' for r in risks)
+    _sev_color = {"high": "#dc3545", "medium": "#fd7e14", "low": "#6c757d"}
+    risk_items_html = []
+    for r in risks:
+        if isinstance(r, dict):
+            sev = r.get("severity", "medium")
+            badge = f'<span style="background:{_sev_color.get(sev,"#6c757d")};color:#fff;padding:1px 6px;border-radius:3px;font-size:11px;margin-right:6px;font-weight:600">{sev.upper()}</span>'
+            cat = f'<strong>[{r.get("category","")}]</strong> ' if r.get("category") else ""
+            desc = r.get("description", "")
+            evidence = r.get("evidence", "")
+            ev_html = f'<br><small style="color:#888;font-size:12px">근거: {evidence}</small>' if evidence else ""
+            risk_items_html.append(f'<li class="risk-item">{badge}{cat}{desc}{ev_html}</li>')
+        else:
+            risk_items_html.append(f'<li class="risk-item">{r}</li>')
+    risk_items = "".join(risk_items_html)
     catalyst_items = "".join(f'<li class="catalyst-item">{c}</li>' for c in catalysts)
 
     # ── Stage 8: 매매 액션 플랜 ──
     action_html = ""
     if stage8:
+        entry_basis = stage8.get("entry_basis", "")
+        target_basis = stage8.get("target_basis", "")
+        exit_conds = stage8.get("exit_conditions", [])
+        exit_html = ""
+        if exit_conds:
+            items = "".join(f"<li>{c}</li>" for c in exit_conds)
+            exit_html = f'<div class="action-exit"><strong>매도 조건:</strong><ul style="margin:4px 0 0 16px;padding:0">{items}</ul></div>'
         action_html = f"""
   <div class="action-plan-box">
     <div class="stage-card-title">STAGE 8 &mdash; 트레이딩 액션 플랜</div>
@@ -945,10 +1568,12 @@ def render_html(code: str, name: str, market: str, stock: dict,
       <div class="action-item">
         <div class="action-label">매수 진입가</div>
         <div class="action-value entry">{stage8.get("entry_price", "N/A")}</div>
+        {f'<div style="font-size:11px;color:#888;margin-top:3px">{entry_basis}</div>' if entry_basis else ""}
       </div>
       <div class="action-item">
         <div class="action-label">목표 주가</div>
         <div class="action-value target">{stage8.get("target_price", "N/A")}</div>
+        {f'<div style="font-size:11px;color:#888;margin-top:3px">{target_basis}</div>' if target_basis else ""}
       </div>
       <div class="action-item">
         <div class="action-label">손절 기준</div>
@@ -959,6 +1584,7 @@ def render_html(code: str, name: str, market: str, stock: dict,
       <span><strong>포트폴리오 비중:</strong> {stage8.get("portfolio_weight", "N/A")}</span>
       <span><strong>보유 기간:</strong> {stage8.get("holding_period", "N/A")}</span>
     </div>
+    {exit_html}
     <div class="stage-analysis">{stage8.get("analysis", "")}</div>
   </div>"""
 
@@ -985,6 +1611,7 @@ def render_html(code: str, name: str, market: str, stock: dict,
 {stage12_html}
 {moat_html}
 {stage45_html}
+{peer_html}
 {news_html}
 {valuation_html}
 
@@ -1294,7 +1921,11 @@ def format_portfolio_stock(stock: dict, portfolio_item: dict,
         lines.append(f"- 요약: {ai_report.get('summary', 'N/A')}")
         risks = ai_report.get("risks", [])
         if risks:
-            lines.append(f"- 리스크: {', '.join(str(r) for r in risks)}")
+            def _r_str(r):
+                if isinstance(r, dict):
+                    return r.get("description", str(r))
+                return str(r)
+            lines.append(f"- 리스크: {', '.join(_r_str(r) for r in risks)}")
         catalysts = ai_report.get("catalysts", [])
         if catalysts:
             lines.append(f"- 촉매: {', '.join(str(c) for c in catalysts)}")
@@ -1972,9 +2603,13 @@ def generate_diff_summary(old_scores_json: str, new_scores: dict) -> str:
         except (ValueError, TypeError):
             pass
 
-    # 5. 리스크/촉매 변화
-    old_risks = set(old_scores.get("risks", []))
-    new_risks = set(new_scores.get("risks", []))
+    # 5. 리스크/촉매 변화 (risks가 dict 또는 str 모두 지원)
+    def _risk_key(r):
+        if isinstance(r, dict):
+            return r.get("description", str(r))
+        return str(r)
+    old_risks = set(_risk_key(r) for r in old_scores.get("risks", []))
+    new_risks = set(_risk_key(r) for r in new_scores.get("risks", []))
     added_risks = new_risks - old_risks
     removed_risks = old_risks - new_risks
     if added_risks:

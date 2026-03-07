@@ -35,8 +35,8 @@ PDF_REPORT_DIR = BASE_DIR / "report"
 PDF_REPORT_DIR.mkdir(exist_ok=True)
 
 # AI 분석 토큰 설정
-ANALYSIS_MAX_TOKENS = int(os.environ.get("ANALYSIS_MAX_TOKENS", "8192"))
-WEB_SEARCH_MAX_USES = int(os.environ.get("WEB_SEARCH_MAX_USES", "3"))
+ANALYSIS_MAX_TOKENS = int(os.environ.get("ANALYSIS_MAX_TOKENS", "16000"))
+WEB_SEARCH_MAX_USES = int(os.environ.get("WEB_SEARCH_MAX_USES", "5"))
 
 # S-RIM 할인율 설정 (동적 Ke = RISK_FREE_RATE + ERP)
 # 환경변수로 재정의 가능: RISK_FREE_RATE=3.5, EQUITY_RISK_PREMIUM=5.5
@@ -70,5 +70,23 @@ ETF_METADATA = {
             "한화엔진(082740)", "동성화인텍(033500)",
             "세진중공업(075580)", "하이록코리아(013030)",
         ],
+    },
+    "487240": {
+        "name": "KODEX AI전력핵심설비",
+        "sector": "전력/에너지",
+        "description": "AI 전력 인프라 핵심 설비 기업 집중 투자 ETF. 삼성자산운용",
+        "constituents": [],
+    },
+    "455850": {
+        "name": "SOL AI반도체소부장",
+        "sector": "반도체",
+        "description": "AI 반도체 소재·부품·장비 기업 투자 ETF. 신한자산운용",
+        "constituents": [],
+    },
+    "0072R0": {
+        "name": "TIGER KRX금현물",
+        "sector": "원자재/금",
+        "description": "KRX 금현물 지수 추종 ETF. 미래에셋자산운용",
+        "constituents": [],
     },
 }

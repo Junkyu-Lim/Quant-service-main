@@ -16,7 +16,13 @@ from flask_cors import CORS
 
 import config
 import db as _db
-from analysis.claude_analyzer import generate_report, generate_portfolio_report, generate_diff_summary, compute_correlation_matrix
+from analysis.claude_analyzer import (
+    generate_report,
+    generate_portfolio_report,
+    generate_diff_summary,
+    compute_correlation_matrix,
+    build_stock_analysis_input_hash,
+)
 
 log = logging.getLogger(__name__)
 
@@ -62,6 +68,8 @@ DISPLAY_COLS = [
     "스마트머니_승률", "양매수_비율", "VCP_신호",
     "RS_60d", "RS_120d", "RS_250d", "Composite_RS", "RS_등급",
     "영업이익_가속도", "매출_가속도", "실적가속_연속",
+    "영업이익_감속경고", "영업이익_감속폭(pp)", "매출_감속경고", "실적감속_경고",
+    "거래량_가격_괴리",
     "GPM_최근(%)", "GPM_전년(%)", "GPM_변화(pp)",
     "ROIC(%)", "ROIC_전년(%)", "ROIC_개선", "퀄리티_턴어라운드",
     "매출_CAGR", "영업이익_CAGR", "순이익_CAGR", "영업CF_CAGR", "FCF_CAGR",
@@ -75,6 +83,7 @@ DISPLAY_COLS = [
     "Q_매출_연속YoY성장", "Q_영업이익_연속YoY성장", "Q_순이익_연속YoY성장",
     "TTM_매출_YoY(%)", "TTM_영업이익_YoY(%)", "TTM_순이익_YoY(%)",
     "적정주가_SRIM", "괴리율(%)",
+    "과열도", "상승조짐", "타이밍_점수",
     "종합점수", "성장성_점수", "안정성_점수", "가격_점수",
     "주도주_점수", "우량가치_점수", "고성장_점수", "현금배당_점수", "턴어라운드_점수",
     "TTM_매출", "TTM_영업이익", "TTM_순이익", "TTM_영업CF", "TTM_CAPEX", "TTM_FCF",
@@ -130,6 +139,13 @@ def _safe_val(v):
 
 def _row_to_dict(row, cols):
     return {c: _safe_val(row.get(c)) for c in cols if c in row.index}
+
+def _normalize_code(code: str) -> str:
+    """종목코드 정규화: 숫자만 있는 코드는 6자리 zero-pad, 알파벳 포함 코드(0072R0 등)는 그대로 반환."""
+    code = code.strip()
+    if code.isdigit():
+        return code.zfill(6)
+    return code
 
 @app.route("/")
 def dashboard():
@@ -372,7 +388,7 @@ def api_list_reports():
     result = {r["종목코드"]: {"model": r["model_used"], "date": r["generated_date"]} for r in reports}
     return jsonify(result)
 
-def _run_analysis_task(code: str, stock: dict, prev_scores_json):
+def _run_analysis_task(code: str, stock: dict, prev_scores_json, input_hash: str):
     """백그라운드 스레드에서 AI 분석 실행."""
     try:
         result = generate_report(stock)
@@ -390,6 +406,7 @@ def _run_analysis_task(code: str, stock: dict, prev_scores_json):
                 scores_json=json.dumps(result.get("scores", {}), ensure_ascii=False),
                 model=result.get("model", ""),
                 date=result.get("generated_date", ""),
+                input_hash=input_hash,
                 diff_html=diff_html,
             )
         with _analysis_tasks_lock:
@@ -409,9 +426,18 @@ def _run_analysis_task(code: str, stock: dict, prev_scores_json):
 @app.route("/api/stocks/<code>/analysis", methods=["GET", "POST"])
 def api_stock_analysis(code: str):
     code = code.zfill(6)
+    df = _load_data()
+    rows = df[df["종목코드"] == code] if not df.empty else pd.DataFrame()
+    stock = {c: _safe_val(rows.iloc[0].get(c)) for c in df.columns} if not rows.empty else None
+    current_input_hash = None
+    if stock is not None:
+        current_input_hash = build_stock_analysis_input_hash(
+            stock, _db.get_analysis_data_version()
+        )
+
     if request.method == "GET":
         row = _db.load_report(code)
-        if row is None:
+        if row is None or not stock or row.get("input_hash") != current_input_hash:
             return jsonify({"error": "No report"}), 404
         return jsonify({
             "report_html": row.get("report_html", ""),
@@ -427,22 +453,34 @@ def api_stock_analysis(code: str):
         if task and task["status"] == "running":
             return jsonify({"status": "running", "name": task.get("name", "")}), 202
 
-    df = _load_data()
     if df.empty:
         return jsonify({"error": "No data"}), 404
-    rows = df[df["종목코드"] == code]
     if rows.empty:
         return jsonify({"error": "Stock not found"}), 404
-    stock = {c: _safe_val(rows.iloc[0].get(c)) for c in df.columns}
     name = stock.get("종목명", code)
 
     prev_row = _db.load_report(code)
+    if prev_row and prev_row.get("input_hash") == current_input_hash:
+        return jsonify({
+            "status": "done",
+            "report_html": prev_row.get("report_html", ""),
+            "scores": json.loads(prev_row.get("scores_json") or "{}"),
+            "model": prev_row.get("model_used", ""),
+            "generated_date": prev_row.get("generated_date", ""),
+            "diff_html": prev_row.get("diff_html") or None,
+            "mode": "claude",
+            "cached": True,
+        }), 200
     prev_scores_json = prev_row.get("scores_json") if prev_row else None
 
     with _analysis_tasks_lock:
         _analysis_tasks[code] = {"status": "running", "name": name, "result": None}
 
-    t = threading.Thread(target=_run_analysis_task, args=(code, stock, prev_scores_json), daemon=True)
+    t = threading.Thread(
+        target=_run_analysis_task,
+        args=(code, stock, prev_scores_json, current_input_hash),
+        daemon=True,
+    )
     t.start()
     return jsonify({"status": "running", "name": name}), 202
 
@@ -500,9 +538,11 @@ def _build_portfolio_response(entries, df, supp):
         avg_price = e.get("평균매입가", 0) or 0
         buy_amount = qty * avg_price
 
+        # portfolio 테이블에서 저장된 종목명 우선 사용
+        stock_name = e.get("종목명") or code
+
         # dashboard_result 에서 현재가/섹터 등 조회 (보통주)
         cur_price = None
-        stock_name = code
         sector = None
         per = None
         score = None
@@ -512,19 +552,26 @@ def _build_portfolio_response(entries, df, supp):
             if not row.empty:
                 r = row.iloc[0]
                 cur_price = _safe_val(r.get("종가"))
-                stock_name = r.get("종목명", code)
+                if stock_name == code:
+                    stock_name = r.get("종목명", code)
                 sector = r.get("섹터")
                 per = _safe_val(r.get("PER"))
                 score = _safe_val(r.get("종합점수"))
                 stock_type = r.get("종목구분")
 
         # dashboard_result에 없는 경우 price_supplement(ETF/우선주/리츠) 조회
-        if cur_price is None and code in supp:
+        if code in supp:
             s = supp[code]
-            cur_price = s.get("현재가")
+            if cur_price is None:
+                cur_price = s.get("현재가")
             if stock_name == code:
                 stock_name = s.get("종목명") or code
-            stock_type = s.get("종목구분")
+            if not stock_type:
+                stock_type = s.get("종목구분")
+
+        # ETF 메타데이터에서 이름 보충
+        if stock_name == code and code in config.ETF_METADATA:
+            stock_name = config.ETF_METADATA[code].get("name") or code
 
         # ETF 메타데이터에서 섹터 보충
         if sector is None and code in config.ETF_METADATA:
@@ -632,7 +679,7 @@ def api_portfolio_add():
     code = (body.get("종목코드") or body.get("code", "")).strip()
     if not code:
         return jsonify({"error": "종목코드가 필요합니다."}), 400
-    code = code.zfill(6)
+    code = _normalize_code(code)
     try:
         qty = float(body.get("수량", body.get("qty", 0)))
         price = float(body.get("평균매입가", body.get("price", 0)))
@@ -657,7 +704,11 @@ def api_portfolio_add():
         rows = df[df["종목코드"] == code]
         if not rows.empty:
             name = rows.iloc[0].get("종목명", "")
-    _db.upsert_portfolio_item(code, qty, price, buy_date, memo, name=name)
+    if not name and code in supp:
+        name = supp[code].get("종목명", "")
+    if not name and code in config.ETF_METADATA:
+        name = config.ETF_METADATA[code].get("name", "")
+    _db.upsert_portfolio_item(code, qty, price, buy_date, memo, name=name, adjust_cash=True)
     return jsonify({"status": "ok", "종목코드": code})
 
 
@@ -725,6 +776,15 @@ def api_portfolio_update(code: str):
     if qty <= 0 or price <= 0:
         return jsonify({"error": "수량과 매입가는 0보다 커야 합니다."}), 400
     name = body.get("종목명", body.get("name", ""))
+    if not name:
+        # 기존 저장된 이름 유지
+        existing = _db.load_portfolio()
+        name = next((e.get("종목명", "") or "" for e in existing if e["종목코드"] == code), "")
+    if not name:
+        supp = _db.load_price_supplement()
+        name = supp.get(code, {}).get("종목명", "")
+    if not name and code in config.ETF_METADATA:
+        name = config.ETF_METADATA[code].get("name", "")
     _db.upsert_portfolio_item(code, qty, price, buy_date, memo, name=name)
     return jsonify({"status": "ok"})
 
@@ -735,8 +795,9 @@ def api_portfolio_delete(code: str):
     # 종목명 조회 (거래 기록용)
     entries = _db.load_portfolio()
     name = next((e.get("종목명", "") or "" for e in entries if e["종목코드"] == code.zfill(6)), "")
-    _db.delete_portfolio_item(code, name=name)
-    return jsonify({"status": "ok"})
+    _db.delete_portfolio_item(code, name=name, adjust_cash=True)
+    cash_balance = _db.load_cash()
+    return jsonify({"status": "ok", "cash": cash_balance})
 
 
 # ── Portfolio Management: Performance / Health / Transactions / Rebalance ─
@@ -1158,7 +1219,7 @@ def api_portfolio_analysis_post():
 @app.route("/api/stock-info/<code>", methods=["GET"])
 def api_stock_info(code: str):
     """종목코드로 종목명/종목구분/시장구분 조회 (포트폴리오 추가 모달에서 사용)"""
-    code = code.zfill(6)
+    code = _normalize_code(code)
     # 1) dashboard_result에서 먼저 조회 (가장 최신 정보)
     df = _load_data()
     if not df.empty:
@@ -1183,7 +1244,17 @@ def api_stock_info(code: str):
             "시장구분": s.get("시장구분", ""),
             "섹터": None,
         })
-    # 3) master 테이블에서 조회
+    # 3) ETF_METADATA에서 조회 (하드코딩된 ETF)
+    if code in config.ETF_METADATA:
+        meta = config.ETF_METADATA[code]
+        return jsonify({
+            "종목코드": code,
+            "종목명": meta.get("name", code),
+            "종목구분": "ETF",
+            "시장구분": "",
+            "섹터": meta.get("sector"),
+        })
+    # 4) master 테이블에서 조회
     info = _db.get_stock_info_from_master(code)
     if info:
         return jsonify({
@@ -1193,7 +1264,7 @@ def api_stock_info(code: str):
             "시장구분": info["시장구분"],
             "섹터": None,
         })
-    # 4) FDR DataReader로 가격 조회 가능 여부 확인 (ETF/우선주 등 master에 없는 종목 fallback)
+    # 5) FDR DataReader로 가격 조회 가능 여부 확인 (ETF/우선주 등 master에 없는 종목 fallback)
     try:
         import FinanceDataReader as fdr
         from datetime import datetime, timedelta
