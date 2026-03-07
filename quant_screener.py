@@ -388,15 +388,41 @@ def analyze_one_stock(ticker, ind_grp, fs_grp):
         res["매출_가속도"] = rev_accel
 
         # ── 실적 감속 경고 (Earnings Deceleration Warning) ──
-        # YoY가 3분기 연속 양수이지만 단조감소 → 피크 실적 신호
+        # 3타입 감속: (1) 피크 실적, (2) 손실 악화, (3) 양수→음수 전환
         def _calc_deceleration(qyoy_result):
+            """
+            YoY 감속 경고: 피크 실적(양수 감속) + 손실 악화(음수 악화) + 양수→음수 전환 모두 감지
+
+            Returns:
+                (감속여부, 감속폭): 감속여부 1/0, 감속폭 (pp)
+            """
             yoy_s = qyoy_result.get("yoy_series", {})
             if len(yoy_s) < 3:
                 return 0, np.nan
+
             dates = sorted(yoy_s.keys())
             recent_3 = [yoy_s[d] for d in dates[-3:]]
-            if all(v > 0 for v in recent_3) and recent_3[0] > recent_3[1] > recent_3[2]:
+
+            # 타입 1: 피크 실적 (양수 3분기 단조감소)
+            # 예: +30% → +20% → +10% (성장 둔화 신호)
+            if (all(v > 0 for v in recent_3) and
+                recent_3[0] > recent_3[1] > recent_3[2]):
                 return 1, recent_3[0] - recent_3[2]
+
+            # 타입 2: 손실 악화 (음수 상태 계속 악화)
+            # 예: -3% → -4% → -6% (손실 심화 신호)
+            # 조건: 최근 2분기 모두 음수 + 더 악화 중
+            if (len(recent_3) >= 2 and
+                recent_3[-2] < 0 and recent_3[-1] < 0 and
+                recent_3[-1] < recent_3[-2]):
+                return 1, recent_3[-2] - recent_3[-1]
+
+            # 타입 3: 양수→음수 전환 (성장에서 손실로 전환)
+            # 예: +5% → -2% (적자 전환 신호)
+            if (len(recent_3) >= 2 and
+                recent_3[-2] > 0 and recent_3[-1] < 0):
+                return 1, recent_3[-2] - recent_3[-1]
+
             return 0, np.nan
 
         op_decel, op_decel_mag = _calc_deceleration(op_qyoy)
@@ -1173,9 +1199,11 @@ def calc_breakout_signal(df):
     s_fund = np.clip(fund, 0, 100)
 
     # ── 축 2: 비과열 확인 (20%) ──
-    # 과열도 0 → 100점, 과열도 50 → 37.5점, 과열도 80 → 0점
+    # 과열도 기준값 정의: 70 이상 = 과열 상태 (RSI≥70 + MA20 +20% 복합 신호)
+    # 스케일: 과열도 0 → 100점, 과열도 50 → 43점, 과열도 70 → 0점
+    OVERHEAT_THRESHOLD = 70  # 과열 판정 기준
     overheat = df.get("과열도", pd.Series(50, index=df.index)).fillna(50)
-    s_cool = np.clip((80 - overheat) / 80 * 100, 0, 100)
+    s_cool = np.clip((OVERHEAT_THRESHOLD - overheat) / OVERHEAT_THRESHOLD * 100, 0, 100)
 
     # ── 축 3: 수급 유입 조짐 (30%) ──
     supply = pd.Series(0.0, index=df.index)
@@ -1272,22 +1300,29 @@ def calc_strategy_scores(df):
         if _gcol in df.columns:
             df[_gcol] = df[_gcol].clip(upper=_YOY_CAP)
 
-    # NaN=0점: PER/PBR/PEG (낮을수록 좋은 지표, NaN=적자/음자본 → 최하위)
-    # NaN=0점: ROE, FCF수익률 (데이터 없으면 점수 불허)
-    S_PER_inv = get_rank("PER", False, zero_if_nan=True)
-    S_PBR_inv = get_rank("PBR", False, zero_if_nan=True)
-    S_PEG_inv = get_rank("PEG", False, zero_if_nan=True)
-    S_ROE = get_rank("ROE(%)", asc=True, zero_if_nan=True)
-    S_FCF = get_rank("FCF수익률(%)", asc=True, zero_if_nan=True)
-    S_OpCAGR, S_QOpYoY = get_rank("영업이익_CAGR"), get_rank("Q_영업이익_YoY(%)")
-    S_Div, S_Supply, S_Vol = get_rank("배당수익률(%)"), get_rank("수급강도"), get_rank("거래대금_20일평균")
+    # ── NaN 처리 기준 (엄격 vs 온화) ──
+    # 엄격(zero_if_nan=True): 신뢰도 높은 지표, 부재=극단값
+    #   - 밸류에이션: PER/PBR/PEG (NaN=적자/음자본)
+    #   - 수익성: ROE, ROIC, FCF수익률 (NaN=능력 미증명)
+    #   - 성장성 퀄리티: RS_등급, 실적가속_연속, 스마트머니_승률 (NaN=신호 부재)
+    #   - F스코어, GPM_변화 (NaN=구조적 문제)
+    # 온화(zero_if_nan=False): 부재=평균값
+    #   - 성장률: 영업이익_CAGR, Q_영업이익_YoY (분기/기간 제한)
+    #   - 배당/수급: 배당수익률, 수급강도 (섹터별 편차 큼)
+    S_PER_inv = get_rank("PER", False, zero_if_nan=True)  # 엄격
+    S_PBR_inv = get_rank("PBR", False, zero_if_nan=True)  # 엄격
+    S_PEG_inv = get_rank("PEG", False, zero_if_nan=True)  # 엄격
+    S_ROE = get_rank("ROE(%)", asc=True, zero_if_nan=True)  # 엄격
+    S_FCF = get_rank("FCF수익률(%)", asc=True, zero_if_nan=True)  # 엄격
+    S_OpCAGR, S_QOpYoY = get_rank("영업이익_CAGR"), get_rank("Q_영업이익_YoY(%)")  # 온화
+    S_Div, S_Supply, S_Vol = get_rank("배당수익률(%)"), get_rank("수급강도"), get_rank("거래대금_20일평균")  # 온화
 
-    # 핵심 모멘텀/퀄리티 지표 — NaN은 0점 처리 (증명 안 된 종목에 점수 불허)
-    S_ROIC = get_rank("ROIC(%)", asc=True, zero_if_nan=True)
-    S_RS = get_rank("RS_등급", asc=True, zero_if_nan=True)
-    S_Accel = get_rank("실적가속_연속", asc=True, zero_if_nan=True)
-    S_SmartMoney = get_rank("스마트머니_승률", asc=True, zero_if_nan=True)
-    S_GPM_delta = get_rank("GPM_변화(pp)", asc=True, zero_if_nan=True)
+    # 퀄리티 지표 — 엄격 처리 (증명된 성장/개선만 인정)
+    S_ROIC = get_rank("ROIC(%)", asc=True, zero_if_nan=True)  # 엄격: 자본 효율
+    S_RS = get_rank("RS_등급", asc=True, zero_if_nan=True)  # 엄격: 상대강도
+    S_Accel = get_rank("실적가속_연속", asc=True, zero_if_nan=True)  # 엄격: 가속 신호
+    S_SmartMoney = get_rank("스마트머니_승률", asc=True, zero_if_nan=True)  # 엄격: 수급 신호
+    S_GPM_delta = get_rank("GPM_변화(pp)", asc=True, zero_if_nan=True)  # 엄격: 이익률 개선
     # 주도주: RS_등급(25%) + 수급강도(20%) + 거래대금(10%) + 영업이익CAGR(15%) + Q_YoY(15%) + 실적가속(10%) + RSI(5%)
     df["주도주_점수"] = (S_RS*0.25 + S_Supply*0.20 + S_Vol*0.10 + S_OpCAGR*0.15 + S_QOpYoY*0.15 + S_Accel*0.10 + get_rank("RSI_14")*0.05)
     # FCF수익률(25%=Value) + ROIC(25%=Quality) + F스코어(20%=Health) + 괴리율(20%=MoS) + PEG역순(10%=Growth-Value)
@@ -1332,18 +1367,23 @@ def calc_strategy_scores(df):
     )  # 합계: 10+15+15+10+15+10+15+10 = 100%
 
     # ── 과열도 소프트 페널티 (전략별 차등 적용) ──
+    # ── 과열도 소프트 페널티 (전략별 차등 민감도) ──
     # 과열도 40 이하: 페널티 없음 | 40~100: 선형 적용
+    # 로직: 과열도가 높을수록 전략별 점수를 감축 (하드필터 아님, 점수 감산)
     if "과열도" in df.columns and df["과열도"].notna().any():
         _oh = df["과열도"].fillna(0)
-        _effective = np.clip((_oh - 40) / 60, 0, 1)
-        _sensitivity = {
-            "주도주_점수": 0.15,      # 모멘텀 전략 → 낮은 민감도
-            "고성장_점수": 0.20,
-            "턴어라운드_점수": 0.25,
-            "현금배당_점수": 0.30,
-            "우량가치_점수": 0.35,    # 가치 전략 → 높은 민감도
+        _effective = np.clip((_oh - 40) / 60, 0, 1)  # 0~1 정규화
+        # 민감도: 모멘텀(낮음) → 가치(높음) 순
+        # 이유: 모멘텀은 과열 환경에서도 강한 상승력 지속 가능
+        #      가치는 금리상승(과열↔금리)에 취약
+        OVERHEAT_SENSITIVITY = {
+            "주도주_점수": 0.15,      # 모멘텀: 거래량/수급 기반 → 과열도 영향 낮음
+            "고성장_점수": 0.20,      # 성장: 펀더멘털 기반 → 중간 영향
+            "턴어라운드_점수": 0.25,  # 회복: 저점 회복 기대 vs 과열 회피 충돌
+            "현금배당_점수": 0.30,    # 배당: 금리상승(과열↔금리) 영향 중간
+            "우량가치_점수": 0.35,    # 가치: 할인율 상승(금리↑)에 가장 취약
         }
-        for _col, _s in _sensitivity.items():
+        for _col, _s in OVERHEAT_SENSITIVITY.items():
             if _col in df.columns:
                 df[_col] = df[_col] * (1 - _effective * _s)
 
@@ -1354,11 +1394,20 @@ def calc_strategy_scores(df):
     안정성_점수 = S_ROE * 0.40 + get_rank("F스코어") * 0.35 + S_FCF * 0.25
     # 주가 (30%): PER역순 40% + S-RIM괴리율 35% + PBR역순 25%
     가격_점수   = S_PER_inv * 0.40 + get_rank("괴리율(%)") * 0.35 + S_PBR_inv * 0.25
-    # 타이밍 (10%): 과열 회피(40%) + 상승조짐(45%) + 실적감속 패널티
+    # 타이밍 (10%): 과열 회피(40%) + 상승조짐(45%) + 실적감속 페널티
+    # 기본 신호: 과열도 회피 + 상승조짐 포착 (최대: 40+45=85)
     _anti_oh  = 100 - df.get("과열도", pd.Series(50, index=df.index)).fillna(50)
     _breakout = df.get("상승조짐", pd.Series(0, index=df.index)).fillna(0)
-    _decel    = np.where(df.get("실적감속_경고", pd.Series(0, index=df.index)).fillna(0) == 1, -15, 0)
-    타이밍_점수 = np.clip(_anti_oh * 0.40 + _breakout * 0.45 + _decel, 0, 100)
+    _base = _anti_oh * 0.40 + _breakout * 0.45  # 0~85 범위
+
+    # 실적감속 페널티: -15점 (0-100 정규화 전 적용)
+    _decel = np.where(
+        df.get("실적감속_경고", pd.Series(0, index=df.index)).fillna(0) == 1,
+        -15, 0
+    )
+
+    # 최종 타이밍_점수: 0~85 범위를 0~100으로 정규화
+    타이밍_점수 = np.clip((_base + _decel) / 0.85, 0, 100)
 
     df["성장성_점수"] = 성장성_점수
     df["안정성_점수"] = 안정성_점수
@@ -1386,12 +1435,17 @@ def apply_leaders_screen(df):
     return df[mask].sort_values("주도주_점수", ascending=False)
 
 def apply_quality_value_screen(df):
-    # 금융주/지주사 판별: 종목명 키워드 OR 유동비율 데이터 없음(금융업 구조적 특성)
-    is_finance = (
-        df["종목명"].str.contains("지주|금융|은행|증권|생명|화재", na=False)
-        | df["유동비율(%)"].isna()
-        | (df["유동비율(%)"].fillna(0) == 0)
-    )
+    # 금융주/지주사 판별: 종목명 키워드 기반 (데이터 부재는 별도 추적)
+    is_finance = df["종목명"].str.contains("지주|금융|은행|증권|생명|화재|보험", na=False)
+
+    # 추적: 유동비율 부재인 일반 기업은 수동 검토 필요 (금융주 오분류 가능성)
+    has_liquidity_data = df["유동비율(%)"].notna()
+    is_finance_suspect = is_finance & ~has_liquidity_data
+    if is_finance_suspect.any():
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"금융주 의심 (유동비율 부재, 수동 확인 필요): "
+                      f"{df[is_finance_suspect]['종목명'].tolist()}")
     # Track A: 일반 기업 (제조/서비스) — 육각형 우량 룰
     mask_general = (
         (~is_finance)
@@ -1444,6 +1498,25 @@ def apply_cash_div_screen(df):
     return df[mask].sort_values("현금배당_점수", ascending=False)
 
 def apply_turnaround_screen(df):
+    """손실→흑자 또는 이익률 급개선 종목 선별 (턴어라운드 전략)
+
+    선별 조건:
+    1. 흑자전환(손실→흑자) OR 이익률 급개선 신호
+    2. TTM 기준 현금 창출 확인 (회계 조작 방지)
+    3. 매출 급감(-15%↓) 제외 (구조조정형은 허용)
+    4. 이자 상환 능력 검증 (파산 리스크 통제)
+    5. 스마트머니 승률 50%+ 또는 VCP 신호 (수급 진입)
+    6. 최소 시가총액 300억 이상
+
+    ⚠️ 주의: 실적감속_경고와 동시 발생 가능
+    - 실적감속_경고 = 1: "현재 이익 피크, 향후 성장 둔화 예상"
+    - 흑자전환 = 1: "손실 상태 탈출"
+    → 회복 초기 단계의 정상 패턴 (모순 아님)
+
+    사용 사례:
+    1. 신규 진입자: 턴어라운드_점수 높음 + 타이밍_점수 추가 확인
+    2. 기존 보유자: 타이밍_점수 저하 시 리밸런싱 검토 필요
+    """
     base_mask = (
         ((df.get("흑자전환")==1) | (df.get("이익률_급개선")==1))
         & (df["TTM_순이익"] > 0)
