@@ -828,20 +828,193 @@ def calc_valuation(daily, anal_df, multiplier, shares_df):
         1,
         0,
     ).astype(int)
-    # S-RIM 동적 할인율: config 설정값 사용 (환경변수로 재정의 가능)
+    # ── S-RIM: 동적 omega + ROE<Ke 할인 ──────────────────────────────────
     # Ke = 무위험수익률(국고채 3Y) + 시장위험프리미엄
     Ke = config.RISK_FREE_RATE + config.EQUITY_RISK_PREMIUM  # default: 3.5 + 5.5 = 9.0%
-    # 지속계수 ω=0.9: 초과이익의 점진적 소멸 반영 (영구 지속 가정 방지)
-    # 공식: BPS + BPS * (ROE - Ke) * ω / (1 + Ke/100 - ω)
-    omega = 0.9
     Ke_dec = Ke / 100.0
-    srim_denom = max(1 + Ke_dec - omega, 1e-6)  # 0 나누기 방지
+
+    # 동적 지속계수 ω: 재무품질 기반 0.50~0.95
+    # (고정 0.9 → 삼성전자 = 한계기업 문제 해결)
+    _q = pd.Series(0.0, index=df.index)
+    _q += (df["F스코어"].fillna(0).clip(0, 9) / 9) * 0.30          # F스코어 재무건전성
+    _q += (df["ROIC(%)"].fillna(0).clip(0, 20) / 20) * 0.25        # 자본효율성
+    _consec_op = df["영업이익_연속성장"].fillna(0) if "영업이익_연속성장" in df.columns else pd.Series(0, index=df.index)
+    _q += np.where(_consec_op >= 3, 1.0, np.where(_consec_op >= 1, 0.5, 0.0)) * 0.20  # 이익 지속성
+    _icr = df["이자보상배율"].fillna(0).clip(0, 10) if "이자보상배율" in df.columns else pd.Series(0, index=df.index)
+    _q += (_icr / 10) * 0.15                                        # 부채 안전성
+    _dr = df["부채비율(%)"].fillna(100) if "부채비율(%)" in df.columns else pd.Series(100, index=df.index)
+    _q += np.where(_dr < 100, 1.0, np.where(_dr < 200, 0.5, 0.0)) * 0.10  # 레버리지
+    omega_series = (0.5 + _q * 0.45).clip(0.50, 0.95)
+    df["SRIM_오메가"] = omega_series.round(3)
+
+    # S-RIM 공식: BPS + BPS × (ROE - Ke) × ω / (1 + Ke - ω)
+    # ROE > Ke: 초과이익 프리미엄 (동적 omega 적용)
+    # 0 < ROE ≤ Ke: 가치 훼손 비례 할인 (BPS × ROE/Ke)
+    # ROE ≤ 0: 심각한 가치 훼손 (BPS × 0.3, 청산가치 근사)
+    _roe = df["ROE(%)"]
+    _bps = df["BPS"]
+    _srim_premium = _bps + _bps * (_roe / 100.0 - Ke_dec) * omega_series / (
+        (1 + Ke_dec - omega_series).clip(lower=1e-6)
+    )
     df["적정주가_SRIM"] = np.where(
-        (df["ROE(%)"] > Ke) & (df["BPS"] > 0),
-        df["BPS"] + df["BPS"] * (df["ROE(%)"] / 100.0 - Ke_dec) * omega / srim_denom,
-        df["BPS"],  # ROE ≤ Ke: 초과이익 없음 → BPS 그대로 (할인 없음, 과대평가 방지)
+        (_roe > Ke) & (_bps > 0),
+        _srim_premium,
+        np.where(
+            (_roe > 0) & (_roe <= Ke) & (_bps > 0),
+            _bps * (_roe / Ke),          # 가치 훼손: ROE/Ke 비율만큼 할인
+            np.where(_bps > 0, _bps * 0.3, np.nan),  # ROE≤0: 심각한 훼손
+        ),
     )
     df["괴리율(%)"] = ((df["적정주가_SRIM"] - df["종가"]) / df["종가"]) * 100
+
+    # ── EPV (Earnings Power Value): 정상이익 자본화 ────────────────────
+    # Greenwald 방식: 성장 없이 현 FCF가 영속한다는 보수적 가정
+    _fcf = df["TTM_FCF"] if "TTM_FCF" in df.columns else pd.Series(np.nan, index=df.index)
+    _ocf = df["TTM_영업CF"] if "TTM_영업CF" in df.columns else pd.Series(np.nan, index=df.index)
+    # 정규화: TTM_FCF와 TTM_영업CF×0.9 중 보수적(작은) 값
+    _norm_fcf = np.where(
+        _ocf > 0,
+        np.minimum(_fcf, _ocf * 0.9),
+        _fcf,
+    )
+    _epv_total = np.where(_norm_fcf > 0, _norm_fcf * M / Ke_dec, np.nan)
+    _epv_ps = np.where(shares > 0, _epv_total / shares, np.nan)
+    # 상한: BPS × 5 (성장 프리미엄 없는 모델에서 과도한 값 방지)
+    _epv_cap = np.where(_bps > 0, _bps * 5, np.nan)
+    df["적정주가_EPV"] = np.where(
+        pd.notna(_epv_ps) & (_bps > 0),
+        np.minimum(_epv_ps, _epv_cap),
+        np.nan,
+    )
+
+    # ── DDM (Dividend Discount Model): 2단계 배당할인 ─────────────────
+    # 대상: DPS_최근 > 0인 배당 종목만
+    _dps = df["DPS_최근"].fillna(0) if "DPS_최근" in df.columns else pd.Series(0, index=df.index)
+    _dps_cagr = df["DPS_CAGR"].fillna(0) if "DPS_CAGR" in df.columns else pd.Series(0, index=df.index)
+    _payout = df["배당성향(%)"].fillna(np.nan) if "배당성향(%)" in df.columns else pd.Series(np.nan, index=df.index)
+    _eps = df["EPS"] if "EPS" in df.columns else pd.Series(np.nan, index=df.index)
+    _warn = df["배당_경고신호"].fillna(0) if "배당_경고신호" in df.columns else pd.Series(0, index=df.index)
+
+    _ddm_vals = []
+    for _i in df.index:
+        _d = _dps.at[_i]
+        if _d <= 0 or pd.isna(_d):
+            _ddm_vals.append(np.nan)
+            continue
+        # 지속가능 DPS: 배당성향 합리적 범위 체크
+        _py = _payout.at[_i]
+        _ep = _eps.at[_i] if pd.notna(_eps.at[_i]) else np.nan
+        if pd.notna(_py) and 0 < _py < 100 and pd.notna(_ep) and _ep > 0:
+            _sustainable = _ep * (_py / 100)
+            _d_used = min(_d, _sustainable * 1.1)
+        else:
+            _d_used = _d
+        # 성장률: DPS_CAGR 기반, Ke-1% 상한으로 수렴 보장
+        _g_raw = max(_dps_cagr.at[_i], 0)
+        _g = min(_g_raw, Ke - 1.0)  # 수렴 조건
+        _g_dec = _g / 100.0
+        if _g_dec > 0:
+            # Stage 1: 5년 명시적 성장
+            _s1 = sum(_d_used * (1 + _g_dec)**t / (1 + Ke_dec)**t for t in range(1, 6))
+            # Stage 2: 영구가치 (g/2로 페이드)
+            _g_term = _g_dec / 2
+            _term_dps = _d_used * (1 + _g_dec)**5 * (1 + _g_term)
+            _denom_term = max(Ke_dec - _g_term, 1e-6)
+            _tv = _term_dps / _denom_term / (1 + Ke_dec)**5
+            _ddm_raw = _s1 + _tv
+        else:
+            _ddm_raw = _d_used / max(Ke_dec, 1e-6)  # 무성장 영구연금
+        # 배당 경고신호 시 30% 할인
+        if _warn.at[_i] == 1:
+            _ddm_raw *= 0.7
+        _ddm_vals.append(_ddm_raw)
+    df["적정주가_DDM"] = _ddm_vals
+
+    # ── Forward 컨센서스 적정주가 ────────────────────────────────────────
+    # 대상: 컨센서스_커버리지 == 1인 종목 (주로 대형주)
+    _cov = df["컨센서스_커버리지"].fillna(0) if "컨센서스_커버리지" in df.columns else pd.Series(0, index=df.index)
+    _fwd_eps = df["Fwd_EPS"].fillna(np.nan) if "Fwd_EPS" in df.columns else pd.Series(np.nan, index=df.index)
+    _fwd_roe = df["Fwd_ROE(%)"].fillna(np.nan) if "Fwd_ROE(%)" in df.columns else pd.Series(np.nan, index=df.index)
+    # 시장 PER 중위값 (0.5~50 범위로 이상치 제거)
+    _valid_per = df["PER"].dropna()
+    _mkt_per = _valid_per[(_valid_per >= 0.5) & (_valid_per <= 50)].median()
+    if pd.isna(_mkt_per):
+        _mkt_per = 12.0  # fallback
+    _fwd_vals = []
+    for _i in df.index:
+        if _cov.at[_i] != 1:
+            _fwd_vals.append(np.nan)
+            continue
+        _candidates = []
+        # 방법1: Fwd_EPS × 시장 PER 중위
+        _fe = _fwd_eps.at[_i]
+        if pd.notna(_fe) and _fe > 0:
+            _candidates.append(_fe * _mkt_per)
+        # 방법2: Fwd_ROE 기반 S-RIM
+        _fr = _fwd_roe.at[_i]
+        _b = _bps.at[_i]
+        _om = omega_series.at[_i]
+        if pd.notna(_fr) and pd.notna(_b) and _b > 0:
+            _denom_f = max(1 + Ke_dec - _om, 1e-6)
+            if _fr > Ke:
+                _fv = _b + _b * (_fr / 100.0 - Ke_dec) * _om / _denom_f
+            elif _fr > 0:
+                _fv = _b * (_fr / Ke)
+            else:
+                _fv = _b * 0.3
+            _candidates.append(max(_fv, 0))
+        _fwd_vals.append(float(np.mean(_candidates)) if _candidates else np.nan)
+    df["적정주가_FWD"] = _fwd_vals
+
+    # ── 복합 적정주가: 신뢰도 가중평균 ──────────────────────────────────
+    _qual_양호 = df["이익품질_양호"].fillna(0) if "이익품질_양호" in df.columns else pd.Series(0, index=df.index)
+    _consec_div = df["배당_연속증가"].fillna(0) if "배당_연속증가" in df.columns else pd.Series(0, index=df.index)
+    _srim_v = df["적정주가_SRIM"]
+    _epv_v = df["적정주가_EPV"]
+    _ddm_v = pd.Series(df["적정주가_DDM"], index=df.index)
+    _fwd_v = pd.Series(df["적정주가_FWD"], index=df.index)
+
+    _composite_vals = []
+    _model_counts = []
+    for _i in df.index:
+        _models = {}
+        # S-RIM: 항상 기본 신뢰도 1.0
+        _s = _srim_v.at[_i]
+        if pd.notna(_s) and _s > 0:
+            _models["SRIM"] = (_s, 1.0)
+        # EPV: FCF 기반, 이익품질 확인 시 신뢰도↑
+        _e = _epv_v.at[_i]
+        if pd.notna(_e) and _e > 0:
+            _conf_epv = 1.0 if _qual_양호.at[_i] == 1 else 0.5
+            _models["EPV"] = (_e, _conf_epv)
+        # DDM: 배당 연속성 기반 신뢰도
+        _d = _ddm_v.at[_i]
+        if pd.notna(_d) and _d > 0:
+            _cd = _consec_div.at[_i]
+            _wn = _warn.at[_i] if hasattr(_warn, 'at') else 0
+            _conf_ddm = 0.8 if (_cd >= 3 and _wn == 0) else 0.5
+            _models["DDM"] = (_d, _conf_ddm)
+        # FWD: 컨센서스 커버리지 있으면 고신뢰
+        _f = _fwd_v.at[_i]
+        if pd.notna(_f) and _f > 0:
+            _models["FWD"] = (_f, 0.9)
+        # 이상치 제거: 중위값의 3배 초과 or 1/3 미만인 모델 제외
+        if len(_models) >= 2:
+            _vals_list = [v for v, _ in _models.values()]
+            _med = float(np.median(_vals_list))
+            _models = {k: (v, c) for k, (v, c) in _models.items()
+                       if _med / 3 <= v <= _med * 3}
+        if not _models:
+            _composite_vals.append(np.nan)
+            _model_counts.append(0)
+            continue
+        _weighted = sum(v * c for v, c in _models.values())
+        _total_c = sum(c for _, c in _models.values())
+        _composite_vals.append(_weighted / _total_c if _total_c > 0 else np.nan)
+        _model_counts.append(len(_models))
+    df["적정주가_종합"] = _composite_vals
+    df["밸류_모델수"] = _model_counts
+    df["종합괴리율(%)"] = ((pd.Series(_composite_vals, index=df.index) - df["종가"]) / df["종가"]) * 100
 
     # PER 이상치 플래그
     df["PER_이상"] = np.where(
@@ -1325,8 +1498,8 @@ def calc_strategy_scores(df):
     S_GPM_delta = get_rank("GPM_변화(pp)", asc=True, zero_if_nan=True)  # 엄격: 이익률 개선
     # 주도주: RS_등급(25%) + 수급강도(20%) + 거래대금(10%) + 영업이익CAGR(15%) + Q_YoY(15%) + 실적가속(10%) + RSI(5%)
     df["주도주_점수"] = (S_RS*0.25 + S_Supply*0.20 + S_Vol*0.10 + S_OpCAGR*0.15 + S_QOpYoY*0.15 + S_Accel*0.10 + get_rank("RSI_14")*0.05)
-    # FCF수익률(25%=Value) + ROIC(25%=Quality) + F스코어(20%=Health) + 괴리율(20%=MoS) + PEG역순(10%=Growth-Value)
-    df["우량가치_점수"] = (S_FCF*0.25 + S_ROIC*0.25 + get_rank("F스코어")*0.20 + get_rank("괴리율(%)")*0.20 + S_PEG_inv*0.10)
+    # FCF수익률(25%=Value) + ROIC(25%=Quality) + F스코어(20%=Health) + 종합괴리율(20%=MoS) + PEG역순(10%=Growth-Value)
+    df["우량가치_점수"] = (S_FCF*0.25 + S_ROIC*0.25 + get_rank("F스코어")*0.20 + get_rank("종합괴리율(%)")*0.20 + S_PEG_inv*0.10)
     # Q_영업이익_YoY(20%) + 실적가속_연속(20%) + 영업이익_CAGR(15%) + RS_등급(25%) + PEG역순(20%)
     df["고성장_점수"] = (S_QOpYoY*0.20 + S_Accel*0.20 + S_OpCAGR*0.15 + S_RS*0.25 + S_PEG_inv*0.20)
     # 현금배당: FCF(25%) + 배당수익률(20%) + DPS성장(15%) + ROIC해자(15%) + 배당성향역순(10%) + F스코어(10%) + 부채비율(5%)
@@ -1363,7 +1536,7 @@ def calc_strategy_scores(df):
         + S_Sales_YoY            * 0.15    # [신규] 탑라인(매출) 회복 검증
         + S_Interest_Cov         * 0.10    # [신규] 파산 리스크 통제
         + S_Qual_Turn            * 0.15    # [신규] GPM+OCF+ROIC 복합 품질 신호
-        + get_rank("괴리율(%)")  * 0.10    # S-RIM 안전마진
+        + get_rank("종합괴리율(%)")  * 0.10    # 복합 적정주가 안전마진
     )  # 합계: 10+15+15+10+15+10+15+10 = 100%
 
     # ── 과열도 소프트 페널티 (전략별 차등 적용) ──
@@ -1392,8 +1565,11 @@ def calc_strategy_scores(df):
     성장성_점수 = S_OpCAGR * 0.35 + get_rank("매출_CAGR") * 0.30 + S_QOpYoY * 0.25 + S_Accel * 0.10
     # 안정성 (30%): ROE 40% + F스코어(재무건전성) 35% + FCF수익률 25%
     안정성_점수 = S_ROE * 0.40 + get_rank("F스코어") * 0.35 + S_FCF * 0.25
-    # 주가 (30%): PER역순 40% + S-RIM괴리율 35% + PBR역순 25%
-    가격_점수   = S_PER_inv * 0.40 + get_rank("괴리율(%)") * 0.35 + S_PBR_inv * 0.25
+    # 주가 (30%): PER역순 35% + 복합괴리율 35% + PBR역순 15% + 밸류모델수 15%
+    # (복합괴리율=4개 모델 가중평균, 밸류모델수=복수 모델 동의 시 신뢰도 보너스)
+    S_composite_div = get_rank("종합괴리율(%)")
+    S_model_count = get_rank("밸류_모델수", asc=True, zero_if_nan=False)
+    가격_점수   = S_PER_inv * 0.35 + S_composite_div * 0.35 + S_PBR_inv * 0.15 + S_model_count * 0.15
     # 타이밍 (10%): 과열 회피(40%) + 상승조짐(45%) + 실적감속 페널티
     # 기본 신호: 과열도 회피 + 상승조짐 포착 (최대: 40+45=85)
     _anti_oh  = 100 - df.get("과열도", pd.Series(50, index=df.index)).fillna(50)

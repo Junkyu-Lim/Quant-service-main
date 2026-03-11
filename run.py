@@ -8,8 +8,10 @@ Usage:
     python run.py pipeline --test                   – Test mode (3 sample stocks)
     python run.py pipeline --skip-collect           – Screen only (CSV data must exist)
     python run.py pipeline --skip-investor          – Skip investor trading collection
+    python run.py pipeline --daily-only             – Daily data only + screen (fast, no FnGuide)
     python run.py update-prices                     – Update stock prices only (fast)
     python run.py collect                           – Run collector only
+    python run.py collect --daily-only              – Collect daily data only (fast, no FnGuide)
     python run.py collect --skip-investor           – Collect without investor trading
     python run.py screen                            – Run screener only
 """
@@ -43,12 +45,13 @@ def cmd_pipeline(args):
         test_mode=args.test,
         skip_price_history=args.skip_price_history,
         skip_investor=args.skip_investor,
+        daily_only=args.daily_only,
     )
 
 
 def cmd_collect(args):
     from quant_collector_enhanced import run_full
-    run_full(test_mode=args.test, skip_price_history=args.skip_price_history, skip_investor=args.skip_investor)
+    run_full(test_mode=args.test, skip_price_history=args.skip_price_history, skip_investor=args.skip_investor, daily_only=args.daily_only)
 
 
 def cmd_update_prices(args):
@@ -70,11 +73,13 @@ def main():
     p_pipe = sub.add_parser("pipeline", help="Full pipeline (collect + screen)")
     p_pipe.add_argument("--test", action="store_true", help="Test mode (3 stocks only)")
     p_pipe.add_argument("--skip-collect", action="store_true", help="Skip collection, screen only")
+    p_pipe.add_argument("--daily-only", action="store_true", help="일간 데이터만 수집 후 스크리닝 (daily, price_history, index_history, investor_trading)")
     p_pipe.add_argument("--skip-price-history", action="store_true", help="Skip price history collection (faster, but no technical indicators)")
     p_pipe.add_argument("--skip-investor", action="store_true", help="Skip investor trading collection (외국인/기관 매매동향)")
 
     p_col = sub.add_parser("collect", help="Run data collector only")
     p_col.add_argument("--test", action="store_true", help="Test mode (3 stocks only)")
+    p_col.add_argument("--daily-only", action="store_true", help="일간 데이터만 수집 (daily, price_history, index_history, investor_trading)")
     p_col.add_argument("--skip-price-history", action="store_true", help="Skip price history collection")
     p_col.add_argument("--skip-investor", action="store_true", help="Skip investor trading collection (외국인/기관 매매동향)")
 

@@ -83,6 +83,8 @@ DISPLAY_COLS = [
     "Q_매출_연속YoY성장", "Q_영업이익_연속YoY성장", "Q_순이익_연속YoY성장",
     "TTM_매출_YoY(%)", "TTM_영업이익_YoY(%)", "TTM_순이익_YoY(%)",
     "적정주가_SRIM", "괴리율(%)",
+    "적정주가_EPV", "적정주가_DDM", "적정주가_FWD", "적정주가_종합",
+    "종합괴리율(%)", "밸류_모델수", "SRIM_오메가",
     "과열도", "상승조짐", "타이밍_점수",
     "종합점수", "성장성_점수", "안정성_점수", "가격_점수",
     "주도주_점수", "우량가치_점수", "고성장_점수", "현금배당_점수", "턴어라운드_점수",
@@ -337,7 +339,8 @@ COMPARE_METRICS_META = {
     "ROE(%)": {"best": "high"}, "영업이익률(%)": {"best": "high"}, "FCF수익률(%)": {"best": "high"},
     "매출_CAGR": {"best": "high"}, "영업이익_CAGR": {"best": "high"}, "순이익_CAGR": {"best": "high"},
     "수급강도": {"best": "high"}, "거래대금_20일평균": {"best": "high"}, "F스코어": {"best": "high"},
-    "종합점수": {"best": "high"}, "괴리율(%)": {"best": "high"},
+    "종합점수": {"best": "high"}, "괴리율(%)": {"best": "high"}, "종합괴리율(%)": {"best": "high"},
+    "밸류_모델수": {"best": "high"}, "SRIM_오메가": {"best": "high"},
 }
 
 @app.route("/api/stocks/tab_counts")
@@ -1138,9 +1141,10 @@ def api_portfolio_analysis_post():
     if not entries:
         return jsonify({"error": "포트폴리오가 비어 있습니다."}), 400
 
-    # 요청 body에서 워치리스트 코드 파싱
+    # 요청 body에서 워치리스트 코드 및 매크로 컨텍스트 파싱
     body = request.get_json(silent=True) or {}
     watchlist_codes = [str(c).strip().zfill(6) for c in body.get("watchlist_codes", []) if c]
+    macro_context = body.get("macro_context") or None  # 선택 사항
 
     # 예수금 조회
     cash_balance = _db.load_cash()
@@ -1197,6 +1201,7 @@ def api_portfolio_analysis_post():
             watchlist_data=watchlist_data or None,
             correlation_data=correlation_data,
             cash_balance=cash_balance,
+            macro_context=macro_context,
         )
         if "error" not in result:
             _db.save_portfolio_analysis(

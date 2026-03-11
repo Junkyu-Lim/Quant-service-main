@@ -281,6 +281,71 @@ QUANT_SECTIONS = {
     ],
 }
 
+# ─────────────────────────────────────────
+# 포트폴리오 전용 경량 정량 데이터 (토큰 최적화)
+# ─────────────────────────────────────────
+# AI 보고서 있는 종목: 핵심 밸류에이션/퀄리티만 (AI가 이미 30+개 메트릭 분석 완료)
+_PORTFOLIO_QUANT_WITH_AI = [
+    ("PER", "f2"), ("PBR", "f2"), ("ROE(%)", "f2"),
+    ("영업이익률(%)", "f2"), ("F스코어", "int"), ("부채비율(%)", "f1"),
+]
+# AI 보고서 없는 종목: 주요 밸류에이션 + 성장 + 퀄리티 (12개)
+_PORTFOLIO_QUANT_WITHOUT_AI = [
+    ("PER", "f2"), ("PBR", "f2"), ("ROE(%)", "f2"),
+    ("영업이익률(%)", "f2"), ("F스코어", "int"), ("부채비율(%)", "f1"),
+    ("매출_CAGR", "f1"), ("영업이익_CAGR", "f1"),
+    ("적정주가_SRIM", "int"), ("괴리율(%)", "f2"),
+    ("배당수익률(%)", "f2"), ("RS_등급", "f1"),
+]
+# 관심종목: 편입 스크리닝 수준 (8개)
+_PORTFOLIO_QUANT_WATCHLIST = [
+    ("PER", "f2"), ("PBR", "f2"), ("ROE(%)", "f2"),
+    ("F스코어", "int"), ("매출_CAGR", "f1"), ("영업이익_CAGR", "f1"),
+    ("배당수익률(%)", "f2"), ("RS_등급", "f1"),
+]
+
+
+def format_portfolio_quant_compact(stock: dict, has_ai_report: bool,
+                                   is_watchlist: bool = False) -> str:
+    """포트폴리오 분석용 경량 정량 데이터 포맷팅.
+
+    개별 분석용 format_quant_data() 대비 토큰 ~80% 절감.
+    AI 보고서가 있으면 핵심 지표만, 없으면 확장 지표 포함.
+    """
+    if is_watchlist:
+        metrics = _PORTFOLIO_QUANT_WATCHLIST
+    elif has_ai_report:
+        metrics = _PORTFOLIO_QUANT_WITH_AI
+    else:
+        metrics = _PORTFOLIO_QUANT_WITHOUT_AI
+
+    parts = []
+    for col, fmt_type in metrics:
+        val = stock.get(col)
+        parts.append(f"{col}: {_fmt_val(val, fmt_type)}")
+    lines = ["- " + ", ".join(parts[i:i+3]) for i in range(0, len(parts), 3)]
+
+    # Forward 컨센서스 (있는 경우만)
+    fwd = _format_forward_snapshot(stock)
+    if fwd:
+        lines.append(fwd)
+
+    # 타이밍 신호 (경고/기회 있는 경우만, 조건부 출력)
+    if not is_watchlist:
+        timing = _format_timing_signals(stock)
+        if timing:
+            lines.append(timing)
+
+    # AI 보고서 없는 종목: 분기실적 추가
+    if not has_ai_report and not is_watchlist:
+        quarterly = _format_quarterly_snapshot(
+            str(stock.get("종목코드", "")).zfill(6)
+        )
+        if quarterly:
+            lines.append(quarterly)
+
+    return "\n".join(lines)
+
 
 def _fmt_val(v, fmt_type: str) -> str:
     if v is None:
@@ -1713,15 +1778,9 @@ PORTFOLIO_SYSTEM_PROMPT = """\
 
 ### 2. 종목별 액션 권고
 - 각 종목에 대해 BUY_MORE / HOLD / TRIM / SELL 중 하나를 권고
-- **판단 우선순위**: ① 산업 장기 성장성(전방산업 CAGR) → ② 해자 등급(wide/narrow/none) → ③ 개별 AI 분석(6대 거장) → ④ 현재 비중 → ⑤ 수급/시장심리(달걀모형)
-- 현재 비중 vs 권장 비중 제시
-- **구체적 매매 수량 산출** (보유수량, 평균매입가, 현재가, 총평가금액 기반):
-  - BUY_MORE: 추가 매수할 주수(target_shares), 매수 목표가 범위(target_price_low ~ target_price_high), 예상 매수금액(estimated_amount). 예수금이 있으면 예수금 내 실행 가능한 금액 우선
-  - TRIM: 매도할 주수(target_shares), 매도 목표가 범위, 예상 매도금액
-  - SELL: 전량 매도 주수(=보유수량), 매도 목표가 범위, 예상 매도금액
-  - HOLD: target_shares=0, 가격 범위는 현재가 ±5% 내외 감시 범위
-  - target_shares 산출식: abs(총평가금액 × (권장비중 - 현재비중) / 100) ÷ 목표가 중간값, 정수 반올림
-  - estimated_amount = target_shares × 목표가 중간값
+- **판단 우선순위**: ① 산업 장기 성장성(전방산업 CAGR) → ② 해자 등급(wide/narrow/none) → ③ 개별 AI 분석 → ④ 현재 비중 → ⑤ 수급/타이밍 신호
+- 현재 비중 vs 권장 비중, 구체적 매매 수량(target_shares) 및 목표가 범위 제시 (출력 스키마 참조)
+- 예수금이 있으면 BUY_MORE 시 예수금 내 실행 가능 금액 우선
 
 ### 3. 섹터/산업 성장성 분석
 - AI 분석 데이터(전방산업 CAGR, 해자 등급)를 기반으로 각 섹터의 **장기 성장성**을 평가하세요
@@ -1743,14 +1802,10 @@ PORTFOLIO_SYSTEM_PROMPT = """\
 - 종목수 조정이 필요한 경우 구체적 방향 제안 (축소/유지/확대 및 이유)
 
 ### 6. 배당 분석
-- 포트폴리오 가중평균 배당수익률 추정 (각 종목의 배당수익률 × 비중 합산)
-- 연간 예상 배당금 합계 (보유 수량 × 주당 배당금 기반, 데이터 부족 시 업종 평균 참고)
-- 배당 성향 추세: 증가/유지/감소/혼재/무배당 다수 중 판정
-- 배당 인컴 관점에서 포트폴리오 평가 및 개선 제안
+- 포트폴리오 가중평균 배당수익률, 연간 예상 배당금, 배당 성향 추세(증가/유지/감소/혼재/무배당 다수) 평가
 
 ### 7. 보완 제안
-- 포트폴리오에 부족한 섹터/테마/스타일 식별
-- **장기 성장 산업 중 미편입 섹터**를 우선으로 추가 편입 후보 테마 제안 (종목 추천 아님, 테마/섹터 수준)
+- 장기 성장 산업 중 미편입 섹터/테마를 우선으로 추가 편입 후보 테마 제안 (종목 추천 아님)
 
 ### 8. 관심종목 편입 권고 (관심종목 데이터가 있는 경우)
 - 관심종목 중 포트폴리오에 추가하면 좋을 종목 식별
@@ -1762,6 +1817,13 @@ PORTFOLIO_SYSTEM_PROMPT = """\
 - 가장 시급한 액션 1-3개 우선순위 제시
 - 실행 순서 및 권장 시기 (즉시/이번 달/이번 분기/불필요)
 - 예수금이 있는 경우: 현금 활용 우선순위 포함
+
+## 매크로 환경 활용 지침
+- 사용자 프롬프트에 "## 거시경제 환경" 섹션이 포함된 경우에만 이 지침을 적용하세요. 없으면 무시합니다.
+- **현금 비중**: 방어적 환경(성장 하향 + 실질금리 상승 + 금융여건 악화)이면 예수금을 BUY_MORE에 소진하지 말고 유지/확대를 권고하세요. 공격적 환경이면 예수금 범위 내 BUY_MORE를 적극 검토하세요.
+- **섹터 배분**: 매크로 유리 섹터에 속한 종목에 BUY_MORE를 가중하고, 불리 섹터에 과집중된 경우 TRIM을 검토하세요. 단, 장기 성장성과 해자가 충분한 종목은 매크로 불리라도 HOLD를 우선합니다.
+- **리스크 평가**: 금리 상승, 달러 강세, 신용스프레드 확대 등 매크로 리스크를 `portfolio_risks`에 포함하세요.
+- **macro_assessment 필드**: 매크로 컨텍스트가 제공된 경우 반드시 채워주세요. 제공되지 않은 경우 `null`로 출력하세요.
 
 ## 분석 지침
 - 포트폴리오 비중이 높은 종목에 더 주의를 기울이세요
@@ -1783,6 +1845,7 @@ PORTFOLIO_USER_PROMPT_TEMPLATE = """\
 - 총수익률: {total_return}%
 - 섹터 분포: {sector_distribution}
 
+{macro_section}
 ## 종목별 데이터
 
 {per_stock_sections}
@@ -1802,6 +1865,14 @@ PORTFOLIO_USER_PROMPT_TEMPLATE = """\
     "valuation": "밸류에이션 평가 2-3문장",
     "growth_quality": "성장성/품질 평가 2-3문장",
     "overall_assessment": "종합 평가 3-5문장"
+  }},
+  "macro_assessment": {{
+    "environment": "공격적|중립|방어적",
+    "cash_signal": "축소|유지|확대",
+    "favorable_sectors": ["매크로 유리 섹터"],
+    "unfavorable_sectors": ["매크로 불리 섹터"],
+    "key_risks": "매크로 기반 주요 리스크 2-3문장",
+    "portfolio_alignment": "현재 포트폴리오의 매크로 환경 적합도 2-3문장"
   }},
   "stock_actions": [
     {{
@@ -1901,9 +1972,9 @@ def format_portfolio_stock(stock: dict, portfolio_item: dict,
     lines.append(f"- 비중: {weight:.1f}%")
     lines.append(f"- 섹터: {portfolio_item.get('섹터') or 'N/A'}")
 
-    # 정량 데이터 (reuse format_quant_data)
+    # 정량 데이터 (포트폴리오 전용 경량 포맷)
     if stock:
-        lines.append(format_quant_data(stock))
+        lines.append(format_portfolio_quant_compact(stock, has_ai_report=bool(ai_report)))
 
     # ETF 메타데이터 (하드코딩)
     etf_meta = config.ETF_METADATA.get(code)
@@ -1940,28 +2011,53 @@ def format_portfolio_stock(stock: dict, portfolio_item: dict,
         macro = ai_report.get("stage1_macro", {})
         if macro.get("upstream_cagr"):
             lines.append(f"- 전방산업 성장률(CAGR): {macro['upstream_cagr']}")
-        # 수급/시장심리
-        val = ai_report.get("stage6_valuation", {})
-        egg = val.get("kostolany_egg_position")
-        psych = val.get("market_psychology")
-        if egg or psych:
-            lines.append(f"- 달걀모형 위치: {egg}/6, 시장심리: {psych or 'N/A'}")
         # 12개월 촉매
         outlook = ai_report.get("stage5_outlook", {})
         cats_12m = outlook.get("catalysts_12m", [])
         if cats_12m:
             lines.append(f"- 12개월 촉매: {', '.join(str(c) for c in cats_12m[:3])}")
-        # 거장 점수 요약
-        masters = ai_report.get("stage7_masters", {})
-        if masters:
-            master_scores = []
-            for key, info in MASTER_INFO.items():
-                m = masters.get(key, {})
-                s = m.get("score", 0)
-                master_scores.append(f"{info['name']}: {s}/10")
-            lines.append(f"- 거장 점수: {', '.join(master_scores)}")
 
     return "\n".join(lines)
+
+
+def format_macro_context(macro: dict) -> str:
+    """매크로 체크리스트 데이터를 포트폴리오 분석 프롬프트 텍스트로 포맷팅."""
+    lines = ["\n## 거시경제 환경 (매크로 체크리스트)\n"]
+
+    lines.append("### 상위 프레임 (현금 비중 판단)")
+    lines.append(f"- 성장 방향: {macro.get('growth', '미입력')}")
+    lines.append(f"- 실질금리 방향: {macro.get('real_rate', '미입력')}")
+    lines.append(f"- 금융여건: {macro.get('financial_conditions', '미입력')}")
+    env = macro.get('environment', '미입력')
+    lines.append(f"→ 현금 비중 판단: {env}")
+
+    extra_lines = []
+    if macro.get('usd_krw'):
+        extra_lines.append(f"- 달러/원화: {macro['usd_krw']}")
+    if macro.get('commodities'):
+        extra_lines.append(f"- 원자재/에너지: {macro['commodities']}")
+    if macro.get('credit_spread'):
+        extra_lines.append(f"- 신용스프레드: {macro['credit_spread']}")
+    if macro.get('capex_theme'):
+        extra_lines.append(f"- 구조적 CAPEX 테마: {macro['capex_theme']}")
+    if macro.get('china'):
+        extra_lines.append(f"- 중국 경기: {macro['china']}")
+    if macro.get('semiconductor'):
+        extra_lines.append(f"- 반도체 가격: {macro['semiconductor']}")
+    if extra_lines:
+        lines.append("\n### 추가 컨텍스트")
+        lines.extend(extra_lines)
+
+    favorable = macro.get('favorable_sectors', [])
+    unfavorable = macro.get('unfavorable_sectors', [])
+    if favorable or unfavorable:
+        lines.append("\n### 매크로 기반 포트폴리오 방향")
+        if favorable:
+            lines.append(f"- 유리 섹터: {', '.join(favorable)}")
+        if unfavorable:
+            lines.append(f"- 불리 섹터: {', '.join(unfavorable)}")
+
+    return "\n".join(lines) + "\n"
 
 
 def generate_portfolio_report(portfolio_items: list[dict],
@@ -1969,7 +2065,8 @@ def generate_portfolio_report(portfolio_items: list[dict],
                               ai_reports: dict[str, dict],
                               watchlist_data: dict[str, dict] | None = None,
                               correlation_data: dict | None = None,
-                              cash_balance: float = 0) -> dict:
+                              cash_balance: float = 0,
+                              macro_context: dict | None = None) -> dict:
     """
     포트폴리오 전체 분석 보고서 생성 (Claude API).
 
@@ -1978,6 +2075,10 @@ def generate_portfolio_report(portfolio_items: list[dict],
         stock_data: {종목코드: dashboard_result row dict}
         ai_reports: {종목코드: scores dict (parsed JSON)}
         watchlist_data: {종목코드: dashboard_result row dict} — 관심종목 데이터 (옵션)
+        macro_context: 매크로 체크리스트 데이터 dict (옵션). 제공 시 현금 비중·섹터 배분에 반영.
+            키: growth, real_rate, financial_conditions, environment, usd_krw,
+                commodities, credit_spread, capex_theme, china, semiconductor,
+                favorable_sectors (list), unfavorable_sectors (list)
 
     Returns:
         { "scores": {...}, "report_html": "...", "model": "...",
@@ -2011,7 +2112,7 @@ def generate_portfolio_report(portfolio_items: list[dict],
             name = stock.get("종목명", code)
             wl_lines.append(f"\n### [관심] {name} ({code})")
             wl_lines.append(f"- 섹터: {stock.get('섹터') or 'N/A'}")
-            wl_lines.append(format_quant_data(stock))
+            wl_lines.append(format_portfolio_quant_compact(stock, has_ai_report=False, is_watchlist=True))
         watchlist_section = "\n".join(wl_lines) + "\n"
 
     # 요약 통계
@@ -2034,26 +2135,28 @@ def generate_portfolio_report(portfolio_items: list[dict],
         codes_list = correlation_data["codes"]
         names_list = correlation_data["names"]
         matrix = correlation_data["matrix"]
-        corr_lines = ["\n## 종목 간 가격 상관관계 행렬 (최근 250 거래일 일별 수익률 기준)\n"]
-        header = "종목\t" + "\t".join(names_list)
-        corr_lines.append(header)
-        for i, name in enumerate(names_list):
-            row_vals = []
-            for j, v in enumerate(matrix[i]):
-                if v is None:
-                    row_vals.append("N/A")
-                elif i == j:
-                    row_vals.append("1.00")
-                else:
-                    row_vals.append(f"{v:.2f}")
-            corr_lines.append(f"{name}\t" + "\t".join(row_vals))
-        corr_lines.append("\n※ 0.7 이상: 고상관(빨강), 0.3~0.7: 중간, -0.3~0.3: 낮음, -0.3 미만: 역상관")
+        # 상삼각 페어만 출력 (N×N → N*(N-1)/2 셀로 압축)
+        corr_lines = ["\n## 종목 간 상관관계 (최근 250 거래일, 상삼각 페어)\n"]
+        pairs = []
+        for i in range(len(names_list)):
+            for j in range(i + 1, len(names_list)):
+                v = matrix[i][j]
+                val_str = f"{v:.2f}" if v is not None else "N/A"
+                pairs.append(f"{names_list[i]}-{names_list[j]}: {val_str}")
+        # 4개씩 한 줄로 묶어 출력
+        for k in range(0, len(pairs), 4):
+            corr_lines.append(", ".join(pairs[k:k + 4]))
+        corr_lines.append("※ ≥0.7: 고상관, ≤-0.3: 역상관")
         correlation_section = "\n".join(corr_lines) + "\n"
 
     total_assets = total_eval + cash_balance
     cash_weight_str = (
         f"{cash_balance / total_assets * 100:.1f}%" if total_assets > 0 else "0%"
     )
+
+    # 매크로 컨텍스트 섹션 빌드
+    macro_section = format_macro_context(macro_context) if macro_context else ""
+
     user_prompt = PORTFOLIO_USER_PROMPT_TEMPLATE.format(
         stock_count=len(portfolio_items),
         total_eval=f"{round(total_eval):,}",
@@ -2062,6 +2165,7 @@ def generate_portfolio_report(portfolio_items: list[dict],
         total_assets=f"{round(total_assets):,}",
         total_return=f"{total_return:.2f}",
         sector_distribution=sector_dist,
+        macro_section=macro_section,
         per_stock_sections="\n".join(per_stock_parts),
         watchlist_section=watchlist_section,
         correlation_section=correlation_section,

@@ -124,7 +124,7 @@
       <ul>
         <li><strong>성장성:</strong> 영업이익_CAGR×35% + 매출_CAGR×30% + 분기영업이익YoY×25% + 실적가속연속×10%</li>
         <li><strong>안정성:</strong> ROE×40% + F스코어×35% + FCF수익률×25%</li>
-        <li><strong>가격:</strong> PER역순×40% + 괴리율(S-RIM)×35% + PBR역순×25%</li>
+        <li><strong>가격:</strong> PER역순×35% + 복합괴리율×35% + PBR역순×15% + 밸류모델수×15%</li>
       </ul>
     `,
     leaders: `
@@ -199,7 +199,7 @@
         <li><span class="badge bg-primary text-white">FCF수익률</span> × <strong>25%</strong> — 시총 대비 잉여현금 창출력</li>
         <li><span class="badge bg-primary text-white">ROIC</span> × <strong>25%</strong> — NOPAT / 투하자본 (세율 22% 적용)</li>
         <li><span class="badge bg-light text-dark border">F스코어</span> × 20% — Piotroski 9개 항목 재무 건전성</li>
-        <li><span class="badge bg-light text-dark border">괴리율(S-RIM)</span> × 20% — (적정주가 − 현재가) / 현재가</li>
+        <li><span class="badge bg-light text-dark border">복합괴리율</span> × 20% — S-RIM/EPV/DDM/Forward 복합 적정주가 대비 괴리율</li>
         <li><span class="badge bg-light text-dark border">PEG 역순</span> × 10% — PER ÷ min(순이익CAGR, 100%)</li>
       </ul>
 
@@ -207,7 +207,7 @@
       <ul>
         <li><strong>ROIC 계산:</strong> NOPAT(영업이익×78%) ÷ 투하자본(총자산 − 유동부채 − 잉여현금). 자본비용(통상 9%)을 넘어야 진짜 가치 창출.</li>
         <li><strong>PEG 0.5 ~ 1.0:</strong> 이익 성장률 대비 저평가 구간. 0.5 이하면 강력 매수 후보. PEG = PER ÷ 순이익CAGR(최대 100% 캡).</li>
-        <li><strong>S-RIM 적정주가:</strong> BPS 기반 초과이익 현가 모델 (자본비용 Ke=9%, 지속계수 0.9). 괴리율이 높을수록 저평가.</li>
+        <li><strong>복합 적정주가:</strong> S-RIM(동적 omega)+EPV(FCF자본화)+DDM(배당할인)+Forward(컨센서스) 4개 모델을 신뢰도 가중평균. 밸류_모델수가 많을수록 신뢰도 높음.</li>
         <li><strong>F-Score 7점↑:</strong> 수익성·레버리지·유동성·효율성 9항목 합산. 8~9점은 최상위 재무 건전성.</li>
       </ul>
 
@@ -313,7 +313,7 @@
         <li><span class="badge bg-primary text-white">퀄리티_턴어라운드</span> × <strong>15%</strong> — 본업 체질 개선 3종 세트</li>
         <li><span class="badge bg-primary text-white">스마트머니_승률</span> × <strong>15%</strong> — 외인/기관 수급 선행 신호</li>
         <li><span class="badge bg-light text-dark border">분기매출YoY</span> × 15% · <span class="badge bg-light text-dark border">이익률_변동폭</span> × 10%</li>
-        <li><span class="badge bg-light text-dark border">GPM_변화</span> × 10% · <span class="badge bg-light text-dark border">이자보상배율</span> × 10% · <span class="badge bg-light text-dark border">괴리율</span> × 10%</li>
+        <li><span class="badge bg-light text-dark border">GPM_변화</span> × 10% · <span class="badge bg-light text-dark border">이자보상배율</span> × 10% · <span class="badge bg-light text-dark border">복합괴리율</span> × 10%</li>
       </ul>
 
       <h6>🔑 핵심 지표 해석</h6>
@@ -333,7 +333,7 @@
         </li>
         <li><strong>스마트머니_승률:</strong> 최근 20거래일 중 외인 또는 기관이 순매수한 날의 비율. 0.5 이상이면 수급 유입 신호.</li>
         <li><strong>VCP_신호 (변동성 수축 패턴):</strong> 가격 CV 축소 + 거래량 축소 + 스마트머니_승률 ≥ 60% 동시 충족 시 켜짐 — 주가 에너지 응축 구간.</li>
-        <li><strong>높은 괴리율:</strong> 실적은 좋아졌는데 주가가 아직 반응하지 않아 S-RIM 적정주가 대비 현저히 저평가된 종목을 찾으세요.</li>
+        <li><strong>높은 복합괴리율:</strong> 실적은 좋아졌는데 주가가 아직 반응하지 않아 S-RIM/EPV/DDM/Forward 복합 적정주가 대비 현저히 저평가된 종목을 찾으세요.</li>
       </ul>
 
       <h6>⚠️ 주의사항</h6>
@@ -351,7 +351,7 @@
       <ul>
         <li><strong>성장성 (33.3%):</strong> 영업이익CAGR×35% + 매출CAGR×30% + 분기영업이익YoY×25% + 실적가속연속×10%</li>
         <li><strong>안정성 (33.3%):</strong> ROE×40% + F스코어×35% + FCF수익률×25%</li>
-        <li><strong>가격 (33.3%):</strong> PER역순×40% + 괴리율(S-RIM)×35% + PBR역순×25%</li>
+        <li><strong>가격 (33.3%):</strong> PER역순×35% + 복합괴리율×35% + PBR역순×15% + 밸류모델수×15%</li>
       </ul>
 
       <h6>🎯 활용법</h6>
@@ -438,6 +438,7 @@
       { key: "PER", label: "PER", fmt: "f2" }, { key: "PBR", label: "PBR", fmt: "f2" },
       { key: "PEG", label: "PEG", fmt: "f2" }, { key: "PSR", label: "PSR", fmt: "f2" },
       { key: "적정주가_SRIM", label: "적정가", fmt: "int" }, { key: "괴리율(%)", label: "괴리율%", fmt: "f1" },
+      { key: "적정주가_종합", label: "복합적정가", fmt: "int" }, { key: "종합괴리율(%)", label: "복합괴리%", fmt: "f1" },
       // 수익성
       { key: "ROE(%)", label: "ROE%", fmt: "f2" }, { key: "ROIC(%)", label: "ROIC%", fmt: "f1" },
       { key: "영업이익률(%)", label: "OPM%", fmt: "f1" }, { key: "FCF수익률(%)", label: "FCF%", fmt: "f2" },
@@ -486,6 +487,7 @@
       { key: "PER", label: "PER", fmt: "f2" }, { key: "PBR", label: "PBR", fmt: "f2" },
       { key: "PEG", label: "PEG", fmt: "f2" }, { key: "PSR", label: "PSR", fmt: "f2" },
       { key: "적정주가_SRIM", label: "적정가", fmt: "int" }, { key: "괴리율(%)", label: "괴리율%", fmt: "f1" },
+      { key: "적정주가_종합", label: "복합적정가", fmt: "int" }, { key: "종합괴리율(%)", label: "복합괴리%", fmt: "f1" },
       // 수익성/효율
       { key: "ROE(%)", label: "ROE%", fmt: "f2" }, { key: "ROIC(%)", label: "ROIC%", fmt: "f1" },
       { key: "영업이익률(%)", label: "OPM%", fmt: "f1" }, { key: "FCF수익률(%)", label: "FCF%", fmt: "f2" },
@@ -618,6 +620,7 @@
       { key: "PER", label: "PER", fmt: "f2" }, { key: "PBR", label: "PBR", fmt: "f2" },
       { key: "PEG", label: "PEG", fmt: "f2" }, { key: "PSR", label: "PSR", fmt: "f2" },
       { key: "적정주가_SRIM", label: "적정가", fmt: "int" }, { key: "괴리율(%)", label: "괴리율%", fmt: "f1" },
+      { key: "적정주가_종합", label: "복합적정가", fmt: "int" }, { key: "종합괴리율(%)", label: "복합괴리%", fmt: "f1" },
       // 수익성
       { key: "ROE(%)", label: "ROE%", fmt: "f2" }, { key: "ROIC(%)", label: "ROIC%", fmt: "f1" },
       { key: "영업이익률(%)", label: "OPM%", fmt: "f1" }, { key: "FCF수익률(%)", label: "FCF%", fmt: "f2" },
@@ -720,6 +723,7 @@
       "PEG":           [v => v > 0 && v <= 0.5, v => v >= 1.5],
       "PSR":           [v => v > 0 && v <= 1.0, v => v >= 5.0],
       "괴리율(%)":     [v => v >= 20, v => v < 0],
+      "종합괴리율(%)": [v => v >= 20, v => v < 0],
       "이익수익률(%)": [v => v >= 10, v => v <= 3],
 
       // Profitability
@@ -849,8 +853,15 @@
       "ROE(%)": "자기자본이익률. 워렌 버핏 중시 지표. (Good: ≥ 15%, Bad: ≤ 5%)",
       "EPS": "주당순이익(원). 1주가 벌어들인 순이익. 우상향 권장.",
       "BPS": "주당순자산(원). 기업 청산 가치.",
-      "적정주가_SRIM": "S-RIM 모형으로 산출한 적정 주가.",
-      "괴리율(%)": "적정주가 대비 현재가 차이. (Good: ≥ 20%, Bad: < 0%)",
+      "적정주가_SRIM": "S-RIM 모형으로 산출한 적정 주가 (동적 omega 적용).",
+      "괴리율(%)": "S-RIM 적정주가 대비 현재가 차이. (Good: ≥ 20%, Bad: < 0%)",
+      "적정주가_종합": "S-RIM+EPV+DDM+Forward 4개 모델 신뢰도 가중평균 복합 적정주가.",
+      "종합괴리율(%)": "복합 적정주가 대비 현재가 차이. (Good: ≥ 20%, Bad: < 0%)",
+      "밸류_모델수": "복합 적정주가 산출에 기여한 모델 수 (1~4). 많을수록 신뢰도 높음.",
+      "SRIM_오메가": "S-RIM 동적 지속계수 (0.50~0.95). 재무품질 기반 산출.",
+      "적정주가_EPV": "Earnings Power Value: TTM FCF 기반 정상이익 자본화 적정주가.",
+      "적정주가_DDM": "Dividend Discount Model: 2단계 배당할인 적정주가 (배당 종목만).",
+      "적정주가_FWD": "Forward 컨센서스 기반 적정주가 (애널리스트 커버 종목만).",
       "이익수익률(%)": "PER의 역수. (Good: ≥ 10%, Bad: ≤ 3%)",
 
       // 2. 재무 건전성 & 현금흐름
@@ -1008,8 +1019,15 @@
         { key: "EPS",            label: "EPS",          fmt: "int" },
         { key: "BPS",            label: "BPS",          fmt: "int" },
         { key: "이익수익률(%)",  label: "이익수익률%",  fmt: "f2" },
-        { key: "적정주가_SRIM",  label: "S-RIM 적정가", fmt: "int" },
-        { key: "괴리율(%)",      label: "괴리율%",      fmt: "f2" },
+        { key: "적정주가_SRIM",  label: "S-RIM 적정가",  fmt: "int" },
+        { key: "괴리율(%)",      label: "S-RIM 괴리%",  fmt: "f2" },
+        { key: "적정주가_종합",  label: "복합 적정가",   fmt: "int" },
+        { key: "종합괴리율(%)",  label: "복합 괴리%",    fmt: "f2" },
+        { key: "밸류_모델수",    label: "밸류모델수",    fmt: "int" },
+        { key: "SRIM_오메가",    label: "ω (omega)",    fmt: "f3" },
+        { key: "적정주가_EPV",   label: "EPV 적정가",   fmt: "int" },
+        { key: "적정주가_DDM",   label: "DDM 적정가",   fmt: "int" },
+        { key: "적정주가_FWD",   label: "FWD 적정가",   fmt: "int" },
       ]
     },
     {
@@ -1223,7 +1241,9 @@
         { col: "PEG",             label: "PEG" },
         { col: "이익수익률(%)",   label: "이익수익률%" },
         { col: "괴리율(%)",       label: "S-RIM 괴리%" },
-        { col: "적정주가_SRIM",   label: "적정주가(원)" },
+        { col: "적정주가_SRIM",   label: "S-RIM 적정가(원)" },
+        { col: "종합괴리율(%)",   label: "복합 괴리%" },
+        { col: "적정주가_종합",   label: "복합 적정가(원)" },
       ]
     },
     {
@@ -1605,7 +1625,7 @@
         if (["거래대금_증감(%)", "수급강도", "MA20_이격도(%)", "MA60_이격도(%)",
              "Q_매출_YoY(%)", "Q_영업이익_YoY(%)", "Q_순이익_YoY(%)",
              "TTM_매출_YoY(%)", "TTM_영업이익_YoY(%)", "TTM_순이익_YoY(%)",
-             "매출_CAGR", "영업이익_CAGR", "순이익_CAGR", "괴리율(%)"].includes(c.key)) {
+             "매출_CAGR", "영업이익_CAGR", "순이익_CAGR", "괴리율(%)", "종합괴리율(%)"].includes(c.key)) {
           cls += (cls ? " " : "") + valClass(s[c.key]);
         }
         // 타이밍 지표 색상 (METRIC_CRITERIA 기반)
@@ -2254,9 +2274,13 @@
   }
 
   // ─── 파이프라인 ───────────────────────────────────────────────────────
-  async function triggerPipeline() {
+  async function triggerPipeline(opts = {}) {
     try {
-      const res  = await fetch("/api/batch/trigger", { method: "POST" });
+      const res  = await fetch("/api/batch/trigger", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(opts),
+      });
       const data = await res.json();
       if (data.status === "already_running") { alert("파이프라인이 이미 실행 중입니다."); return; }
       showPipelineModal();
@@ -2515,8 +2539,10 @@
       { key: "PER",            label: "PER",           fmt: "f2" },
       { key: "PBR",            label: "PBR",           fmt: "f2" },
       { key: "PEG",            label: "PEG",           fmt: "f2" },
-      { key: "괴리율(%)",      label: "괴리율%",       fmt: "f2" },
+      { key: "괴리율(%)",      label: "S-RIM 괴리%",   fmt: "f2" },
       { key: "적정주가_SRIM",  label: "S-RIM 적정가",  fmt: "int" },
+      { key: "종합괴리율(%)",  label: "복합 괴리%",     fmt: "f2" },
+      { key: "적정주가_종합",  label: "복합 적정가",    fmt: "int" },
     ],
     profitability: [
       { key: "ROE(%)",         label: "ROE%",          fmt: "f2" },
@@ -3136,7 +3162,8 @@
   document.getElementById("btn-refresh").addEventListener("click", () => {
     loadMarketSummary(); loadBatchChanges(); loadDataInfo(); loadStocks();
   });
-  document.getElementById("btn-trigger").addEventListener("click", triggerPipeline);
+  document.getElementById("btn-trigger").addEventListener("click", () => triggerPipeline());
+  document.getElementById("btn-trigger-daily").addEventListener("click", () => triggerPipeline({ daily_only: true }));
 
   // 검색 폼
   document.getElementById("filter-form").addEventListener("submit", e => {

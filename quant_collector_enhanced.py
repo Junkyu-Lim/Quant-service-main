@@ -1141,13 +1141,16 @@ def test_crawling():
 # 메인 파이프라인
 # ═════════════════════════════════════════════
 
-def run_full(test_mode: bool = False, skip_price_history: bool = False, skip_investor: bool = False, progress_callback=None):
+def run_full(test_mode: bool = False, skip_price_history: bool = False, skip_investor: bool = False, daily_only: bool = False, progress_callback=None):
     """전체 데이터 수집 (SQLite DB 저장 + 이어하기)
 
     Args:
         test_mode: True이면 TEST_TICKERS(3개)만 수집
         skip_price_history: True이면 주가 히스토리 수집 건너뜀 (기술적 지표 계산 불가)
         skip_investor: True이면 투자자 매매동향 수집 건너뜀 (외국인/기관/개인 순매수)
+        daily_only: True이면 매일 변하는 데이터만 수집
+                    (daily, price_history, index_history, investor_trading)
+                    재무제표/핵심지표/주식수는 건너뜀, 마스터는 DB 캐시만 사용
         progress_callback: Optional callable(stage: str, pct: int) for progress tracking
     """
     def _progress(stage: str, pct: int):
@@ -1166,7 +1169,13 @@ def run_full(test_mode: bool = False, skip_price_history: bool = False, skip_inv
 
     _progress("마스터/일별시세 수집 중", 5)
     # ── 1) 마스터 ──
-    if _db.table_has_data("master", biz_day):
+    if daily_only:
+        # daily_only 모드: 마스터는 DB 캐시만 사용 (재수집 안 함)
+        master = _db.load_latest("master")
+        if master.empty:
+            raise RuntimeError("daily_only 모드에서 master DB 캐시가 없습니다. 먼저 전체 수집을 한 번 실행하세요.")
+        log.info(f"📂 [daily_only] master DB 캐시 사용 ({len(master)}개 종목)")
+    elif _db.table_has_data("master", biz_day):
         log.info("📂 master 데이터가 DB에 있어 로드합니다.")
         master = _db.load_latest("master")
     else:
@@ -1200,12 +1209,16 @@ def run_full(test_mode: bool = False, skip_price_history: bool = False, skip_inv
         if not targets:
             targets = TEST_TICKERS
         log.info(f"🧪 테스트 대상: {targets}")
+    elif daily_only:
+        log.info(f"📅 [daily_only] 일간 데이터만 수집 ({len(targets)}개 종목 대상)")
     else:
         log.info(f"🎯 FnGuide 크롤링 대상: {len(targets)}개 보통주")
 
     # ── 3) 재무제표 ──
     _progress("재무제표 수집 중", 10)
-    if _db.table_has_data("financial_statements", biz_day):
+    if daily_only:
+        log.info("⏭️  [daily_only] 재무제표 수집 건너뜀")
+    elif _db.table_has_data("financial_statements", biz_day):
         log.info("⏭️  financial_statements 이미 존재하여 수집 건너뜀")
     else:
         fs_rows = parallel_collect(fetch_fs, targets, "재무제표")
@@ -1216,7 +1229,9 @@ def run_full(test_mode: bool = False, skip_price_history: bool = False, skip_inv
 
     # ── 4) 핵심 지표 ──
     _progress("핵심지표 수집 중", 20)
-    if _db.table_has_data("indicators", biz_day):
+    if daily_only:
+        log.info("⏭️  [daily_only] 핵심지표 수집 건너뜀")
+    elif _db.table_has_data("indicators", biz_day):
         log.info("⏭️  indicators 이미 존재하여 수집 건너뜀")
     else:
         ind_rows = parallel_collect(fetch_indicators, targets, "핵심지표")
@@ -1227,7 +1242,9 @@ def run_full(test_mode: bool = False, skip_price_history: bool = False, skip_inv
 
     # ── 5) 주식수 ──
     _progress("주식수 수집 중", 30)
-    if _db.table_has_data("shares", biz_day):
+    if daily_only:
+        log.info("⏭️  [daily_only] 주식수 수집 건너뜀")
+    elif _db.table_has_data("shares", biz_day):
         log.info("⏭️  shares 이미 존재하여 수집 건너뜀")
     else:
         share_rows = parallel_collect(fetch_shares, targets, "주식수")
