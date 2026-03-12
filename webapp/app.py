@@ -197,6 +197,20 @@ def api_stocks():
                     v = float(val)
                     filtered = filtered[filtered[col] >= v] if key.startswith("min_") else filtered[filtered[col] <= v]
                 except: pass
+    # ── 뱃지 필터 (절대 기준) ──────────────────────────────────────────────
+    _BADGE_TH = {"관심": ("상승조짐", 40), "조짐": ("상승조짐", 55),
+                 "경계": ("과열도", 45), "주의": ("과열도", 60), "과열": ("과열도", 75)}
+    badge_filter = request.args.get("badge", "").strip()
+    if badge_filter and not filtered.empty:
+        badges = [b.strip() for b in badge_filter.split(",") if b.strip()]
+        badge_mask = pd.Series(False, index=filtered.index)
+        for badge in badges:
+            if badge in _BADGE_TH:
+                col, th = _BADGE_TH[badge]
+                if col in filtered.columns:
+                    badge_mask |= filtered[col].notna() & (filtered[col] >= th)
+        filtered = filtered[badge_mask]
+
     total = len(filtered)
     if sort_col in filtered.columns:
         filtered = filtered.sort_values(sort_col, ascending=(order != "desc"), na_position="last")
@@ -234,6 +248,7 @@ def api_sectors():
     counts = df["섹터"].dropna().value_counts().reset_index()
     counts.columns = ["섹터", "count"]
     return jsonify(counts.to_dict(orient="records"))
+
 
 @app.route("/api/markets/summary")
 def api_market_summary():
@@ -356,10 +371,10 @@ def api_stocks_tab_counts():
 
 @app.route("/api/info")
 def api_info():
-    """DB 수집일, 종목 수, 최근분기 정보 반환 (데이터 품질 표시용)"""
+    """DB 수집일, 종목 수, 최근분기, 주가 기준일 정보 반환 (데이터 품질 표시용)"""
     import os, datetime
     db_path = str(config.DB_PATH)
-    result = {"db_mtime": None, "stock_count": 0, "latest_quarter": None, "days_old": None}
+    result = {"db_mtime": None, "stock_count": 0, "latest_quarter": None, "days_old": None, "price_date": None, "price_days_old": None}
     if os.path.exists(db_path):
         mtime = os.path.getmtime(db_path)
         dt = datetime.datetime.fromtimestamp(mtime)
@@ -373,6 +388,25 @@ def api_info():
             qvals = df["최근분기"].dropna()
             if not qvals.empty:
                 result["latest_quarter"] = qvals.mode().iloc[0]
+    # daily 테이블에서 최신 기준일 조회
+    try:
+        import db as _db
+        con = _db.get_con()
+        row = con.execute("SELECT MAX(기준일) FROM daily").fetchone()
+        if row and row[0]:
+            price_date_raw = str(row[0])  # e.g. "20260311"
+            if len(price_date_raw) == 8:
+                price_date_fmt = f"{price_date_raw[:4]}-{price_date_raw[4:6]}-{price_date_raw[6:]}"
+            else:
+                price_date_fmt = price_date_raw
+            result["price_date"] = price_date_fmt
+            try:
+                pd_dt = datetime.datetime.strptime(price_date_fmt, "%Y-%m-%d")
+                result["price_days_old"] = (datetime.datetime.now() - pd_dt).days
+            except Exception:
+                pass
+    except Exception:
+        pass
     return jsonify(result)
 
 @app.route("/api/stocks/compare")
@@ -440,8 +474,9 @@ def api_stock_analysis(code: str):
 
     if request.method == "GET":
         row = _db.load_report(code)
-        if row is None or not stock or row.get("input_hash") != current_input_hash:
+        if row is None:
             return jsonify({"error": "No report"}), 404
+        stale = bool(stock and row.get("input_hash") != current_input_hash)
         return jsonify({
             "report_html": row.get("report_html", ""),
             "scores": json.loads(row.get("scores_json") or "{}"),
@@ -449,6 +484,7 @@ def api_stock_analysis(code: str):
             "generated_date": row.get("generated_date", ""),
             "diff_html": row.get("diff_html") or None,
             "mode": "claude",
+            "stale": stale,
         })
     # POST – 백그라운드에서 보고서 생성 시작
     with _analysis_tasks_lock:

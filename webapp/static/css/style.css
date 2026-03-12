@@ -15,10 +15,20 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 #screen-tabs .nav-link.active { font-weight: 700; border-bottom: none; }
 
 /* Table */
-#stock-table th { cursor: pointer; user-select: none; white-space: nowrap; font-size: .78rem; background: #343a40; color: #fff; }
+#stock-table { table-layout: auto; }
+#stock-table th { cursor: pointer; user-select: none; white-space: nowrap; font-size: .78rem; background: #343a40; color: #fff; position: relative; padding-left: 8px; padding-right: 16px; }
 #stock-table th:hover { background: #343a40; }
 #stock-table th .sort-arrow { margin-left: 3px; font-size: .65rem; }
 #stock-table td { vertical-align: middle; font-size: .78rem; white-space: nowrap; }
+
+/* Column resize handle */
+.col-resize-handle {
+  position: absolute; right: 0; top: 0; width: 5px; height: 100%;
+  cursor: col-resize; z-index: 20; background: transparent;
+}
+.col-resize-handle:hover,
+.col-resize-handle.active { background: rgba(13, 110, 253, 0.5); }
+body.col-resizing, body.col-resizing * { cursor: col-resize !important; user-select: none !important; }
 #stock-tbody tr { cursor: pointer; }
 #stock-tbody tr:hover { background-color: #e9ecef !important; }
 
@@ -703,4 +713,38 @@ tr.tx-adjust td:first-child { border-left: 3px solid #6c757d; }
   border: 1px solid #ffc107;
   border-radius: 6px;
   font-size: 0.85rem;
+}
+
+/* ── 고정 컬럼 (좌우 스크롤 시 틀 고정) ─────────────────────────────── */
+td.sticky-col,
+#table-header th.sticky-col {
+  box-sizing: border-box;
+}
+td.sticky-col {
+  position: sticky;
+  z-index: 2;
+  background-color: #fff !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.table-striped > tbody > tr:nth-of-type(odd) > td.sticky-col {
+  background-color: #f2f2f2 !important;
+}
+.table-hover > tbody > tr:hover > td.sticky-col {
+  background-color: #e9ecef !important;
+}
+tr.row-new > td.sticky-col {
+  background-color: rgba(25, 135, 84, 0.04) !important;
+  /* row-new은 투명도가 매우 낮아 거의 흰색이므로 겹침 문제 없음 */
+  background-color: #f6fbf8 !important;
+}
+#table-header th.sticky-col {
+  position: sticky;
+  z-index: 13;        /* thead sticky(10) + sticky-col(2) + extra */
+  background-color: #212529 !important;
+  color: #fff;
+}
+/* 마지막 고정 컬럼 우측 그림자 */
+.sticky-col-last {
+  box-shadow: 3px 0 6px -1px rgba(0, 0, 0, 0.18);
 }

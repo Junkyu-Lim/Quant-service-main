@@ -22,6 +22,13 @@
   let pipelineStartTime = null;
   let tabCounts         = {};
   let reportMap         = {};  // { "005930": {model, date}, ... }
+  // 과열도·상승조짐 뱃지 절대 임계값
+  const _BADGE_TH = { oh: { watch: 45, caution: 60, hot: 75 }, br: { interest: 40, breakout: 55 } };
+  let _badgeFilter      = "";   // "" | "관심" | "경계"
+  let _stickyOffsets    = null; // { indices: Set, offsets: Map<idx,px>, lastIdx }
+
+  // 틀 고정 대상 컬럼 키 (모든 탭 공통)
+  const STICKY_KEYS = new Set(["종목코드", "종목명", "섹터", "시장구분", "종가", "시가총액"]);
 
   // ─── 탭 기본 정렬 ─────────────────────────────────────────────────────
   const TAB_DEFAULT_SORT = {
@@ -1568,6 +1575,7 @@
     if (sectors.length)  params.set("sectors", sectors.join(","));
     if (q)          params.set("q", q);
     if (codesParam) params.set("codes", codesParam);
+    if (_badgeFilter) params.set("badge", _badgeFilter);
 
     // Advanced Filter 파라미터
     Object.entries(columnFilters).forEach(([col, { min, max }]) => {
@@ -1598,7 +1606,7 @@
   function renderTable(items) {
     // 포트폴리오 탭에서 설정된 fixed layout 원복
     const tableEl2 = document.getElementById("stock-table");
-    if (tableEl2) { tableEl2.style.tableLayout = ""; tableEl2.style.minWidth = "1000px"; }
+    if (tableEl2) { tableEl2.style.minWidth = "1000px"; }
     const cg = tableEl2?.querySelector("colgroup");
     if (cg) cg.remove();
 
@@ -1616,9 +1624,9 @@
       const code    = s["종목코드"];
       const watched = wl.has(code);
       const isNew   = newCodes.has(code);
-      const pfBtn    = `<td class="text-center p-1"><button class="btn btn-sm btn-outline-info pf-add-btn" data-code="${code}" data-name="${(s["종목명"]||"").replace(/"/g,"&quot;")}" style="font-size:.6rem;padding:1px 4px;line-height:1.2;">+PF</button></td>`;
-      const compareCb = `<td class="text-center p-1"><input type="checkbox" class="compare-cb" data-code="${code}" ${compareSet.has(code) ? "checked" : ""}></td>`;
-      const star      = `<td class="text-center p-1"><button class="watch-btn${watched ? " watched" : ""}" data-code="${code}">${watched ? "★" : "☆"}</button></td>`;
+      const pfBtn    = `<td class="text-center p-1" style="min-width:44px;width:44px"><button class="btn btn-sm btn-outline-info pf-add-btn" data-code="${code}" data-name="${(s["종목명"]||"").replace(/"/g,"&quot;")}" style="font-size:.6rem;padding:1px 4px;line-height:1.2;">+PF</button></td>`;
+      const compareCb = `<td class="text-center p-1" style="min-width:30px;width:30px"><input type="checkbox" class="compare-cb" data-code="${code}" ${compareSet.has(code) ? "checked" : ""}></td>`;
+      const star      = `<td class="text-center p-1" style="min-width:34px;width:34px"><button class="watch-btn${watched ? " watched" : ""}" data-code="${code}">${watched ? "★" : "☆"}</button></td>`;
       const groupStartSet = TAB_GROUP_STARTS[currentScreen] || new Set();
       const cells = cols.map(c => {
         let cls = groupStartSet.has(c.key) ? "wl-group-start" : "";
@@ -1643,13 +1651,13 @@
           const oh = s["과열도"];
           const br = s["상승조짐"];
           if (oh != null && oh !== "") {
-            if (oh >= 81)      overheatBadge = ` <span class="badge" style="background:#dc3545;color:#fff;font-size:.6rem;" title="과열도 ${oh}">과열</span>`;
-            else if (oh >= 61) overheatBadge = ` <span class="badge" style="background:#fd7e14;color:#fff;font-size:.6rem;" title="과열도 ${oh}">주의</span>`;
-            else if (oh >= 41) overheatBadge = ` <span class="badge" style="background:#ffc107;color:#000;font-size:.6rem;" title="과열도 ${oh}">경계</span>`;
+            if (oh >= _BADGE_TH.oh.hot)          overheatBadge = ` <span class="badge" style="background:#dc3545;color:#fff;font-size:.6rem;" title="과열도 ${oh} (${_BADGE_TH.oh.hot}+)">과열</span>`;
+            else if (oh >= _BADGE_TH.oh.caution) overheatBadge = ` <span class="badge" style="background:#fd7e14;color:#fff;font-size:.6rem;" title="과열도 ${oh} (${_BADGE_TH.oh.caution}+)">주의</span>`;
+            else if (oh >= _BADGE_TH.oh.watch)   overheatBadge = ` <span class="badge" style="background:#ffc107;color:#000;font-size:.6rem;" title="과열도 ${oh} (${_BADGE_TH.oh.watch}+)">경계</span>`;
           }
           if (br != null && br !== "") {
-            if (br >= 70)      breakoutBadge = ` <span class="badge" style="background:#0d6efd;color:#fff;font-size:.6rem;" title="상승조짐 ${br}">조짐</span>`;
-            else if (br >= 50) breakoutBadge = ` <span class="badge" style="background:#6ea8fe;color:#000;font-size:.6rem;" title="상승조짐 ${br}">관심</span>`;
+            if (br >= _BADGE_TH.br.breakout)      breakoutBadge = ` <span class="badge" style="background:#0d6efd;color:#fff;font-size:.6rem;" title="상승조짐 ${br} (${_BADGE_TH.br.breakout}+)">조짐</span>`;
+            else if (br >= _BADGE_TH.br.interest) breakoutBadge = ` <span class="badge" style="background:#6ea8fe;color:#000;font-size:.6rem;" title="상승조짐 ${br} (${_BADGE_TH.br.interest}+)">관심</span>`;
           }
         }
         return `<td class="${cls}">${fmt(s[c.key], c.fmt)}${newBadge}${aiBadge}${overheatBadge}${breakoutBadge}</td>`;
@@ -1672,15 +1680,202 @@
         openDetail(tr.dataset.code);
       })
     );
+    applyStickyBody();
     initTooltips();
+  }
+
+  // ─── 컬럼 리사이즈 ──────────────────────────────────────────────────
+  let _resizeState = null;
+
+  function initColumnResize() {
+    const ths = document.querySelectorAll("#table-header tr th");
+    ths.forEach(th => {
+      // 기존 핸들 제거
+      th.querySelectorAll(".col-resize-handle").forEach(h => h.remove());
+      const handle = document.createElement("div");
+      handle.className = "col-resize-handle";
+      handle.addEventListener("mousedown", e => {
+        e.preventDefault();
+        e.stopPropagation();
+        _startResize(th, e.pageX);
+      });
+      th.appendChild(handle);
+    });
+  }
+
+  function _startResize(th, startX) {
+    const thIdx = Array.from(th.parentElement.children).indexOf(th);
+    const startW = th.offsetWidth;
+    document.body.classList.add("col-resizing");
+    th.querySelector(".col-resize-handle")?.classList.add("active");
+
+    _resizeState = { th, thIdx, startX, startW };
+
+    const onMove = e => {
+      if (!_resizeState) return;
+      const diff = e.pageX - _resizeState.startX;
+      const newW = Math.max(28, _resizeState.startW + diff);
+      _applyColWidth(_resizeState.thIdx, newW);
+    };
+
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.classList.remove("col-resizing");
+      th.querySelector(".col-resize-handle")?.classList.remove("active");
+      // sticky 컬럼이면 left 재계산
+      if (_resizeState) {
+        _updateStickyAfterResize();
+        _resizeState = null;
+      }
+    };
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+
+  function _applyColWidth(colIdx, width) {
+    const px = width + "px";
+    // header
+    const ths = document.querySelectorAll("#table-header tr th");
+    if (ths[colIdx]) {
+      ths[colIdx].style.width = px;
+      ths[colIdx].style.minWidth = px;
+      ths[colIdx].style.maxWidth = px;
+    }
+    // body rows
+    document.querySelectorAll("#stock-tbody tr").forEach(tr => {
+      const td = tr.children[colIdx];
+      if (td) {
+        td.style.width = px;
+        td.style.minWidth = px;
+        td.style.maxWidth = px;
+      }
+    });
+  }
+
+  function _updateStickyAfterResize() {
+    if (!_stickyOffsets) return;
+    const { indices, lastIdx } = _stickyOffsets;
+    const ths = document.querySelectorAll("#table-header tr th");
+    const sortedIndices = [...indices].sort((a, b) => a - b);
+    const offsets = new Map();
+    const widths = new Map();
+    let left = 0;
+    sortedIndices.forEach(i => {
+      if (!ths[i]) return;
+      const w = ths[i].offsetWidth;
+      offsets.set(i, left);
+      widths.set(i, w);
+      ths[i].style.left = left + "px";
+      left += w;
+    });
+    _stickyOffsets = { indices, lastIdx, offsets, widths };
+    // body rows도 left 갱신
+    document.querySelectorAll("#stock-tbody tr").forEach(tr => {
+      const tds = tr.querySelectorAll("td");
+      indices.forEach(i => {
+        if (!tds[i]) return;
+        tds[i].style.left = (offsets.get(i) ?? 0) + "px";
+      });
+    });
+  }
+
+  // ─── 틀 고정 컬럼 ────────────────────────────────────────────────────
+  function _computeStickyIndices() {
+    // 제어 컬럼 3개 (+PF, checkbox, ★) + 데이터 컬럼 중 STICKY_KEYS에 해당하는 연속된 컬럼
+    const indices = new Set([0, 1, 2]);
+    const cols = COLUMNS[currentScreen] || COLUMNS.all;
+    let consecutive = true;
+    cols.forEach((col, i) => {
+      if (consecutive && STICKY_KEYS.has(col.key)) {
+        indices.add(i + 3); // +3 for control cols
+      } else {
+        consecutive = false;
+      }
+    });
+    return indices;
+  }
+
+  // 고정 컬럼 사전 정의 너비 (px) – offsetWidth 측정 전 초기 레이아웃용
+  const STICKY_COL_WIDTHS = {
+    _pf: 36, _cb: 26, _star: 28,
+    "종목코드": 58, "종목명": 100, "섹터": 72, "시장구분": 58,
+    "종가": 68, "시가총액": 78,
+  };
+
+  function applyStickyHeader() {
+    const ths = document.querySelectorAll("#table-header tr th");
+    if (!ths.length) return;
+    ths.forEach(th => {
+      th.classList.remove("sticky-col", "sticky-col-last");
+      th.style.left = "";
+      th.style.minWidth = "";
+      th.style.maxWidth = "";
+      th.style.width = "";
+    });
+
+    const indices = _computeStickyIndices();
+    const lastIdx = Math.max(...indices);
+    const cols = COLUMNS[currentScreen] || COLUMNS.all;
+    const ctrlKeys = ["_pf", "_cb", "_star"];
+
+    // 사전 정의 너비로 고정 (offsetWidth 의존 제거 → 누적 증가 방지)
+    const sortedIndices = [...indices].sort((a, b) => a - b);
+    const offsets = new Map();
+    const widths = new Map();
+    let left = 0;
+    sortedIndices.forEach(i => {
+      if (!ths[i]) return;
+      const key = i < 3 ? ctrlKeys[i] : (cols[i - 3]?.key);
+      const w = STICKY_COL_WIDTHS[key] || 80;
+      ths[i].classList.add("sticky-col");
+      if (i === lastIdx) ths[i].classList.add("sticky-col-last");
+      ths[i].style.width = w + "px";
+      ths[i].style.minWidth = w + "px";
+      ths[i].style.maxWidth = w + "px";
+      ths[i].style.left = left + "px";
+      offsets.set(i, left);
+      widths.set(i, w);
+      left += w;
+    });
+
+    _stickyOffsets = { indices, lastIdx, offsets, widths };
+  }
+
+  function applyStickyBody() {
+    if (!_stickyOffsets) return;
+    const { indices, lastIdx, offsets, widths } = _stickyOffsets;
+
+    document.querySelectorAll("#stock-tbody tr").forEach(tr => {
+      const tds = tr.querySelectorAll("td");
+      indices.forEach(i => {
+        if (!tds[i]) return;
+        const w = widths.get(i) || 80;
+        tds[i].classList.add("sticky-col");
+        tds[i].style.left = (offsets.get(i) ?? 0) + "px";
+        tds[i].style.width = w + "px";
+        tds[i].style.minWidth = w + "px";
+        tds[i].style.maxWidth = w + "px";
+        if (i === lastIdx) tds[i].classList.add("sticky-col-last");
+      });
+    });
   }
 
   // ─── 헤더 구성 ────────────────────────────────────────────────────────
   function buildHeader() {
     const cols = COLUMNS[currentScreen] || COLUMNS.all;
-    // 컬럼 수에 따라 테이블 최소 너비 동적 설정 (횡스크롤)
+    // 컬럼 레이블 길이 기반 최소 너비 계산 (한글 약 9px, 영문 약 7px, padding 포함)
     const tbl = document.getElementById("stock-table");
-    if (tbl) tbl.style.minWidth = Math.max(1000, cols.length * 95 + 120) + "px";
+    if (tbl) { tbl.style.tableLayout = "auto"; const cg = tbl.querySelector("colgroup"); if (cg) cg.remove(); }
+    if (tbl) {
+      const estimatedWidth = cols.reduce((sum, c) => {
+        const label = c.label || "";
+        const charW = [...label].reduce((s, ch) => s + (/[\u3131-\uD7A3]/.test(ch) ? 10 : 7.5), 0);
+        return sum + Math.max(52, charW + 24); // padding + sort arrow
+      }, 44 + 30 + 34); // +PF col + checkbox col + ★ col
+      tbl.style.minWidth = Math.max(900, estimatedWidth) + "px";
+    }
     // 탭별 그룹 경계 컬럼 (왼쪽 굵은 선) 및 레이블 정의
     const TAB_GROUP_STARTS = {
       all:            ["PER", "ROE(%)", "영업이익_CAGR", "부채비율(%)", "수급강도", "배당수익률(%)", "종합점수"],
@@ -1732,7 +1927,7 @@
     const WL_GROUP_STARTS = new Set(TAB_GROUP_STARTS[currentScreen] || []);
     const WL_GROUP_LABELS = TAB_GROUP_LABELS[currentScreen] || {};
     headerRow.innerHTML =
-      `<tr><th width="30" class="text-center small text-muted">+PF</th><th width="20" class="text-center small text-muted"></th><th width="30">★</th>` +
+      `<tr><th style="min-width:44px;width:44px" class="text-center small text-muted">+PF</th><th style="min-width:30px;width:30px" class="text-center small text-muted"></th><th style="min-width:34px;width:34px">★</th>` +
       cols.map(c => {
         const arrow = sortCol === c.key ? (sortOrder === "desc" ? " ↓" : " ↑") : "";
         const tip = METRIC_TOOLTIPS[c.key]
@@ -1742,8 +1937,13 @@
         return `<th data-col="${c.key}" class="${groupBorder}" style="cursor:pointer; user-select:none;"${tip}>${groupLabel}${c.label}<span class="sort-arrow text-muted small">${arrow}</span></th>`;
       }).join("") + `</tr>`;
 
+    applyStickyHeader();
+    initColumnResize();
+
     headerRow.querySelectorAll("th[data-col]").forEach(th => {
-      th.addEventListener("click", () => {
+      th.addEventListener("click", (e) => {
+        // 리사이즈 핸들 클릭은 정렬 무시
+        if (e.target.classList.contains("col-resize-handle")) return;
         const col = th.dataset.col;
         if (sortCol === col) {
           // 3-state: Desc -> Asc -> Reset (Default)
@@ -1835,15 +2035,16 @@
     }).join("");
 
     // 분석 버튼에 code 설정
-    const claudeBtn = document.getElementById("btn-analysis-claude");
-    claudeBtn.dataset.code = code;
+    const claudeBtn  = document.getElementById("btn-analysis-claude");
+    const viewRepBtn = document.getElementById("btn-view-report");
+    claudeBtn.dataset.code  = code;
+    if (viewRepBtn) viewRepBtn.dataset.code = code;
 
-    // 보고서 캐시 상태를 버튼에 반영
+    // 보고서 유무에 따라 버튼 표시 분리
     claudeBtn.classList.remove("has-report");
     claudeBtn.innerHTML = "🤖 Claude AI 분석";
-    if (rep) {
-      claudeBtn.innerHTML = "✓ Claude AI 분석 (캐시됨)";
-      claudeBtn.classList.add("has-report");
+    if (viewRepBtn) {
+      viewRepBtn.style.display = rep ? "" : "none";
     }
 
     // 점수 브레이크다운 렌더링
@@ -2162,9 +2363,12 @@
           }
         });
       }
-      document.getElementById("report-content").innerHTML = data.report_html || "";
+      const staleWarning = data.stale
+        ? `<div class="alert alert-warning py-2 mb-3">⚠️ 데이터가 업데이트되었습니다. 최신 데이터 반영을 위해 재분석을 권장합니다.</div>`
+        : "";
+      document.getElementById("report-content").innerHTML = staleWarning + (data.report_html || "");
       document.getElementById("report-meta").textContent  =
-        `${data.model || ""} · ${data.generated_date || ""}`;
+        `${data.model || ""} · ${data.generated_date || ""}${data.stale ? " (구버전)" : ""}`;
       const paddedCode = code.toString().padStart(6, "0");
       reportMap[paddedCode] = { model: data.model || "", date: data.generated_date || "" };
       const nameCell = document.querySelector(`tr[data-code="${paddedCode}"] td:nth-child(3)`);
@@ -2199,18 +2403,20 @@
     }
   }
 
-  async function requestAnalysis(code, mode, forceRegenerate) {
-    // 이미 같은 종목 분석 진행 중 → 모달만 열어서 진행 상태 보여줌
-    if (_analysisRunningCode === code) {
+  // viewOnly=true: 기존 보고서 조회만 (새 분석 시작 안 함)
+  // viewOnly=false(기본): 항상 새 분석 시작
+  async function requestAnalysis(code, mode, viewOnly) {
+    // 이미 같은 종목 분석 진행 중
+    if (_analysisRunningCode === code && !viewOnly) {
+      // 새 분석 요청이면 모달만 열고 진행 상태 표시
       const name = (currentDetailData && currentDetailData["종목명"]) || code;
       const reportModal = bootstrap.Modal.getOrCreateInstance(document.getElementById("report-modal"));
       reportModal.show();
       document.getElementById("report-title").textContent = `AI 분석 보고서 — ${name}`;
-      // 로딩 UI가 이미 표시 중이므로 그대로 둠
       return;
     }
-    // 다른 종목 분석 진행 중
-    if (_analysisRunningCode !== null) {
+    // 다른 종목 분석 진행 중이고 새 분석 시작하려는 경우
+    if (_analysisRunningCode !== null && _analysisRunningCode !== code && !viewOnly) {
       const runningLabel = _analysisRunningName || _analysisRunningCode;
       alert(`[${runningLabel}] AI 분석이 진행 중입니다. 완료 후 다시 시도해주세요.`);
       return;
@@ -2229,19 +2435,32 @@
     document.getElementById("report-meta").textContent    = "";
     document.getElementById("report-loading-text").textContent = "Claude로 심층 분석 중...";
 
-    // 캐시 확인 (재생성 시 건너뜀)
-    if (!forceRegenerate) {
+    // 보고서 조회 (viewOnly: 기존 보고서만 보여줌)
+    if (viewOnly) {
+      const isRunningForThisCode = _analysisRunningCode === code;
+      const runningBanner = isRunningForThisCode
+        ? `<div class="alert alert-info py-2 mb-3">⏳ 현재 이 종목을 분석 중입니다. 완료 후 보고서가 업데이트됩니다.</div>`
+        : "";
       try {
         const getRes = await fetch(`/api/stocks/${code}/analysis`);
         if (getRes.ok) {
           const cached = await getRes.json();
-          if (cached.mode === mode) {
-            document.getElementById("report-loading").style.display = "none";
-            _showAnalysisResult(code, mode, cached);
-            return;
+          document.getElementById("report-loading").style.display = "none";
+          _showAnalysisResult(code, mode, cached);
+          if (runningBanner) {
+            document.getElementById("report-content").insertAdjacentHTML("afterbegin", runningBanner);
           }
+        } else {
+          document.getElementById("report-loading").style.display = "none";
+          document.getElementById("report-content").innerHTML = runningBanner ||
+            `<div class="alert alert-warning">저장된 보고서가 없습니다. 'Claude AI 분석' 버튼으로 새로 분석하세요.</div>`;
         }
-      } catch { /* 캐시 없으면 생성으로 진행 */ }
+      } catch (e) {
+        document.getElementById("report-loading").style.display = "none";
+        document.getElementById("report-content").innerHTML =
+          `<div class="alert alert-danger">보고서 조회 실패: ${e.message}</div>`;
+      }
+      return;
     }
 
     // 서버에 백그라운드 분석 시작 요청
@@ -3173,7 +3392,23 @@
     document.getElementById("f-market").value = "";
     setSelectedSectors([]);
     document.getElementById("f-search").value = "";
+    _badgeFilter = "";
+    document.querySelectorAll("#badge-filter-group [data-badge]").forEach(b =>
+      b.classList.toggle("active", b.dataset.badge === "")
+    );
     currentPage = 1; loadStocks();
+  });
+
+  // ─── 뱃지 필터 버튼 ──────────────────────────────────────────────────
+  document.getElementById("badge-filter-group")?.querySelectorAll("[data-badge]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      _badgeFilter = btn.dataset.badge;
+      document.querySelectorAll("#badge-filter-group [data-badge]").forEach(b =>
+        b.classList.toggle("active", b.dataset.badge === _badgeFilter)
+      );
+      currentPage = 1;
+      loadStocks();
+    });
   });
 
   document.getElementById("f-pagesize")?.addEventListener("change", () => {
@@ -3964,9 +4199,14 @@
     });
   });
 
-  // AI 분석 버튼
+  // AI 보고서 보기 버튼 (기존 보고서 조회만, 새 분석 시작 안 함)
+  document.getElementById("btn-view-report").addEventListener("click", function () {
+    requestAnalysis(this.dataset.code || currentDetailCode, "claude", true);
+  });
+
+  // AI 분석 버튼 (항상 새로 분석 시작)
   document.getElementById("btn-analysis-claude").addEventListener("click", function () {
-    requestAnalysis(this.dataset.code || currentDetailCode, "claude");
+    requestAnalysis(this.dataset.code || currentDetailCode, "claude", false);
   });
 
   // 이전 보고서 선택
@@ -3979,7 +4219,7 @@
   // 보고서 재생성 / PDF
   document.getElementById("btn-regenerate").addEventListener("click", function () {
     if (this.dataset.code && this.dataset.mode) {
-      requestAnalysis(this.dataset.code, this.dataset.mode, true);
+      requestAnalysis(this.dataset.code, this.dataset.mode, false);
     }
   });
   document.getElementById("btn-pdf").addEventListener("click", () => {
@@ -4009,6 +4249,17 @@
       sortCol       = TAB_DEFAULT_SORT[currentScreen];
       sortOrder     = "desc";
       currentPage   = 1;
+
+      // 필터 초기화
+      document.getElementById("f-market").value = "";
+      document.getElementById("f-search").value = "";
+      setSelectedSectors([]);
+      Object.keys(columnFilters).forEach(k => delete columnFilters[k]);
+      _badgeFilter = "";
+      document.querySelectorAll("#badge-filter-group [data-badge]").forEach(b =>
+        b.classList.toggle("active", b.dataset.badge === "")
+      );
+      updateAdvButton();
 
       // 포트폴리오 ↔ 일반 탭 전환 시 요약 바/마켓 요약 토글
       if (currentScreen === "portfolio") {
@@ -4139,21 +4390,34 @@
       const info = await res.json();
       const el   = document.getElementById("data-quality-badge");
       if (!el) return;
-      const days = info.days_old;
-      const mtime = info.db_mtime || "";
-      const quarter = info.latest_quarter ? ` · ${info.latest_quarter}` : "";
-      const count = info.stock_count ? ` · ${info.stock_count.toLocaleString()}종목` : "";
-      if (days === null) { el.style.display = "none"; return; }
+      // price_date 우선, 없으면 db_mtime fallback
+      const priceDate    = info.price_date || "";
+      const dbMtime      = info.db_mtime || "";
+      const baseDate     = priceDate || dbMtime.split(" ")[0] || "";
+      const daysOld      = info.price_days_old ?? info.days_old;
+      const quarter      = info.latest_quarter ? ` · ${info.latest_quarter}` : "";
+      const count        = info.stock_count ? ` · ${info.stock_count.toLocaleString()}종목` : "";
+      if (!baseDate && !info.stock_count) { el.style.display = "none"; return; }
       el.style.display = "";
-      if (days >= 30) {
-        el.innerHTML = `<span class="badge bg-danger" title="마지막 수집: ${mtime}">⚠ ${days}일 전 수집${count}${quarter}</span>`;
-      } else if (days >= 7) {
-        el.innerHTML = `<span class="badge bg-warning text-dark" title="마지막 수집: ${mtime}">${days}일 전 수집${count}${quarter}</span>`;
+      const label = priceDate ? `주가 ${priceDate}` : (baseDate ? `DB ${baseDate}` : "데이터 있음");
+      const tooltip = priceDate ? `주가 기준일: ${priceDate}${count}${quarter}`
+                                : `DB 갱신일: ${dbMtime}${count}${quarter}`;
+      if (daysOld === null || daysOld === undefined || daysOld <= 3) {
+        el.innerHTML = `<span class="badge bg-success" title="${tooltip}">📅 ${label}${count}</span>`;
+      } else if (daysOld <= 7) {
+        el.innerHTML = `<span class="badge bg-warning text-dark" title="${tooltip}">📅 ${label} (${daysOld}일 전)${count}</span>`;
       } else {
-        el.innerHTML = `<span class="badge bg-success" title="마지막 수집: ${mtime}">최신 데이터${count}${quarter}</span>`;
+        el.innerHTML = `<span class="badge bg-danger" title="${tooltip}">⚠ ${label} (${daysOld}일 전)${count}</span>`;
       }
     } catch (e) { /* 무시 */ }
   }
+
+  /**
+   * 종목의 과열도·상승조짐 뱃지 임계값 반환 (절대 기준).
+   * 섹터 → 시장 → 전체 순으로 fallback.
+   * @returns {{ oh: {watch,caution,hot}, br: {interest,breakout} }}
+   */
+  function getBadgeThresholds() { return _BADGE_TH; }
 
   // ─── 보고서 맵 ────────────────────────────────────────────────────────
   async function loadReportMap() {
@@ -4172,7 +4436,7 @@
   loadDataInfo();
   loadPortfolio();
   updateWatchlistCount();
-  // reportMap을 먼저 로드한 뒤 테이블 렌더 → AI 배지 누락 방지
+  // signalStats + reportMap을 먼저 로드한 뒤 테이블 렌더 → 뱃지 임계값 & AI 배지 누락 방지
   loadReportMap().then(() => loadStocks());
 
   // 모달 닫힐 때 backdrop 잔존 방지 (report-modal, detail-modal 공통)

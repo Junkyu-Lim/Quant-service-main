@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <title>Quant Dashboard (5-Strategy)</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/style.css?v=17">
+  <link rel="stylesheet" href="/static/css/style.css?v=21">
   <style>
     .val-pos { color: #d63384; font-weight: 600; }
     .val-neg { color: #0d6efd; font-weight: 600; }
@@ -172,6 +172,12 @@
           <button type="submit" class="btn btn-sm btn-secondary">검색</button>
           <button type="button" class="btn btn-sm btn-outline-secondary" id="btn-clear">초기화</button>
           <button type="button" class="btn btn-sm btn-outline-info" id="btn-adv-toggle">Advanced ▼</button>
+          <div class="btn-group btn-group-sm ms-1" id="badge-filter-group" role="group" title="뱃지 기준 필터 (절대 기준)">
+            <button type="button" class="btn btn-outline-secondary active" data-badge="">전체</button>
+            <button type="button" class="btn btn-outline-primary" data-badge="관심" title="상승조짐 40+">관심</button>
+            <button type="button" class="btn btn-outline-info" data-badge="조짐" title="상승조짐 55+">조짐</button>
+            <button type="button" class="btn btn-outline-warning" data-badge="경계" title="과열도 45+">경계</button>
+          </div>
           <button type="button" class="btn btn-sm btn-outline-success" id="btn-export-csv" style="display:none;" title="현재 목록 CSV 다운로드">↓ CSV</button>
         </form>
         <div id="page-info" class="small text-muted"></div>
@@ -255,8 +261,9 @@
         </div>
 
         <div class="row g-2 mb-3">
-          <div class="col-12">
-            <button class="btn w-100" id="btn-analysis-claude" style="border-color:#6f42c1; color:#6f42c1;">🤖 Claude AI 분석</button>
+          <div class="col-12" id="btn-analysis-wrap">
+            <button class="btn w-100" id="btn-view-report" style="border-color:#6f42c1; color:#6f42c1; display:none;">📄 AI 분석 보고서 보기</button>
+            <button class="btn w-100 mt-1" id="btn-analysis-claude" style="border-color:#6f42c1; color:#6f42c1;">🤖 Claude AI 분석</button>
           </div>
         </div>
 
@@ -505,6 +512,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script src="/static/js/dashboard.js?v=18"></script>
+<script src="/static/js/dashboard.js?v=23"></script>
 </body>
 </html>
