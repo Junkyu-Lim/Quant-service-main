@@ -156,6 +156,14 @@ _SCHEMA_STATEMENTS = [
     saved_at        TEXT
 )""",
     """CREATE SEQUENCE IF NOT EXISTS seq_portfolio_analysis START 1""",
+    """CREATE TABLE IF NOT EXISTS macro_analysis (
+    id             INTEGER PRIMARY KEY,
+    scores_json    TEXT NOT NULL,
+    model_used     TEXT,
+    generated_date TEXT NOT NULL,
+    saved_at       TEXT
+)""",
+    """CREATE SEQUENCE IF NOT EXISTS seq_macro_analysis START 1""",
     """CREATE TABLE IF NOT EXISTS portfolio_cash (
     id         INTEGER PRIMARY KEY DEFAULT 1,
     amount     DOUBLE NOT NULL DEFAULT 0,
@@ -270,6 +278,9 @@ _SCHEMA_STATEMENTS = [
     "ROIC_전년(%)" DOUBLE,
     ROIC_개선     INTEGER,
     "퀄리티_턴어라운드" INTEGER,
+    "매출이익_동행성" INTEGER,
+    "지속가치_품질"   INTEGER,
+    "가치함정_경고"   INTEGER,
     섹터          TEXT
 )""",
 ]
@@ -813,6 +824,49 @@ def load_portfolio_analysis_by_id(report_id: int) -> dict | None:
         try:
             cur = conn.execute(
                 "SELECT * FROM portfolio_analysis WHERE id = ?", [report_id]
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            cols = [d[0] for d in cur.description]
+            return dict(zip(cols, row))
+        except Exception:
+            return None
+
+
+# ── Macro Analysis ──────────────────────────────────────────────────────
+
+def save_macro_analysis(scores_json: str, model: str, date: str):
+    """매크로 AI 분석 결과 저장 (최대 10건 이력 유지)"""
+    from datetime import datetime
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_conn() as conn:
+        new_id = conn.execute(
+            "SELECT COALESCE(MAX(id), 0) + 1 FROM macro_analysis"
+        ).fetchone()[0]
+        conn.execute(
+            """INSERT INTO macro_analysis (id, scores_json, model_used, generated_date, saved_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            [new_id, scores_json, model, date, now],
+        )
+        old_ids = conn.execute(
+            "SELECT id FROM macro_analysis ORDER BY id DESC OFFSET 10"
+        ).fetchall()
+        if old_ids:
+            ids_to_del = [r[0] for r in old_ids]
+            conn.execute(
+                f"DELETE FROM macro_analysis WHERE id IN ({','.join('?' * len(ids_to_del))})",
+                ids_to_del,
+            )
+    log.info("매크로 분석 저장 완료 (id=%d)", new_id)
+
+
+def load_macro_analysis() -> dict | None:
+    """최신 매크로 AI 분석 결과 조회"""
+    with get_conn() as conn:
+        try:
+            cur = conn.execute(
+                "SELECT * FROM macro_analysis ORDER BY id DESC LIMIT 1"
             )
             row = cur.fetchone()
             if row is None:

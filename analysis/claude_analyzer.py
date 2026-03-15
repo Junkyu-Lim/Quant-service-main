@@ -29,7 +29,7 @@ import db as _db
 import config
 
 log = logging.getLogger("Analyzer")
-ANALYSIS_INPUT_VERSION = "stock-analysis-v3"
+ANALYSIS_INPUT_VERSION = "stock-analysis-v5"
 
 # ─────────────────────────────────────────
 # 프롬프트 템플릿
@@ -79,12 +79,9 @@ SYSTEM_PROMPT = """\
 - USER_PROMPT에 "동종업계 Peer DB 데이터" 섹션이 있으면 그 값을 peer_comparison.peers에 그대로 사용 (웹 추정 금지)
 - DB 데이터 없을 때만 웹 검색으로 보완. 지표별 대상 종목 상대 순위 명시. 저평가/적정/고평가 판정. 더 매력적 대안이 있으면 솔직히 언급.
 
-## 웹 검색 (최대 5회)
-1. "{종목명} 실적 공시 뉴스 {연도}" → Stage 1·5에 반영
-2. "site:dart.fss.or.kr {종목명}" → DART 공시·위험요인 → Stage 3·4·risks에 반영
-3. "{종목명} 증권사 리포트 목표주가 {연도}" → 컨센서스 → Stage 5·8에 반영
-4. "{종목명} 주요주주 지분변동 배당 자사주 {연도}" → Stage 5에 반영
-5. "{산업명} 시장 전망 동향 {연도}" → Stage 1에 반영
+## 웹 검색 (최대 2회)
+1. [필수] "{종목명} 실적 영업이익 {연도}" → 최신 실적·뉴스 → Stage 5·recent_news에 반영
+2. [필수] "{종목명} 증권사 리포트 목표주가" → 컨센서스 → Stage 5·8에 반영
 검색 결과는 분석 근거에 구체적으로 인용하세요.
 
 ## 근거 인용 규칙 (중요)
@@ -93,14 +90,20 @@ SYSTEM_PROMPT = """\
 - 같은 사실을 여러 출처가 다루면 더 상위 출처를 먼저 recent_news에 배치
 - recent_news 각 항목은 날짜(date), 출처(source), 핵심 사실 1개 이상을 반드시 포함
 - 핵심 사실에는 가능한 한 수치 1개 이상을 포함 (예: 매출, 영업이익, 점유율, 목표주가, 수주금액, CAPEX)
-- stage5_outlook.analysis는 3~5문장 모두를 근거 중심으로 작성하고, 최소 2문장 이상에 날짜 또는 출처명을 포함
+- stage5_outlook.analysis는 2~4문장으로 근거 중심 작성하고, 최소 2문장 이상에 날짜 또는 출처명을 포함
 - stage5_outlook.analysis와 summary의 핵심 주장(실적 개선, 목표주가, 수주, 점유율, 주주환원, 산업 전망)은 가능하면 화이트리스트 출처 근거를 우선 사용
 - 일반 기사만 근거일 경우, DART/IR/증권사/주요 경제지로 교차확인되지 않은 핵심 수치는 과장하지 말고 보수적으로 서술
 - "전망", "기대", "가능성"만 반복하지 말고, 확인된 사실과 추정/의견을 구분해서 쓰세요
 - 출처 없는 업계 루머, 커뮤니티 글, 출처 불명 숫자는 사용 금지
 
-## recent_news (3~5건 필수)
-웹 검색에서 투자 판단에 중요한 뉴스·공시를 선별. 각 항목: title, date, summary(1~2문장), impact(긍정/부정/중립), source.
+## recent_news (3~4건 우선)
+웹 검색에서 투자 판단에 중요한 뉴스·공시를 선별. 각 항목: title, date, summary(1문장 우선), impact(긍정/부정/중립), source.
+
+## 가치함정 판별 (Stage 4 value_trap_risk 기준)
+- 매출이익_동행성=0(매출↑마진↓) → divergent, value_trap_risk≥medium
+- PER<8/PBR<0.7 + 지속가치_품질≤2 → "cheap for reason", value_trap_risk 상향
+- 현금전환율<50% → 이익 품질 의심, stage4 analysis에 언급
+- 지속가치_품질≥4 + 괴리율 양수 → "진정한 저평가", value_trap_risk=low
 
 ## 내부 일관성 (JSON 출력 전 자체 검증)
 1. moat_rating=none → fair_value_range PBR/BPS 보수적 산출, 성장 프리미엄 금지
@@ -109,9 +112,17 @@ SYSTEM_PROMPT = """\
 4. recent_news impact=부정 → risks에 반드시 반영
 5. peer relative_valuation=고평가 → entry_price는 현재가 대비 할인가 필수
 6. better_alternative≠null → summary에 대안 종목 언급 필수
+7. 매출이익_동행성=0(매출↑마진↓) → value_trap_risk를 medium 이상으로 설정, Buffett 점수 상한 6
+8. 매출이익_동행성=-1(매출↓마진↓) → value_trap_risk=high, Buffett/Dorsey 점수 각 상한 4
+9. 가치함정_경고=1 → summary에 "가치함정 리스크" 반드시 언급, portfolio_weight 상한 3%
 
 ## risks 필수 규칙
 단순 "경쟁 심화·금리·환율" 기재 금지 — 수치/사건 연결 필수. 재무 약점 1개 이상, severity=high 1개 이상, DART·뉴스 근거 1개 이상.
+
+## 출력 압축 규칙
+- JSON 외 텍스트 금지
+- 같은 수치·출처·문장을 recent_news, stage analysis, summary에 반복 복붙하지 마세요
+- 핵심 근거만 쓰고 불필요한 서론/수식어/상투 표현은 생략하세요
 
 """
 
@@ -123,6 +134,7 @@ USER_PROMPT_TEMPLATE = """\
 {qualitative_section}
 [환각 방지] 위 종목의 실제 핵심 사업을 웹 검색으로 먼저 확인하세요. 금융 데이터만 보고 업종을 추정하지 마세요.
 데이터 활용: PEG·매출CAGR·ROE→Lynch | 괴리율·SRIM적정가→Buffett | F스코어→Stage4 | RSI·MA이격도→코스톨라니 | TTM·CAGR→Stage2
+{length_guardrails}
 
 반드시 아래 JSON 형식으로만 응답하세요.
 
@@ -140,13 +152,13 @@ USER_PROMPT_TEMPLATE = """\
     "upstream_cagr": "<전방산업 성장률>",
     "value_chain_position": "<밸류체인 위치>",
     "competitive_advantages": "<경쟁우위>",
-    "analysis": "<3-5문장>"
+    "analysis": "<2-4문장>"
   }},
   "stage2_business_model": {{
     "p_times_q_analysis": "<P×Q×C 분석>",
     "cash_cow_drivers": "<캐시카우 사업부>",
     "growth_drivers": "<성장 동력>",
-    "analysis": "<3-5문장>"
+    "analysis": "<2-4문장>"
   }},
   "stage3_moat": {{
     "lifecycle_stage": "<도입기|성장기|성숙기|쇠퇴기>",
@@ -155,14 +167,16 @@ USER_PROMPT_TEMPLATE = """\
     "network_effects": {{"exists": false, "evidence": "<근거>"}},
     "cost_advantage": {{"exists": false, "evidence": "<근거>"}},
     "moat_rating": "<wide|narrow|none>",
-    "analysis": "<3-5문장>"
+    "analysis": "<2-4문장>"
   }},
   "stage4_financials": {{
     "gross_margin_trend": "<매출총이익률 추세>",
-    "fcf_quality": "<FCF 품질>",
+    "revenue_margin_comovement": "<co-growth|divergent|cost-cutting>",
+    "fcf_quality": "<FCF 품질 — OCF vs 순이익, FCF 방향>",
+    "value_trap_risk": "<low|medium|high>",
     "debt_assessment": "<부채 구조>",
     "consensus_deviation": "<컨센서스 대비>",
-    "analysis": "<3-5문장>"
+    "analysis": "<2-4문장 — ROIC/ROE 추세·FCF 품질·가치함정 여부 포함>"
   }},
   "peer_comparison": {{
     "peers": [
@@ -186,29 +200,29 @@ USER_PROMPT_TEMPLATE = """\
     }},
     "relative_valuation": "<저평가|적정|고평가>",
     "better_alternative": "<대안 종목과 이유, 없으면 null>",
-    "analysis": "<3-5문장>"
+    "analysis": "<2-4문장>"
   }},
   "stage5_outlook": {{
     "capex_signals": "<CAPEX 현황>",
     "order_backlog": "<수주잔고>",
     "new_business": "<신사업>",
     "catalysts_12m": ["<촉매1>", "<촉매2>", "<촉매3>"],
-    "analysis": "<3-5문장. 최소 2문장 이상은 날짜/출처/수치 포함>"
+    "analysis": "<2-4문장. 최소 2문장 이상은 날짜/출처/수치 포함>"
   }},
   "stage6_valuation": {{
     "lifecycle_matched_method": "<밸류에이션 방법론>",
     "fair_value_range": "<적정 주가 범위>",
     "kostolany_egg_position": <1-6>,
     "market_psychology": "<과열|중립|공포>",
-    "analysis": "<3-5문장>"
+    "analysis": "<2-4문장>"
   }},
   "stage7_masters": {{
-    "buffett": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<3-5문장>"}},
-    "damodaran": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<3-5문장>"}},
-    "fisher": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<3-5문장>"}},
-    "dorsey": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<3-5문장>"}},
-    "lynch": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<3-5문장>"}},
-    "kostolany": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<3-5문장>"}}
+    "buffett": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<2-3문장>"}},
+    "damodaran": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<2-3문장>"}},
+    "fisher": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<2-3문장>"}},
+    "dorsey": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<2-3문장>"}},
+    "lynch": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<2-3문장>"}},
+    "kostolany": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<2-3문장>"}}
   }},
   "stage8_action": {{
     "entry_price": "<진입 가격대(원)>",
@@ -219,14 +233,14 @@ USER_PROMPT_TEMPLATE = """\
     "portfolio_weight": "<권장 비중(예: 3-5%)>",
     "holding_period": "<단기3개월|중기6-12개월|장기2-3년>",
     "exit_conditions": ["<매도 조건1>", "<매도 조건2>"],
-    "analysis": "<2-3문장>"
+    "analysis": "<1-2문장>"
   }},
-  "summary": "<5-7문장 종합 투자 의견>",
+  "summary": "<4-5문장 종합 투자 의견>",
   "recent_news": [
     {{
       "title": "<제목>",
       "date": "<YYYY-MM-DD 또는 추정시기>",
-      "summary": "<1-2문장, 가능한 한 핵심 수치 1개 이상 포함>",
+      "summary": "<1문장, 가능한 한 핵심 수치 1개 이상 포함>",
       "impact": "<긍정|부정|중립>",
       "source": "<출처>"
     }}
@@ -242,6 +256,25 @@ USER_PROMPT_TEMPLATE = """\
 }}
 ```
 """
+
+DEFAULT_LENGTH_GUARDRAILS = """\
+
+## 응답 길이 규칙
+- recent_news 3건 우선, Stage 1~6 2~4문장, Stage 7 2~3문장, summary 4~5문장, Stage 8 1~2문장
+"""
+
+
+def _build_stock_user_prompt(code: str, name: str, market: str,
+                             quant_text: str, qualitative_section: str,
+                             length_guardrails: str = DEFAULT_LENGTH_GUARDRAILS) -> str:
+    return USER_PROMPT_TEMPLATE.format(
+        code=code,
+        name=name,
+        market=market,
+        quant_data=quant_text,
+        qualitative_section=qualitative_section,
+        length_guardrails=length_guardrails.rstrip(),
+    )
 
 
 # ─────────────────────────────────────────
@@ -260,6 +293,7 @@ QUANT_SECTIONS = {
         ("영업이익률(%)", "f2"), ("현금전환율(%)", "f1"), ("FCF수익률(%)", "f2"),
         ("F스코어", "int"), ("부채비율(%)", "f1"), ("부채상환능력", "f2"),
         ("ROIC(%)", "f2"), ("이자보상배율", "f2"),
+        ("지속가치_품질", "int"), ("매출이익_동행성", "int"), ("가치함정_경고", "flag"),
     ],
     "성장/모멘텀": [
         ("매출_CAGR", "f1"), ("영업이익_CAGR", "f1"), ("순이익_CAGR", "f1"),
@@ -1074,7 +1108,7 @@ def generate_report(stock: dict, mode: str = "claude") -> dict:
 
     client = anthropic.Anthropic(
         api_key=config.ANTHROPIC_API_KEY,
-        timeout=httpx.Timeout(300.0, connect=30.0),
+        timeout=httpx.Timeout(config.ANALYSIS_TIMEOUT_SEC, connect=30.0),
     )
 
     # ── 1차 호출: DB 섹터 후보 → AI로 경쟁사 코드 식별 → DB에서 정확한 지표 조회 ──
@@ -1100,9 +1134,11 @@ def generate_report(stock: dict, mode: str = "claude") -> dict:
         else:
             log.info("Peer DB 선정 결과 없음 (%s %s)", code, name)
 
-    user_prompt = USER_PROMPT_TEMPLATE.format(
-        code=code, name=name, market=market,
-        quant_data=quant_text,
+    user_prompt = _build_stock_user_prompt(
+        code=code,
+        name=name,
+        market=market,
+        quant_text=quant_text,
         qualitative_section=peer_db_section,
     )
 
@@ -1112,15 +1148,20 @@ def generate_report(stock: dict, mode: str = "claude") -> dict:
     # --- Prompt caching: 시스템 프롬프트 캐시 적용 ---
     system_with_cache = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
 
-    web_search_max_uses = config.WEB_SEARCH_MAX_USES
-    log.info("종목 AI 분석 시작 (%s %s, model=%s, web_search max_uses=%d)",
-             code, name, config.ANALYSIS_MODEL, web_search_max_uses)
+    web_search_max_uses = max(1, min(2, int(config.WEB_SEARCH_MAX_USES)))
+    log.info(
+        "종목 AI 분석 시작 (%s %s, model=%s, timeout=%.0fs, prompt_chars=%d, web_search max_uses=%d)",
+        code, name, config.ANALYSIS_MODEL, config.ANALYSIS_TIMEOUT_SEC,
+        len(SYSTEM_PROMPT) + len(user_prompt), web_search_max_uses,
+    )
 
+    started_at = time.perf_counter()
     message = _call_with_retry(
         client,
         use_beta=False,
         model=config.ANALYSIS_MODEL,
         max_tokens=config.ANALYSIS_MAX_TOKENS,
+        temperature=0.2,
         system=system_with_cache,
         messages=[{"role": "user", "content": user_content}],
         tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": web_search_max_uses}],
@@ -1135,8 +1176,9 @@ def generate_report(stock: dict, mode: str = "claude") -> dict:
                  code, name, u.input_tokens, u.output_tokens, cache_read, cache_write)
 
     block_types = [getattr(b, "type", "?") for b in message.content]
-    log.info("종목 AI 분석 완료 (%s %s, stop_reason=%s, blocks=%s)",
-             code, name, message.stop_reason, block_types)
+    elapsed = time.perf_counter() - started_at
+    log.info("종목 AI 분석 완료 (%s %s, stop_reason=%s, blocks=%s, elapsed=%.1fs)",
+             code, name, message.stop_reason, block_types, elapsed)
 
     # content 배열에서 text 블록만 추출 (web_search_tool_result 등 다른 블록 무시)
     raw_text = ""
@@ -1421,7 +1463,9 @@ def render_html(code: str, name: str, market: str, stock: dict,
     <div class="stage-card">
       <div class="stage-card-title">STAGE 4 &mdash; 실적 해부 &amp; 재무 건전성</div>
       <div class="stage-field"><strong>매출총이익률 추세:</strong> {stage4.get("gross_margin_trend", "N/A")}</div>
+      <div class="stage-field"><strong>매출-이익률 동행:</strong> {stage4.get("revenue_margin_comovement", "N/A")}</div>
       <div class="stage-field"><strong>FCF 품질:</strong> {stage4.get("fcf_quality", "N/A")}</div>
+      <div class="stage-field"><strong>가치함정 리스크:</strong> {stage4.get("value_trap_risk", "N/A")}</div>
       <div class="stage-field"><strong>부채 평가:</strong> {stage4.get("debt_assessment", "N/A")}</div>
       <div class="stage-field"><strong>컨센서스 괴리:</strong> {stage4.get("consensus_deviation", "N/A")}</div>
       <div class="stage-analysis">{stage4.get("analysis", "")}</div>
@@ -1766,7 +1810,11 @@ PORTFOLIO_SYSTEM_PROMPT = """\
 
 - **1순위 판단 기준은 산업의 장기 성장성**입니다. 전방산업 CAGR, AI 분석의 산업분류, 해자 등급을 핵심 근거로 활용하세요.
 - 장기 성장하는 산업에 속한 고품질 종목(해자 wide/narrow)은 단기 등락과 무관하게 HOLD 또는 BUY_MORE를 우선 고려하세요.
-- **TRIM/SELL은 산업 성장성 훼손, 해자 소실, 구조적 경쟁력 약화가 확인된 경우에만 권고**하세요. 단기 고평가(PER 등)는 TRIM 근거가 되지 않습니다.
+- **TRIM/SELL 권고 기준**: 아래 중 하나라도 해당하면 과감하게 TRIM/SELL을 권고하세요. 단기 고평가(PER 등)만으로는 TRIM 근거가 되지 않습니다.
+  1. 산업 성장성 훼손, 해자 소실, 구조적 경쟁력 약화 확인
+  2. 퀀트 지표 동시 악화: 퀀트점수 < 40 **이면서** RS등급 < 40 (모멘텀+펀더멘털 동시 이탈)
+  3. 재무건전성 급격 악화: F스코어 < 4 (피오트로스키)
+  4. 영업이익 2분기 이상 연속 역성장하면서 회복 근거 없음
 - 현금(예수금)이 있는 경우, BUY_MORE 권고 시 예수금 범위 내에서 실행 가능한 매수량/금액을 우선 제시하세요.
 - 수급(코스톨라니 달걀 위치, 시장심리)은 매수 타이밍 보조 지표로만 활용하고, 장기 성장성 판단을 뒤집어서는 안 됩니다.
 
@@ -1812,6 +1860,7 @@ PORTFOLIO_SYSTEM_PROMPT = """\
 - 각 관심종목에 대해 ADD(편입 권고) / WATCH(관찰 지속) / SKIP(제외 권고) 판정
 - ADD 종목: 권장 비중, 매수 주수, 목표가 범위, 예상 금액 제시
 - 기존 포트폴리오와의 섹터 분산 효과, 산업 성장성 보완, 상관관계 고려
+- **대체 편입 우선 검토**: TRIM/SELL 권고 종목과 동일 섹터·테마에서 더 우수한 관심종목이 있으면, 해당 관심종목을 ADD로 권고하고 rationale에 "기존 보유 [종목명]의 대체 후보" 를 명시하세요. 매도 재원으로 매수할 수 있는 주수·금액도 함께 제시하세요.
 
 ### 9. 리밸런싱 실행 계획
 - 가장 시급한 액션 1-3개 우선순위 제시
@@ -1819,11 +1868,25 @@ PORTFOLIO_SYSTEM_PROMPT = """\
 - 예수금이 있는 경우: 현금 활용 우선순위 포함
 
 ## 매크로 환경 활용 지침
-- 사용자 프롬프트에 "## 거시경제 환경" 섹션이 포함된 경우에만 이 지침을 적용하세요. 없으면 무시합니다.
+- 프롬프트의 "## 거시경제 환경" 섹션을 참고하여 매크로 환경을 분석하세요.
 - **현금 비중**: 방어적 환경(성장 하향 + 실질금리 상승 + 금융여건 악화)이면 예수금을 BUY_MORE에 소진하지 말고 유지/확대를 권고하세요. 공격적 환경이면 예수금 범위 내 BUY_MORE를 적극 검토하세요.
 - **섹터 배분**: 매크로 유리 섹터에 속한 종목에 BUY_MORE를 가중하고, 불리 섹터에 과집중된 경우 TRIM을 검토하세요. 단, 장기 성장성과 해자가 충분한 종목은 매크로 불리라도 HOLD를 우선합니다.
 - **리스크 평가**: 금리 상승, 달러 강세, 신용스프레드 확대 등 매크로 리스크를 `portfolio_risks`에 포함하세요.
-- **macro_assessment 필드**: 매크로 컨텍스트가 제공된 경우 반드시 채워주세요. 제공되지 않은 경우 `null`로 출력하세요.
+- **macro_assessment 필드**: 반드시 채워주세요. 제공된 매크로 분석을 기반으로 하되, 포트폴리오 종목 구성과의 적합도(portfolio_alignment)를 함께 평가하세요.
+
+## 웹 검색 활용 지침
+web_search 툴을 활용하여 분석 전 반드시 최신 정보를 확인하세요:
+1. **보유 종목별 최신 이슈**: 각 보유 종목의 최근 뉴스, 실적 발표, 산업 업황 변화 (종목당 1건)
+2. **포트폴리오 관련 섹터 업황**: 주요 섹터(반도체, 방산, 에너지 등)의 최신 동향
+3. **매크로 리스크**: 현재 글로벌 지정학·금융 리스크(관세, 환율, 금리 등) 최신 상황
+검색 결과를 바탕으로 portfolio_risks, portfolio_catalysts, 종목별 rationale에 최신 정보를 반영하세요.
+
+## 웹 검색 활용 지침
+web_search 툴은 최대 2회만 사용 가능합니다. 개별 종목 정보는 이미 종목별 AI 분석에서 수집되었으므로 **절대 재검색하지 마세요**.
+포트폴리오 전체 관점에서 반드시 필요한 정보만 검색하세요:
+1. **현재 글로벌·한국 거시경제 리스크**: 지정학 리스크, 관세·무역 갈등, 금리·환율 최신 동향, 금융시장 스트레스 이슈 (1회)
+2. **포트폴리오 핵심 섹터 업황**: 포트폴리오에서 비중이 큰 섹터(예: 반도체, 방산, 에너지 등)의 최근 업황 변화 (1회)
+검색 결과는 `portfolio_risks`, `macro_assessment.key_risks`, 리밸런싱 판단에 반영하세요.
 
 ## 분석 지침
 - 포트폴리오 비중이 높은 종목에 더 주의를 기울이세요
@@ -2020,6 +2083,121 @@ def format_portfolio_stock(stock: dict, portfolio_item: dict,
     return "\n".join(lines)
 
 
+MACRO_ASSESSMENT_SYSTEM_PROMPT = """\
+당신은 한국 주식시장 전문 거시경제 애널리스트입니다.
+웹 검색 툴을 적극 활용하여 현재 실시간 데이터(환율, 금리, 유가, 주요 뉴스)를 직접 조회한 후,
+글로벌 및 한국 거시경제 환경을 분석하여 투자자에게 필요한 매크로 컨텍스트를 제공합니다.
+반드시 JSON 형식으로만 최종 응답하고, JSON 외 다른 텍스트는 포함하지 마세요.
+"""
+
+MACRO_ASSESSMENT_USER_PROMPT = """\
+웹 검색 툴을 사용하여 다음 최신 데이터를 조회한 후, 한국 주식시장 투자자 관점의 거시경제 분석을 수행하세요.
+
+## 필수 검색 항목 (웹 검색으로 실시간 확인)
+1. 원달러 환율 현재 수준 (USD/KRW 실시간)
+2. 한국은행 기준금리 및 미 연준 기준금리 현황
+3. 국제유가 현재 수준 (WTI/Brent)
+4. 중국 경제지표 최근 동향 (PMI, 수출입 등)
+5. 한국 수출 최근 동향
+6. 미국/글로벌 주요 금융 리스크 뉴스 (지정학적 리스크, 금융시장 충격 등)
+7. 반도체 업황 최근 뉴스 (메모리 가격, AI 수요 등)
+8. 글로벌 주요 이슈 (무역 갈등, 지정학 리스크 등)
+
+## 평가 항목
+1. 경기성장 방향 (상향/중립/하향): GDP 성장률, 기업 이익 사이클, 경기선행지수
+2. 실질금리 방향 (하락/중립/상승): 한미 금리 정책, 기대인플레이션 대비 명목금리
+3. 금융여건 (완화/중립/악화): 크레딧 스프레드, 유동성, 금융 시스템 리스크
+4. 원달러 환율 방향 (원화강세/중립/원화약세): 실제 환율 수준 및 방향성
+5. 원자재/에너지 (하락/안정/상승): 실제 유가 수준 및 원자재 트렌드
+6. 신용스프레드 (완화/중립/악화): 회사채·하이일드 스프레드, 금융시장 스트레스
+7. 중국 경기 (상향/중립/하향): 중국 경기 모멘텀, 한국 수출 영향
+8. 반도체 사이클 (상향/중립/하향): 메모리/비메모리 업황, AI 수요
+9. 구조적 CAPEX 테마: 현재 집중되는 산업 테마 (AI 인프라, 전력망, 방산 등)
+
+## 현금 비중 판단 기준
+- 공격적: 성장 상향 + 실질금리 하락 + 금융여건 완화 → 현금 축소 (주식 확대)
+- 방어적: 성장 하향 + 실질금리 상승 + 금융여건 악화 → 현금 확대
+- 중립: 그 외 → 현금 유지
+
+중요: key_risks에는 현재 실제로 발생 중인 지정학·금융 리스크(이란/미국 갈등, 사모펀드 환매, 관세 전쟁 등)를 웹 검색으로 확인하여 포함하세요.
+
+반드시 아래 JSON 형식으로만 최종 응답하세요:
+```json
+{
+  "environment": "공격적|중립|방어적",
+  "cash_signal": "축소|유지|확대",
+  "growth": "상향|중립|하향",
+  "real_rate": "하락|중립|상승",
+  "financial_conditions": "완화|중립|악화",
+  "usd_krw": "원화강세|중립|원화약세",
+  "usd_krw_level": "현재 원달러 환율 수치 (예: 1,487원)",
+  "commodities": "하락|안정|상승",
+  "commodities_detail": "WTI $XX, Brent $XX 등 실제 수치",
+  "credit_spread": "완화|중립|악화",
+  "china": "상향|중립|하향",
+  "semiconductor": "상향|중립|하향",
+  "capex_theme": "AI 인프라, 전력망 등 구체적 테마 텍스트",
+  "favorable_sectors": ["유리한 섹터1", "유리한 섹터2"],
+  "unfavorable_sectors": ["불리한 섹터1", "불리한 섹터2"],
+  "key_risks": "현재 실제 발생 중인 주요 거시·지정학·금융 리스크 3-4문장",
+  "summary": "현재 매크로 환경 종합 요약 (실제 데이터 수치 포함) 4-5문장"
+}
+```
+"""
+
+
+def generate_macro_assessment() -> dict:
+    """AI가 웹 검색으로 최신 데이터를 조회 후 거시경제 환경을 분석하여 macro_assessment dict 반환.
+
+    웹 검색 툴(web_search)을 사용하여 실시간 환율, 유가, 금리, 주요 뉴스를 조회 후 분석.
+
+    Returns:
+        {
+            "scores": {environment, cash_signal, growth, real_rate, ...},
+            "model": str,
+            "generated_date": str,
+        }
+    """
+    if not config.ANTHROPIC_API_KEY:
+        raise ValueError("ANTHROPIC_API_KEY 환경변수가 설정되지 않았습니다.")
+
+    client = anthropic.Anthropic(
+        api_key=config.ANTHROPIC_API_KEY,
+        timeout=httpx.Timeout(180.0, connect=10.0),
+    )
+
+    log.info("매크로 AI 분석 시작 (model=%s, web_search=True)", config.ANALYSIS_MODEL)
+
+    # web_search_20250305: server-side tool — Claude가 직접 검색 실행, tool_result 불필요
+    message = _call_with_retry(
+        client,
+        model=config.ANALYSIS_MODEL,
+        max_tokens=4096,
+        system=MACRO_ASSESSMENT_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": MACRO_ASSESSMENT_USER_PROMPT}],
+        tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}],
+    )
+
+    block_types = [getattr(b, "type", "?") for b in message.content]
+    log.info("매크로 분석 응답 (stop_reason=%s, blocks=%s)", message.stop_reason, block_types)
+
+    raw_text = ""
+    for block in message.content:
+        if hasattr(block, "type") and block.type == "text":
+            raw_text += block.text
+    raw_text = raw_text.strip()
+
+    scores = _parse_json_response(raw_text)
+    generated_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log.info("매크로 AI 분석 완료 (environment=%s)", scores.get("environment"))
+
+    return {
+        "scores": scores,
+        "model": config.ANALYSIS_MODEL,
+        "generated_date": generated_date,
+    }
+
+
 def format_macro_context(macro: dict) -> str:
     """매크로 체크리스트 데이터를 포트폴리오 분석 프롬프트 텍스트로 포맷팅."""
     lines = ["\n## 거시경제 환경 (매크로 체크리스트)\n"]
@@ -2155,7 +2333,15 @@ def generate_portfolio_report(portfolio_items: list[dict],
     )
 
     # 매크로 컨텍스트 섹션 빌드
-    macro_section = format_macro_context(macro_context) if macro_context else ""
+    if macro_context:
+        macro_section = format_macro_context(macro_context)
+    else:
+        macro_section = (
+            "\n## 거시경제 환경\n\n"
+            "별도 AI 매크로 분석 결과가 제공되지 않았습니다. "
+            "현재 한국 거시경제 환경(경기성장, 금리, 환율, 원자재, 신용스프레드, "
+            "중국경기, 반도체사이클 등)을 AI가 자체 판단하여 macro_assessment를 작성해주세요.\n"
+        )
 
     user_prompt = PORTFOLIO_USER_PROMPT_TEMPLATE.format(
         stock_count=len(portfolio_items),
@@ -2176,11 +2362,13 @@ def generate_portfolio_report(portfolio_items: list[dict],
         timeout=httpx.Timeout(600.0, connect=30.0),
     )
 
-    log.info("포트폴리오 AI 분석 시작 (model=%s)", config.PORTFOLIO_MODEL)
+    log.info("포트폴리오 AI 분석 시작 (model=%s, web_search=True)", config.PORTFOLIO_MODEL)
+    # web_search_20250305: server-side tool — 최신 뉴스/업황/매크로 조회
     message = _call_with_retry(
         client, model=config.PORTFOLIO_MODEL, max_tokens=32768,
         system=PORTFOLIO_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
+        tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 2}],
     )
     block_types = [getattr(b, "type", "?") for b in message.content]
     log.info("포트폴리오 AI 분석 완료 (stop_reason=%s, blocks=%s, usage=%s)",
@@ -2253,6 +2441,7 @@ def render_portfolio_html(scores: dict, portfolio_items: list[dict],
     """포트폴리오 분석 결과를 HTML 보고서로 렌더링."""
 
     health = scores.get("portfolio_health", {})
+    macro_assessment = scores.get("macro_assessment") or {}
     stock_actions = scores.get("stock_actions", [])
     sector_analysis = scores.get("sector_analysis", {})
     risks = scores.get("portfolio_risks", [])
@@ -2520,6 +2709,34 @@ def render_portfolio_html(scores: dict, portfolio_items: list[dict],
     <div class="stage-analysis">{opt.get("adjustment_suggestion", "")}</div>
   </div>"""
 
+    # 매크로 환경 평가 카드
+    macro_card = ""
+    if macro_assessment:
+        env = macro_assessment.get("environment", "")
+        env_colors = {"공격적": ("#d5f5e3", "#1e8449"), "중립": ("#fef9e7", "#b9770e"), "방어적": ("#fadbd8", "#c0392b")}
+        env_bg, env_fg = env_colors.get(env, ("#e9ecef", "#6c757d"))
+        cash = macro_assessment.get("cash_signal", "")
+        cash_colors = {"축소": ("#d5f5e3", "#1e8449"), "유지": ("#fef9e7", "#b9770e"), "확대": ("#fadbd8", "#c0392b")}
+        cash_bg, cash_fg = cash_colors.get(cash, ("#e9ecef", "#6c757d"))
+        fav_sectors = macro_assessment.get("favorable_sectors", [])
+        unfav_sectors = macro_assessment.get("unfavorable_sectors", [])
+        fav_chips = " ".join(f'<span class="macro-sector-chip favorable">{s}</span>' for s in fav_sectors) if fav_sectors else '<span class="text-muted small">없음</span>'
+        unfav_chips = " ".join(f'<span class="macro-sector-chip unfavorable">{s}</span>' for s in unfav_sectors) if unfav_sectors else '<span class="text-muted small">없음</span>'
+        key_risks = macro_assessment.get("key_risks", "")
+        alignment = macro_assessment.get("portfolio_alignment", "")
+        macro_card = f"""\
+  <div class="stage-card macro-assessment-card">
+    <div class="stage-card-title">거시경제 환경 평가</div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
+      <span class="macro-env-badge" style="background:{env_bg};color:{env_fg};">환경: {env or 'N/A'}</span>
+      <span class="macro-cash-badge" style="background:{cash_bg};color:{cash_fg};">현금비중 신호: {cash or 'N/A'}</span>
+    </div>
+    <div class="stage-field"><strong>유리 섹터:</strong> {fav_chips}</div>
+    <div class="stage-field"><strong>불리 섹터:</strong> {unfav_chips}</div>
+    {f'<div class="stage-field" style="margin-top:8px;"><strong>매크로 리스크:</strong> {key_risks}</div>' if key_risks else ''}
+    {f'<div class="stage-analysis">{alignment}</div>' if alignment else ''}
+  </div>"""
+
     # 과비중/과소비중 섹터 뱃지
     overweight = sector_analysis.get("overweight_sectors", [])
     underweight = sector_analysis.get("underweight_sectors", [])
@@ -2569,6 +2786,8 @@ def render_portfolio_html(scores: dict, portfolio_items: list[dict],
     <div class="stage-field"><strong>성장성/품질:</strong> {health.get("growth_quality", "N/A")}</div>
     <div class="stage-analysis">{health.get("overall_assessment", "")}</div>
   </div>
+
+  {macro_card}
 
   {optimization_card}
 

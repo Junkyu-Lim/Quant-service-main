@@ -49,6 +49,9 @@ body.col-resizing, body.col-resizing * { cursor: col-resize !important; user-sel
 .metric-pill .lbl { color: #6c757d; font-size: .72rem; }
 .metric-pill .val { font-weight: 600; }
 
+/* Detail modal sub-group title */
+.metric-subgroup-title { font-size: .7rem; color: #6c757d; opacity: .7; border-bottom: 1px solid #e9ecef; padding-bottom: 2px; margin: 6px 0 3px; }
+
 /* Score bar */
 .score-bar { display: inline-block; height: 8px; border-radius: 4px; background: #0d6efd; min-width: 4px; }
 
@@ -81,6 +84,20 @@ body.col-resizing, body.col-resizing * { cursor: col-resize !important; user-sel
 .adv-search-input { width: 140px !important; font-size: .75rem !important; }
 .adv-active-badge { font-size: .68rem; }
 
+.adv-active-summary {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  padding: 8px 14px; background: #f7faff; border-top: 1px solid #e9ecef; border-bottom: 1px solid #e9ecef;
+}
+.adv-active-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px; border-radius: 999px; background: #e7f0ff; border: 1px solid #b6ccff;
+  font-size: .72rem; color: #174ea6;
+}
+.adv-active-chip .remove {
+  border: 0; background: transparent; color: #4f6fad; font-size: .8rem; line-height: 1; cursor: pointer;
+}
+.adv-active-chip .remove:hover { color: #dc3545; }
+
 /* Filter grid */
 .adv-filter-grid {
   display: grid;
@@ -95,10 +112,18 @@ body.col-resizing, body.col-resizing * { cursor: col-resize !important; user-sel
   position: relative; overflow: visible;
 }
 .adv-filter-row--active { border-color: #0d6efd !important; background: #eef3ff !important; }
+.adv-filter-row--flag {
+  justify-content: space-between;
+  gap: 10px;
+}
+.adv-filter-row--flag .adv-filter-label-wrap { max-width: calc(100% - 120px); }
 .adv-filter-label {
   font-size: .73rem; font-weight: 600; color: #495057;
   min-width: 72px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   position: relative; cursor: default;
+}
+.adv-filter-label-wrap {
+  display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1;
 }
 .adv-filter-label[data-tip]::after {
   content: attr(data-tip);
@@ -117,6 +142,25 @@ body.col-resizing, body.col-resizing * { cursor: col-resize !important; user-sel
 .adv-filter-input:focus { outline: none; border-color: #0d6efd; background: #fff; }
 .adv-filter-sep { font-size: .7rem; color: #adb5bd; flex-shrink: 0; }
 .adv-filter-empty { grid-column: 1/-1; text-align: center; color: #adb5bd; font-size: .85rem; padding: 20px 0; }
+.adv-filter-quick {
+  border: 1px solid #c8dafb; background: #f5f8ff; color: #2251a3;
+  font-size: .62rem; border-radius: 999px; padding: 1px 6px; line-height: 1.4; cursor: pointer;
+}
+.adv-filter-quick:hover { background: #e7f0ff; }
+.adv-flag-group {
+  display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0;
+}
+.adv-flag-btn {
+  border: 1px solid #ced4da; background: #fff; color: #6c757d;
+  font-size: .67rem; border-radius: 999px; padding: 2px 7px; cursor: pointer;
+}
+.adv-flag-btn:hover { border-color: #9ec5fe; color: #0d6efd; }
+.adv-flag-btn.active {
+  border-color: #0d6efd; background: #0d6efd; color: #fff; font-weight: 600;
+}
+.adv-flag-btn.exclude.active {
+  border-color: #dc3545; background: #dc3545;
+}
 
 /* ── Analysis Report Styles ── */
 .analysis-report { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
@@ -482,9 +526,21 @@ tr.row-new { background-color: rgba(25, 135, 84, 0.04) !important; }
 #compare-fin-toggle .btn { font-size: .75rem; padding: 2px 10px; }
 
 /* ── Filter Preset Bar ── */
+.preset-stack {
+  display: flex; flex-direction: column;
+}
 .preset-bar {
   padding: 6px 12px; background: #f0f4ff; border-top: 1px solid #dee2e6;
   display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
+}
+.preset-bar-recommended {
+  background: linear-gradient(180deg, #f8fbff 0%, #eef5ff 100%);
+}
+.preset-list {
+  display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px;
+}
+.preset-list-cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); width: 100%;
 }
 .preset-chip {
   display: inline-flex; align-items: center; gap: 4px;
@@ -493,11 +549,37 @@ tr.row-new { background-color: rgba(25, 135, 84, 0.04) !important; }
   transition: background 0.15s;
 }
 .preset-chip:hover { background: #cfe2ff; }
+.preset-chip.recommended {
+  align-items: flex-start; flex-direction: column; gap: 2px;
+  padding: 8px 10px; border-radius: 12px; background: #fff; min-height: 70px;
+}
+.preset-chip.recommended:hover { background: #f5f9ff; }
+.preset-chip.recommended .preset-title {
+  font-weight: 700; color: #1f3f78;
+}
+.preset-chip.recommended .preset-desc {
+  color: #6c757d; font-size: .68rem; line-height: 1.35;
+}
 .preset-chip .preset-del {
   font-size: .7rem; color: #6c757d; cursor: pointer; line-height: 1;
   margin-left: 2px;
 }
 .preset-chip .preset-del:hover { color: #dc3545; }
+
+.stock-risk-badge {
+  display: inline-flex; align-items: center;
+  margin-left: 3px; padding: 1px 5px; border-radius: 999px;
+  font-size: .58rem; font-weight: 700; vertical-align: middle;
+}
+.stock-risk-badge.warn { background: #ffe8cc; color: #a85d00; }
+.stock-risk-badge.danger { background: #f8d7da; color: #842029; }
+.stock-risk-badge.info { background: #dbeafe; color: #1d4ed8; }
+
+@media (max-width: 768px) {
+  .preset-list-cards { grid-template-columns: 1fr; }
+  .adv-filter-row--flag { align-items: flex-start; flex-direction: column; }
+  .adv-filter-row--flag .adv-filter-label-wrap { max-width: 100%; }
+}
 
 /* ── Sector Multi-select Dropdown ── */
 .sector-multiselect { position: relative; display: inline-block; }
@@ -747,4 +829,38 @@ tr.row-new > td.sticky-col {
 /* 마지막 고정 컬럼 우측 그림자 */
 .sticky-col-last {
   box-shadow: 3px 0 6px -1px rgba(0, 0, 0, 0.18);
+}
+
+/* ─── Macro Context Form ─── */
+.macro-form-label { font-size:.75rem; font-weight:600; color:#6c757d; margin-bottom:3px; }
+.macro-env-derived {
+  display:inline-block; padding:3px 10px; border-radius:10px;
+  font-size:.78rem; font-weight:600; background:#e9ecef; color:#6c757d;
+}
+.macro-env-derived.env-aggressive { background:#d5f5e3; color:#1e8449; }
+.macro-env-derived.env-neutral { background:#fef9e7; color:#b9770e; }
+.macro-env-derived.env-defensive { background:#fadbd8; color:#c0392b; }
+#macro-context-accordion .btn-group .btn { font-size:.72rem; padding:2px 6px; }
+#macro-context-accordion .accordion-button { font-size:.82rem; }
+
+/* ─── Macro Assessment Card (report) ─── */
+.macro-assessment-card { background:#f8f9ff !important; border-left:3px solid #5b73e8 !important; }
+.macro-env-badge, .macro-cash-badge {
+  display:inline-block; padding:4px 12px; border-radius:12px;
+  font-size:.8rem; font-weight:600;
+}
+.macro-sector-chip {
+  display:inline-block; padding:2px 10px; border-radius:10px;
+  font-size:.78rem; margin:2px 4px 2px 0;
+}
+.macro-sector-chip.favorable { background:#d5f5e3; color:#1e8449; }
+.macro-sector-chip.unfavorable { background:#fadbd8; color:#c0392b; }
+.macro-indicator-chip {
+  display:inline-block; padding:2px 8px; border-radius:10px;
+  font-size:.75rem; margin:2px 3px 2px 0;
+  background:#e9ecef; color:#495057;
+}
+
+@media print {
+  #macro-analysis-panel { display:none !important; }
 }

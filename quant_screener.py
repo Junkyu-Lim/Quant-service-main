@@ -480,6 +480,20 @@ def analyze_one_stock(ticker, ind_grp, fs_grp):
             res["이익률_변동폭"] = np.nan
             res["이익률_급개선"] = 0
 
+        # ── 매출-이익률 동행성 (성장의 함정 탐지) ──────────────────────────────
+        # 매출 성장 + 영업이익률 개선 = 진정한 가치 성장 (pricing power + 규모의 경제)
+        # 매출 성장 + 마진 하락 = 성장의 함정 (가격 경쟁, 과도한 비용)
+        _rev_growing = res.get("매출_연속성장", 0) >= 1
+        _opm_improving = res.get("이익률_개선", 0) == 1
+        if _rev_growing and _opm_improving:
+            res["매출이익_동행성"] = 2    # 이상적: 매출↑ + 마진↑
+        elif _rev_growing and not _opm_improving:
+            res["매출이익_동행성"] = 0    # 경고: 매출↑ + 마진↓ = 성장의 함정
+        elif not _rev_growing and _opm_improving:
+            res["매출이익_동행성"] = 1    # 주의: 비용절감형, 지속성 의문
+        else:
+            res["매출이익_동행성"] = -1   # 악화: 매출↓ + 마진↓
+
         if len(ni_s) >= 2:
             ni_vals = [ni_s[d] for d in sorted(ni_s.keys())]
             res["흑자전환"] = 1 if (ni_vals[-2] is not None and ni_vals[-1] is not None and ni_vals[-2] < 0 and ni_vals[-1] > 0) else 0
@@ -670,6 +684,23 @@ def analyze_one_stock(ticker, ind_grp, fs_grp):
         gpm_surge = pd.notna(gpm_delta) and gpm_delta >= 2.0
         res["퀄리티_턴어라운드"] = 1 if (gpm_surge and ocf_positive and res["ROIC_개선"] == 1) else 0
 
+        # ── 지속가치 품질 종합 (0-6점): 사용자 4개 레이어 통합 ──────────────────
+        # Layer 1: 매출-이익 동행 성장 (2점 max)
+        # Layer 2: 이익 품질 OCF>순이익 (1점)
+        # Layer 3: ROIC 수준 및 개선 (2점 max)
+        # Layer 4: FCF 양수 (1점)
+        _sq = 0
+        _comove = res.get("매출이익_동행성", -1)
+        if _comove == 2:   _sq += 2
+        elif _comove == 1: _sq += 1
+        _sq += f4  # F4_이익품질: OCF > 순이익
+        _roic_cur_val = res.get("ROIC(%)")
+        if pd.notna(_roic_cur_val) and _roic_cur_val >= 10: _sq += 1
+        if res.get("ROIC_개선", 0) == 1: _sq += 1
+        _ttm_fcf_val = res.get("TTM_FCF")
+        if pd.notna(_ttm_fcf_val) and _ttm_fcf_val > 0: _sq += 1
+        res["지속가치_품질"] = _sq  # 0-6
+
         # ── 이자보상배율 (TTM 영업이익 / 이자비용) ──
         ttm_interest = interest_s[max(interest_s.keys())] if interest_s else np.nan
         ttm_op_for_icr = res.get("TTM_영업이익")
@@ -678,8 +709,10 @@ def analyze_one_stock(ticker, ind_grp, fs_grp):
         if pd.notna(ttm_op_for_icr) and pd.notna(ttm_interest) and ttm_interest != 0:
             res["이자보상배율"] = ttm_op_for_icr / abs(ttm_interest)
         else:
-            # 이자비용 0 = 무차입, 이자보상 필요 없음 → 99로 표시
-            res["이자보상배율"] = 99.0 if (pd.notna(ttm_interest) and ttm_interest == 0) else np.nan
+            # 이자비용 0 = 무차입, 이자보상 필요 없음 → 20으로 표시 (99는 오해 유발)
+            res["이자보상배율"] = 20.0 if (pd.notna(ttm_interest) and ttm_interest == 0) else np.nan
+        # 무차입 기업 flag (이자비용 0원)
+        res["무차입_기업"] = 1 if (pd.notna(ttm_interest) and ttm_interest == 0) else 0
 
         dps_s = find_account_value(ind_grp[ind_grp["지표구분"]=="DPS"], "배당금")
         # 미래 날짜 및 분기 기준일 제거: 연말(12,8,11월 등 결산월) + 오늘 이전만 사용
@@ -797,17 +830,29 @@ def calc_valuation(daily, anal_df, multiplier, shares_df):
     df["PBR"] = np.where((df["자본"] > 0) & (df["시가총액"] > 0), df["시가총액"] / (df["자본"] * M), np.nan)
     df["PSR"] = np.where((df["TTM_매출"] > 0) & (df["시가총액"] > 0), df["시가총액"] / (df["TTM_매출"] * M), np.nan)
     df["ROE(%)"] = np.where((df["자본"] > 0), (df["TTM_순이익"] / df["자본"]) * 100, np.nan)
+    df["ROE(%)"] = df["ROE(%)"].clip(-100, 100)  # 극단 이상치(±수천%) 퍼센타일 왜곡 방지
+    df["ROIC(%)"] = df["ROIC(%)"].clip(-50, 100)  # ROE와 동일: IC 극소 시 500%+ 이상치 방지
     df["부채비율(%)"] = np.where((df["자본"] > 0), (df["부채"] / df["자본"]) * 100, np.nan)
+    df["부채비율(%)"] = df["부채비율(%)"].clip(0, 500)  # 자본 극소 시 10,000%+ 방지 (500%=부채 5배, 이상은 실질 자본잠식)
     df["영업이익률(%)"] = df["영업이익률_최근"]
-    df["배당수익률(%)"] = np.where((df["종가"] > 0) & (df["DPS_최근"] > 0), (df["DPS_최근"] / df["종가"]) * 100, 0)
-    # PEG: 일회성 이익 급증 방지를 위해 CAGR 상한 100% 적용
-    cagr_capped = np.minimum(df["순이익_CAGR"], 100)
+    # 무배당 종목은 NaN (0%와 구분): 스코어링에서 온화모드(zero_if_nan=False)로 중위값 처리
+    df["배당수익률(%)"] = np.where((df["종가"] > 0) & (df["DPS_최근"] > 0), (df["DPS_최근"] / df["종가"]) * 100, np.nan)
+    # PEG: 일회성 이익 급증 방지를 위해 CAGR 상한 200% 적용 (100%는 고성장 구간 분별력 부족)
+    cagr_capped = np.minimum(df["순이익_CAGR"], 200)
     df["PEG"] = np.where((df["PER"] > 0) & (cagr_capped > 0), df["PER"] / cagr_capped, np.nan)
-    df["FCF수익률(%)"] = np.where((df["시가총액"] > 0) & (df["TTM_FCF"] != 0), (df["TTM_FCF"] * M / df["시가총액"]) * 100, np.nan)
+    # 음수 FCF수익률도 표시 (현금 소진 신호로 정보 가치 있음, 스코어링에서 최하위 처리)
+    df["FCF수익률(%)"] = np.where((df["시가총액"] > 0) & pd.notna(df["TTM_FCF"]) & (df["TTM_FCF"] != 0), (df["TTM_FCF"] * M / df["시가총액"]) * 100, np.nan)
     df["이익수익률(%)"] = np.where((df["시가총액"] > 0) & (df["TTM_순이익"] > 0), (df["TTM_순이익"] * M / df["시가총액"]) * 100, np.nan)
     df["현금전환율(%)"] = np.where(pd.notna(df["TTM_영업CF"]) & (df["TTM_순이익"] > 0), (df["TTM_영업CF"] / df["TTM_순이익"]) * 100, np.nan)
+    df["현금전환율(%)"] = df["현금전환율(%)"].clip(-500, 500)  # 순이익 극소 시 50,000%+ 방지 (500%=OCF 5배)
     df["CAPEX비율(%)"] = np.where(pd.notna(df["TTM_CAPEX"]) & (df["TTM_영업CF"] > 0), (df["TTM_CAPEX"] / df["TTM_영업CF"]) * 100, np.nan)
+    df["CAPEX비율(%)"] = df["CAPEX비율(%)"].clip(0, 300)  # OCF 극소 시 5,000%+ 방지 (300%=CAPEX 3배)
     df["부채상환능력"] = np.where((df["TTM_영업CF"] > 0) & (df["부채"] > 0), df["TTM_영업CF"] / df["부채"], np.nan)
+    df["부채상환능력"] = df["부채상환능력"].clip(0, 5)  # 부채 극소 시 100+ 방지 (5=영업CF로 0.2년에 상환, 표시 전용)
+    if "이자보상배율" in df.columns:
+        df["이자보상배율"] = df["이자보상배율"].clip(0, 50)  # 이자비용 극소 시 500×+ 방지 (50×=충분한 상한, omega는 별도 clip(0,10))
+    if "유동비율(%)" in df.columns:
+        df["유동비율(%)"] = df["유동비율(%)"].clip(0, 500)  # 유동부채 극소 시 5,000%+ 방지 (500%=유동자산 5배)
     df["이익품질_양호"] = np.where((df["TTM_영업CF"] > df["TTM_순이익"]) & (df["TTM_순이익"] > 0), 1, 0)
 
     shares = df["상장주식수"].replace(0, np.nan)
@@ -819,6 +864,8 @@ def calc_valuation(daily, anal_df, multiplier, shares_df):
         (df["DPS_최근"] / df["EPS"]) * 100,
         np.nan,
     )
+    df["배당성향(%)"] = df["배당성향(%)"].clip(0, 150)  # EPS 극소 시 500%+ 방지 (150%=적립금 배당 한도)
+    df["DPS_CAGR"] = df["DPS_CAGR"].clip(-50, 100)  # DPS 급증 시 500%+ 방지 (100%=배당 2배 성장)
     # 배당_경고신호 — Value Trap(주가폭락 착시) 또는 Payout Trap(이익훼손 배당) 감지
     _rs_weak = (df["RS_등급"].fillna(50) < 30) if "RS_등급" in df.columns else False
     df["배당_경고신호"] = np.where(
@@ -828,6 +875,26 @@ def calc_valuation(daily, anal_df, multiplier, shares_df):
         1,
         0,
     ).astype(int)
+
+    # ── 가치함정 통합 경고: 겉으로 싸 보이지만 이유 있어서 싼 기업 탐지 ──────
+    # 조건: 저PER/PBR(싸 보임) + (품질 미흡 OR F-Score 낮음 OR 마진 하락 OR 현금 미전환)
+    _low_per = (df["PER"].fillna(99) < 8) & (df["PER"].fillna(99) > 0)
+    _low_pbr = df["PBR"].fillna(99) < 0.7
+    _cheap_look = _low_per | _low_pbr
+
+    _sq_col = df.get("지속가치_품질", pd.Series(0, index=df.index)).fillna(0)
+    _comove_col = df.get("매출이익_동행성", pd.Series(0, index=df.index)).fillna(0)
+    _opm_imp_col = df.get("이익률_개선", pd.Series(1, index=df.index)).fillna(1)
+
+    _quality_poor = (_sq_col <= 1) | (df["F스코어"].fillna(0) <= 3)
+    _margin_declining = (_opm_imp_col == 0) & (_comove_col <= 0)
+    _ocf_weak = df["현금전환율(%)"].fillna(100) < 50
+
+    df["가치함정_경고"] = np.where(
+        _cheap_look & (_quality_poor | _margin_declining | _ocf_weak),
+        1, 0
+    ).astype(int)
+
     # ── S-RIM: 동적 omega + ROE<Ke 할인 ──────────────────────────────────
     # Ke = 무위험수익률(국고채 3Y) + 시장위험프리미엄
     Ke = config.RISK_FREE_RATE + config.EQUITY_RISK_PREMIUM  # default: 3.5 + 5.5 = 9.0%
@@ -862,7 +929,7 @@ def calc_valuation(daily, anal_df, multiplier, shares_df):
         np.where(
             (_roe > 0) & (_roe <= Ke) & (_bps > 0),
             _bps * (_roe / Ke),          # 가치 훼손: ROE/Ke 비율만큼 할인
-            np.where(_bps > 0, _bps * 0.3, np.nan),  # ROE≤0: 심각한 훼손
+            np.where(_bps > 0, _bps * 0.5, np.nan),  # ROE≤0: 청산가치 50% (일시적 적자 허용)
         ),
     )
     df["괴리율(%)"] = ((df["적정주가_SRIM"] - df["종가"]) / df["종가"]) * 100
@@ -879,8 +946,8 @@ def calc_valuation(daily, anal_df, multiplier, shares_df):
     )
     _epv_total = np.where(_norm_fcf > 0, _norm_fcf * M / Ke_dec, np.nan)
     _epv_ps = np.where(shares > 0, _epv_total / shares, np.nan)
-    # 상한: BPS × 5 (성장 프리미엄 없는 모델에서 과도한 값 방지)
-    _epv_cap = np.where(_bps > 0, _bps * 5, np.nan)
+    # 상한: BPS × 8 (자산경량 기업/SW/플랫폼의 고FCF 허용, 5배는 과소 추정)
+    _epv_cap = np.where(_bps > 0, _bps * 8, np.nan)
     df["적정주가_EPV"] = np.where(
         pd.notna(_epv_ps) & (_bps > 0),
         np.minimum(_epv_ps, _epv_cap),
@@ -1146,6 +1213,8 @@ def calc_technical_indicators(df, price_hist, index_hist=None, master=None):
         v_col = "거래대금" if ("거래대금" in ph.columns and ph["거래대금"].notna().any()) else None
         v20 = (ph[v_col].tail(20).mean() if v_col else (ph["종가"]*ph["거래량"]).tail(20).mean()) if len(ph)>=20 else np.nan
         v5 = (ph[v_col].tail(5).mean() if v_col else (ph["종가"]*ph["거래량"]).tail(5).mean())
+        # 증감률 분모: 최근 5일을 제외한 이전 20일 (분모에 분자 중복 방지)
+        v20_prior = (ph[v_col].iloc[-25:-5].mean() if v_col else (ph["종가"]*ph["거래량"]).iloc[-25:-5].mean()) if len(ph)>=25 else np.nan
         vol60 = ph["종가"].pct_change().tail(60).std() * np.sqrt(252) * 100 if len(ph)>=60 else np.nan
 
         # ── 거래량-가격 괴리 (약세 다이버전스) ──
@@ -1192,7 +1261,7 @@ def calc_technical_indicators(df, price_hist, index_hist=None, master=None):
             "MA60_이격도(%)": (close/ma60-1)*100 if pd.notna(ma60) and ma60 > 0 else np.nan,
             "52주_최고대비(%)": (close/h52-1)*100 if h52 > 0 else np.nan,
             "52주_최저대비(%)": (close/l52-1)*100 if l52 > 0 else np.nan,
-            "거래대금_20일평균": v20, "거래대금_증감(%)": (v5/v20-1)*100 if pd.notna(v20) and v20 > 0 else np.nan,
+            "거래대금_20일평균": v20, "거래대금_증감(%)": (v5/v20_prior-1)*100 if pd.notna(v20_prior) and v20_prior > 0 else np.nan,
             "변동성_60일(%)": vol60,
             "거래량_가격_괴리": vp_divergence,
             "RS_60d": rs_60d, "RS_120d": rs_120d, "RS_250d": rs_250d,
@@ -1325,7 +1394,9 @@ def calc_overheat_score(df):
     - RSI 과매수 (25%): 50 이하 = 0점, 80+ = 100점
     - 거래량-가격 괴리 (20%): 가격↑+거래량↓ 동시 신호
     """
-    h52 = df["52주_최고대비(%)"].fillna(-100) if "52주_최고대비(%)" in df.columns else pd.Series(-100, index=df.index)
+    # fillna(-20): -20%는 s_h52=0 경계값 → NaN(데이터 부족) 종목을 "중립(기여도 0)"으로 처리
+    # 기존 fillna(-100)은 NaN 종목이 과열도=낮게→상승조짐=높게 잘못 편향되던 문제 수정
+    h52 = df["52주_최고대비(%)"].fillna(-20) if "52주_최고대비(%)" in df.columns else pd.Series(-20, index=df.index)
     s_h52 = np.clip((h52 + 20) / 20 * 100, 0, 100)
 
     s_ma = np.clip(df["MA20_이격도(%)"].fillna(0) / 20 * 100, 0, 100) if "MA20_이격도(%)" in df.columns else pd.Series(0, index=df.index)
@@ -1465,13 +1536,15 @@ def calc_strategy_scores(df):
     # ── 성장률 Winsorization: 극단값(소형주 base effect 등)이 백분위 왜곡 방지 ──
     # PEG 계산은 별도로 100% 캡 적용(line ~688). 여기선 스코어링용 캡 처리.
     _CAGR_CAP = 150  # % 상한 — 150% 초과 성장은 일회성/소형주 base effect로 간주
+    _CAGR_FLOOR = -80  # % 하한 — -80% 이하는 사실상 붕괴, 추가 구분 불필요
     for _gcol in ["매출_CAGR", "영업이익_CAGR", "순이익_CAGR"]:
         if _gcol in df.columns:
-            df[_gcol] = df[_gcol].clip(upper=_CAGR_CAP)
+            df[_gcol] = df[_gcol].clip(lower=_CAGR_FLOOR, upper=_CAGR_CAP)
     _YOY_CAP = 300  # 분기 YoY는 베이스가 더 작아 상한을 넓게
+    _YOY_FLOOR = -90  # 분기 YoY 하한 — -90% 이하는 사실상 전분기 소멸
     for _gcol in ["Q_매출_YoY(%)", "Q_영업이익_YoY(%)", "Q_순이익_YoY(%)"]:
         if _gcol in df.columns:
-            df[_gcol] = df[_gcol].clip(upper=_YOY_CAP)
+            df[_gcol] = df[_gcol].clip(lower=_YOY_FLOOR, upper=_YOY_CAP)
 
     # ── NaN 처리 기준 (엄격 vs 온화) ──
     # 엄격(zero_if_nan=True): 신뢰도 높은 지표, 부재=극단값
@@ -1496,10 +1569,13 @@ def calc_strategy_scores(df):
     S_Accel = get_rank("실적가속_연속", asc=True, zero_if_nan=True)  # 엄격: 가속 신호
     S_SmartMoney = get_rank("스마트머니_승률", asc=True, zero_if_nan=True)  # 엄격: 수급 신호
     S_GPM_delta = get_rank("GPM_변화(pp)", asc=True, zero_if_nan=True)  # 엄격: 이익률 개선
+    S_SustainedQ = get_rank("지속가치_품질", asc=True, zero_if_nan=True)  # 엄격: 가치 성장 지속성
+    S_CoMove = get_rank("매출이익_동행성", asc=True, zero_if_nan=True)    # 엄격: 매출-이익 동행
     # 주도주: RS_등급(25%) + 수급강도(20%) + 거래대금(10%) + 영업이익CAGR(15%) + Q_YoY(15%) + 실적가속(10%) + RSI(5%)
     df["주도주_점수"] = (S_RS*0.25 + S_Supply*0.20 + S_Vol*0.10 + S_OpCAGR*0.15 + S_QOpYoY*0.15 + S_Accel*0.10 + get_rank("RSI_14")*0.05)
-    # FCF수익률(25%=Value) + ROIC(25%=Quality) + F스코어(20%=Health) + 종합괴리율(20%=MoS) + PEG역순(10%=Growth-Value)
-    df["우량가치_점수"] = (S_FCF*0.25 + S_ROIC*0.25 + get_rank("F스코어")*0.20 + get_rank("종합괴리율(%)")*0.20 + S_PEG_inv*0.10)
+    # FCF수익률(20%) + ROIC(20%) + F스코어(15%) + 종합괴리율(20%) + 지속가치_품질(15%) + 매출이익_동행성(10%)
+    # PEG역순 제거 → PEG<1.2 하드필터에서 이미 검증됨, 대신 성장지속성/동행성 직접 반영
+    df["우량가치_점수"] = (S_FCF*0.20 + S_ROIC*0.20 + get_rank("F스코어")*0.15 + get_rank("종합괴리율(%)")*0.20 + S_SustainedQ*0.15 + S_CoMove*0.10)
     # Q_영업이익_YoY(20%) + 실적가속_연속(20%) + 영업이익_CAGR(15%) + RS_등급(25%) + PEG역순(20%)
     df["고성장_점수"] = (S_QOpYoY*0.20 + S_Accel*0.20 + S_OpCAGR*0.15 + S_RS*0.25 + S_PEG_inv*0.20)
     # 현금배당: FCF(25%) + 배당수익률(20%) + DPS성장(15%) + ROIC해자(15%) + 배당성향역순(10%) + F스코어(10%) + 부채비율(5%)
@@ -1560,36 +1636,84 @@ def calc_strategy_scores(df):
             if _col in df.columns:
                 df[_col] = df[_col] * (1 - _effective * _s)
 
-    # ── 종합점수: 성장성 / 안정성 / 주가 / 타이밍 4축 (30/30/30/10) ──
-    # 성장성 (30%): 영업이익CAGR 35% + 매출CAGR 30% + 최근분기YoY 25% + 실적가속도 10%
-    성장성_점수 = S_OpCAGR * 0.35 + get_rank("매출_CAGR") * 0.30 + S_QOpYoY * 0.25 + S_Accel * 0.10
-    # 안정성 (30%): ROE 40% + F스코어(재무건전성) 35% + FCF수익률 25%
-    안정성_점수 = S_ROE * 0.40 + get_rank("F스코어") * 0.35 + S_FCF * 0.25
-    # 주가 (30%): PER역순 35% + 복합괴리율 35% + PBR역순 15% + 밸류모델수 15%
-    # (복합괴리율=4개 모델 가중평균, 밸류모델수=복수 모델 동의 시 신뢰도 보너스)
+    # ── 종합점수 v2: 성장성(25%) / 안정성(35%) / 가격(25%) / 타이밍(15%) ──
+    # 개편 배경:
+    #   - 턴어라운드 베이스이펙트 종목의 성장성·괴리율 과대 반영 완화
+    #   - 재무건전성(안정성) 비중 강화 + 부채비율 절대값 페널티 신규 도입
+    #   - 기술·수급 신호(RS, 수급강도) 타이밍 축에 직접 반영
+
+    # ── [1] 베이스이펙트 플래그: CAGR·YoY 동시 상한캡 + 전년 영업이익률 극저 ──
+    # 소형주 저기저 → 급등 시 CAGR·YoY·괴리율 3중 극대화 문제 보정
+    # 조건: 영업이익_CAGR=150%(캡) AND Q_영업이익_YoY=300%(캡) AND 전년 영업이익률<3%
+    #   → 직전까지 수익성이 미미했던 종목이 급격히 개선된 케이스
+    _cagr_capped  = df.get("영업이익_CAGR",      pd.Series(0, index=df.index)).fillna(0) >= _CAGR_CAP
+    _yoy_capped   = df.get("Q_영업이익_YoY(%)",  pd.Series(0, index=df.index)).fillna(0) >= _YOY_CAP
+    _opm_prev_low = df.get("영업이익률_전년",     pd.Series(np.nan, index=df.index)).fillna(np.nan) < 3
+    _base_effect  = (_cagr_capped & _yoy_capped & _opm_prev_low).fillna(False)
+
+    # ── [2] 성장성 (25%): 연속성장 추가, 베이스이펙트 페널티 ──
+    # 영업이익_CAGR(30%) + 매출_CAGR(25%) + Q_영업이익_YoY(25%) + 실적가속_연속(10%) + 영업이익_연속성장(10%)
+    S_OpStreak = get_rank("영업이익_연속성장", asc=True, zero_if_nan=True)
+    성장성_점수 = (
+        S_OpCAGR * 0.30
+        + get_rank("매출_CAGR") * 0.25
+        + S_QOpYoY * 0.25
+        + S_Accel * 0.10
+        + S_OpStreak * 0.10
+    )
+    # 베이스이펙트 페널티: 성장성 점수 25% 할인
+    성장성_점수 = 성장성_점수 * np.where(_base_effect, 0.75, 1.0)
+
+    # ── [3] 안정성 (35%): 이자보상배율 추가, ROE 비중 축소, 부채비율 절대값 페널티 ──
+    # F스코어(30%) + 지속가치_품질(25%) + FCF수익률(20%) + ROE(15%) + 이자보상배율(10%)
+    S_IntCov = get_rank("이자보상배율", asc=True, zero_if_nan=True)
+    안정성_점수 = (
+        get_rank("F스코어") * 0.30
+        + S_SustainedQ * 0.25
+        + S_FCF * 0.20
+        + S_ROE * 0.15
+        + S_IntCov * 0.10
+    )
+    # 부채비율 200% 초과 시 안정성 20% 할인 (섹터 무관 동일 적용)
+    _debt_ratio = df.get("부채비율(%)", pd.Series(0, index=df.index)).fillna(0)
+    안정성_점수 = 안정성_점수 * np.where(_debt_ratio > 200, 0.80, 1.0)
+
+    # ── [4] 가격 (25%): 괴리율 비중 축소, 베이스이펙트 괴리율 할인, 가치함정 페널티 강화 ──
+    # PER역순(35%) + 종합괴리율(25%) + PBR역순(20%) + FCF수익률보조(10%) + 밸류모델수(10%)
     S_composite_div = get_rank("종합괴리율(%)")
     S_model_count = get_rank("밸류_모델수", asc=True, zero_if_nan=False)
-    가격_점수   = S_PER_inv * 0.35 + S_composite_div * 0.35 + S_PBR_inv * 0.15 + S_model_count * 0.15
-    # 타이밍 (10%): 과열 회피(40%) + 상승조짐(45%) + 실적감속 페널티
-    # 기본 신호: 과열도 회피 + 상승조짐 포착 (최대: 40+45=85)
+    # 베이스이펙트 종목은 S-RIM/EPV도 TTM 급등 기준 → 괴리율 신뢰도 50% 할인
+    _div_adj = np.where(_base_effect, S_composite_div * 0.5, S_composite_div)
+    가격_점수 = (
+        S_PER_inv * 0.35
+        + _div_adj * 0.25
+        + S_PBR_inv * 0.20
+        + S_FCF * 0.10
+        + S_model_count * 0.10
+    )
+    # 가치함정 페널티: 30% → 40% 강화
+    _vt_flag = df.get("가치함정_경고", pd.Series(0, index=df.index)).fillna(0)
+    가격_점수 = 가격_점수 * np.where(_vt_flag == 1, 0.60, 1.0)
+
+    # ── [5] 타이밍 (15%): RS·수급강도 직접 반영, 최대값=100 ──
+    # 과열도역순(30%) + 상승조짐(35%) + RS_등급(20%) + 수급강도(15%)
     _anti_oh  = 100 - df.get("과열도", pd.Series(50, index=df.index)).fillna(50)
     _breakout = df.get("상승조짐", pd.Series(0, index=df.index)).fillna(0)
-    _base = _anti_oh * 0.40 + _breakout * 0.45  # 0~85 범위
+    _base = _anti_oh * 0.30 + _breakout * 0.35 + S_RS * 0.20 + S_Supply * 0.15  # 0~100 범위
 
-    # 실적감속 페널티: -15점 (0-100 정규화 전 적용)
+    # 실적감속 페널티: -15점
     _decel = np.where(
         df.get("실적감속_경고", pd.Series(0, index=df.index)).fillna(0) == 1,
         -15, 0
     )
-
-    # 최종 타이밍_점수: 0~85 범위를 0~100으로 정규화
-    타이밍_점수 = np.clip((_base + _decel) / 0.85, 0, 100)
+    타이밍_점수 = np.clip(_base + _decel, 0, 100)
 
     df["성장성_점수"] = 성장성_점수
     df["안정성_점수"] = 안정성_점수
     df["가격_점수"]   = 가격_점수
     df["타이밍_점수"] = pd.Series(타이밍_점수, index=df.index).round(1)
-    df["종합점수"]    = 성장성_점수 * 0.30 + 안정성_점수 * 0.30 + 가격_점수 * 0.30 + df["타이밍_점수"] * 0.10
+    # 종합점수 v2: 성장성25% + 안정성35% + 가격25% + 타이밍15%
+    df["종합점수"]    = 성장성_점수 * 0.25 + 안정성_점수 * 0.35 + 가격_점수 * 0.25 + df["타이밍_점수"] * 0.15
 
     # 임시 컬럼 정리
     if "_순이익_CAGR_adj" in df.columns:
@@ -1633,6 +1757,7 @@ def apply_quality_value_screen(df):
         & (df["순이익_당기양수"].fillna(0) == 1)            # 당기 흑자
         & (df["순이익_전년음수"].fillna(0) == 0)            # 전년도 흑자 (연속 흑자)
         & (df["시가총액"].fillna(0) >= 100_000_000_000)     # 1000억 이상
+        & (df.get("가치함정_경고", pd.Series(0, index=df.index)).fillna(0) == 0)  # 가치함정 제외
     )
     # Track B: 금융주/지주사 전용 (버핏의 은행주 선별 잣대)
     mask_finance = (
@@ -1644,6 +1769,7 @@ def apply_quality_value_screen(df):
         & (df["순이익_당기양수"].fillna(0) == 1)            # 연속 흑자 필수
         & (df["순이익_전년음수"].fillna(0) == 0)
         & (df["시가총액"].fillna(0) >= 300_000_000_000)     # 3000억 이상 (금융 소형주 제거)
+        & (df.get("가치함정_경고", pd.Series(0, index=df.index)).fillna(0) == 0)  # 가치함정 제외
     )
     return df[mask_general | mask_finance].sort_values("우량가치_점수", ascending=False)
 
@@ -1796,6 +1922,13 @@ def run():
         calc_investor_strength(inv, daily, price_hist=hist if not hist.empty else None),
         on="종목코드", how="left",
     )
+    # ── 기술적/수급 지표 이상치 클리핑 (표시 왜곡 + 퍼센타일 편향 방지) ──
+    if "수급강도" in full.columns:
+        full["수급강도"] = full["수급강도"].clip(-10, 10)       # 소형주 대량매수 ±50%+ 방지
+    if "거래대금_증감(%)" in full.columns:
+        full["거래대금_증감(%)"] = full["거래대금_증감(%)"].clip(-90, 500)  # 거래대금 극소 시 5,000%+ 방지
+    if "변동성_60일(%)" in full.columns:
+        full["변동성_60일(%)"] = full["변동성_60일(%)"].clip(0, 200)        # 연환산 변동성 상한 (표시 전용)
     full = calc_overheat_score(full)
     full = calc_breakout_signal(full)
     full = calc_strategy_scores(full)

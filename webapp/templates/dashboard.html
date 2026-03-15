@@ -194,11 +194,17 @@
           <button class="btn btn-sm btn-outline-secondary" id="btn-adv-reset">초기화</button>
         </div>
       </div>
-      <!-- 필터 프리셋 -->
-      <div class="preset-bar" id="preset-bar">
-        <span class="small text-muted me-1">프리셋:</span>
-        <div id="preset-list" class="d-inline-flex flex-wrap gap-1"></div>
-        <button class="btn btn-sm btn-outline-success ms-2" id="btn-preset-save" title="현재 필터를 프리셋으로 저장">+ 저장</button>
+      <div class="adv-active-summary" id="adv-active-summary" style="display:none;"></div>
+      <div class="preset-stack">
+        <div class="preset-bar preset-bar-recommended" id="recommended-preset-bar">
+          <span class="small text-muted me-1">추천 프리셋:</span>
+          <div id="recommended-preset-list" class="preset-list preset-list-cards"></div>
+        </div>
+        <div class="preset-bar" id="preset-bar">
+          <span class="small text-muted me-1">내 프리셋:</span>
+          <div id="preset-list" class="preset-list"></div>
+          <button class="btn btn-sm btn-outline-success ms-2" id="btn-preset-save" title="현재 필터를 프리셋으로 저장">+ 저장</button>
+        </div>
       </div>
       <div id="column-filters">
         <div class="adv-filter-grid" id="adv-filter-grid"></div>
@@ -475,6 +481,28 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body position-relative">
+        <!-- Macro Context Input Accordion -->
+        <!-- 매크로 분석 영역 -->
+        <div class="macro-analysis-panel mb-3" id="macro-analysis-panel">
+          <div class="d-flex align-items-center justify-content-between px-3 py-2"
+               style="background:#f8f9ff; border:1px solid #dee2f0; border-radius:6px;">
+            <div style="font-size:.85rem; font-weight:600; color:#495057;">
+              거시경제 환경 분석
+              <span id="macro-analysis-date" class="text-muted ms-2" style="font-size:.75rem; font-weight:400;"></span>
+            </div>
+            <button class="btn btn-sm btn-outline-primary" id="btn-macro-analysis" style="font-size:.78rem;">
+              AI 매크로 분석
+            </button>
+          </div>
+          <div id="macro-result-area" class="px-3 pt-2" style="font-size:.8rem;">
+            <div id="macro-result-placeholder" class="text-muted py-2" style="font-size:.78rem;">
+              AI 매크로 분석 버튼을 눌러 현재 거시경제 환경을 분석하세요. 포트폴리오 AI 분석 시 자동으로 활용됩니다.
+            </div>
+            <div id="macro-result-content" style="display:none;"></div>
+          </div>
+        </div>
+        <!-- End Macro Context -->
+
         <div id="pf-report-loading" class="text-center py-4" style="display:none;">
           <div class="spinner-border text-primary" role="status"></div>
           <p class="mt-2 text-muted mb-1" id="pf-report-loading-text">포트폴리오 AI 분석 중...</p>
@@ -512,6 +540,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script src="/static/js/dashboard.js?v=23"></script>
+<script src="/static/js/dashboard.js?v=26"></script>
 </body>
 </html>

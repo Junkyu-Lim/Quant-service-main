@@ -34,9 +34,10 @@ REPORT_DIR.mkdir(exist_ok=True)
 PDF_REPORT_DIR = BASE_DIR / "report"
 PDF_REPORT_DIR.mkdir(exist_ok=True)
 
-# AI 분석 토큰 설정
-ANALYSIS_MAX_TOKENS = int(os.environ.get("ANALYSIS_MAX_TOKENS", "16000"))
-WEB_SEARCH_MAX_USES = int(os.environ.get("WEB_SEARCH_MAX_USES", "5"))
+# AI 분석 설정
+ANALYSIS_TIMEOUT_SEC = float(os.environ.get("ANALYSIS_TIMEOUT_SEC", "720"))
+ANALYSIS_MAX_TOKENS = int(os.environ.get("ANALYSIS_MAX_TOKENS", "12000"))
+WEB_SEARCH_MAX_USES = int(os.environ.get("WEB_SEARCH_MAX_USES", "2"))
 
 # S-RIM 할인율 설정 (동적 Ke = RISK_FREE_RATE + ERP)
 # 환경변수로 재정의 가능: RISK_FREE_RATE=3.5, EQUITY_RISK_PREMIUM=5.5

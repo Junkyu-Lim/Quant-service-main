@@ -12,6 +12,7 @@
   let sortCol       = "종합점수";
   let sortOrder     = "desc";
   const columnFilters = {};       // { col: { min, max } }
+  const flagFilters   = {};       // { col: "1" | "0" }
   let batchChanges  = null;
   const compareSet  = new Set();  // 비교 선택된 종목코드
   let advCat        = "all";
@@ -53,6 +54,141 @@
   function saveWatchlist(set) {
     localStorage.setItem(WATCHLIST_KEY, JSON.stringify([...set]));
   }
+
+  // ─── 매크로 AI 분석 ──────────────────────────────────────────────────────
+  const ENV_COLORS = {
+    "공격적": { bg: "#d5f5e3", fg: "#1e8449" },
+    "중립":   { bg: "#fef9e7", fg: "#b9770e" },
+    "방어적": { bg: "#fadbd8", fg: "#c0392b" },
+  };
+  const CASH_COLORS = {
+    "축소": { bg: "#d5f5e3", fg: "#1e8449" },
+    "유지": { bg: "#fef9e7", fg: "#b9770e" },
+    "확대": { bg: "#fadbd8", fg: "#c0392b" },
+  };
+
+  function renderMacroResult(scores, generatedDate) {
+    const placeholder = document.getElementById("macro-result-placeholder");
+    const content = document.getElementById("macro-result-content");
+    const dateEl = document.getElementById("macro-analysis-date");
+    if (!content) return;
+
+    if (generatedDate && dateEl) dateEl.textContent = generatedDate;
+
+    const env = scores.environment || "";
+    const cash = scores.cash_signal || "";
+    const envC = ENV_COLORS[env] || { bg: "#e9ecef", fg: "#6c757d" };
+    const cashC = CASH_COLORS[cash] || { bg: "#e9ecef", fg: "#6c757d" };
+
+    const fav = Array.isArray(scores.favorable_sectors) ? scores.favorable_sectors : [];
+    const unfav = Array.isArray(scores.unfavorable_sectors) ? scores.unfavorable_sectors : [];
+    const favHtml = fav.length ? fav.map(s => `<span class="macro-sector-chip favorable">${s}</span>`).join(" ") : '<span class="text-muted">-</span>';
+    const unfavHtml = unfav.length ? unfav.map(s => `<span class="macro-sector-chip unfavorable">${s}</span>`).join(" ") : '<span class="text-muted">-</span>';
+
+    // 환율/유가 실제 수치 레이블 (웹 검색으로 가져온 값)
+    const usdKrwLabel = scores.usd_krw_level
+      ? `환율(${scores.usd_krw_level})`
+      : `환율(${scores.usd_krw || "-"})`;
+    const commoditiesLabel = scores.commodities_detail
+      ? `원자재(${scores.commodities_detail})`
+      : `원자재(${scores.commodities || "-"})`;
+
+    const indicators = [
+      ["성장", scores.growth],
+      ["금리", scores.real_rate],
+      ["금융여건", scores.financial_conditions],
+      [usdKrwLabel, null],  // 레이블에 수치 포함, 값은 null
+      [commoditiesLabel, null],
+      ["신용", scores.credit_spread],
+      ["중국", scores.china],
+      ["반도체", scores.semiconductor],
+    ].filter(([k, v]) => k && (v !== undefined));
+
+    const indicatorHtml = indicators.map(([k, v]) =>
+      v
+        ? `<span class="macro-indicator-chip">${k}: <strong>${v}</strong></span>`
+        : `<span class="macro-indicator-chip">${k}</span>`
+    ).join(" ");
+
+    content.innerHTML = `
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
+        <span style="padding:3px 10px;border-radius:12px;font-weight:600;font-size:.8rem;background:${envC.bg};color:${envC.fg};">환경: ${env || "N/A"}</span>
+        <span style="padding:3px 10px;border-radius:12px;font-weight:600;font-size:.8rem;background:${cashC.bg};color:${cashC.fg};">현금신호: ${cash || "N/A"}</span>
+        ${indicatorHtml}
+      </div>
+      ${scores.capex_theme ? `<div style="margin-bottom:6px;"><strong>CAPEX 테마:</strong> ${scores.capex_theme}</div>` : ""}
+      <div style="margin-bottom:4px;"><strong>유리:</strong> ${favHtml} &nbsp; <strong>불리:</strong> ${unfavHtml}</div>
+      ${scores.key_risks ? `<div style="margin-top:6px;color:#c0392b;font-size:.77rem;"><strong>주요 리스크:</strong> ${scores.key_risks}</div>` : ""}
+      ${scores.summary ? `<div style="margin-top:6px;color:#495057;font-size:.77rem;border-top:1px solid #dee2e6;padding-top:6px;">${scores.summary}</div>` : ""}
+    `;
+    if (placeholder) placeholder.style.display = "none";
+    content.style.display = "block";
+  }
+
+  async function loadLatestMacro() {
+    try {
+      const res = await fetch("/api/macro/analysis");
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.scores) renderMacroResult(data.scores, data.generated_date);
+    } catch { /* 조용히 실패 */ }
+  }
+
+  async function requestMacroAnalysis() {
+    const btn = document.getElementById("btn-macro-analysis");
+    const placeholder = document.getElementById("macro-result-placeholder");
+    if (btn) { btn.disabled = true; btn.textContent = "웹 검색 중..."; }
+    const dateEl = document.getElementById("macro-analysis-date");
+    if (dateEl) dateEl.textContent = "";
+    // 로딩 상태 표시
+    if (placeholder) {
+      placeholder.style.display = "block";
+      placeholder.textContent = "AI가 최신 환율·금리·뉴스를 검색하여 분석 중입니다... (1~2분 소요)";
+    }
+    const content = document.getElementById("macro-result-content");
+    if (content) content.style.display = "none";
+
+    // 단계별 버튼 텍스트 업데이트
+    const stages = ["웹 검색 중...", "데이터 수집 중...", "분석 중...", "결과 정리 중..."];
+    let stageIdx = 0;
+    const stageTimer = setInterval(() => {
+      stageIdx = (stageIdx + 1) % stages.length;
+      if (btn && btn.disabled) btn.textContent = stages[stageIdx];
+    }, 8000);
+
+    try {
+      const res = await fetch("/api/macro/analysis", {
+        method: "POST",
+        signal: AbortSignal.timeout(180000),  // 3분 타임아웃
+      });
+      const data = await res.json();
+      if (data.error) {
+        alert("매크로 분석 실패: " + data.error);
+        if (placeholder) placeholder.textContent = "분석 실패. 다시 시도해주세요.";
+      } else {
+        renderMacroResult(data.scores, data.generated_date);
+      }
+    } catch (e) {
+      if (e.name === "TimeoutError") {
+        alert("매크로 분석 시간 초과 (3분). 네트워크 상태를 확인하거나 다시 시도해주세요.");
+      } else {
+        alert("매크로 분석 오류: " + e.message);
+      }
+      if (placeholder) {
+        placeholder.style.display = "block";
+        placeholder.textContent = "AI 매크로 분석 버튼을 눌러 현재 거시경제 환경을 분석하세요...";
+      }
+    } finally {
+      clearInterval(stageTimer);
+      if (btn) { btn.disabled = false; btn.textContent = "AI 매크로 분석"; }
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    document.getElementById("btn-macro-analysis")?.addEventListener("click", requestMacroAnalysis);
+    // 모달 열 때 기존 매크로 분석 결과 로드
+    document.getElementById("portfolio-report-modal")?.addEventListener("show.bs.modal", loadLatestMacro);
+  });
   function updateWatchlistCount() {
     const el = document.getElementById("cnt-watchlist");
     if (el) el.textContent = getWatchlist().size;
@@ -126,12 +262,17 @@
       </ul>
       <h6>💡 팁</h6>
       <p>전체 목록에서도 컬럼 헤더를 클릭하여 <strong>PER 낮은 순</strong>, <strong>ROE 높은 순</strong> 등으로 정렬해보세요.</p>
-      <h6>📐 종합점수 구성</h6>
-      <p>종합점수 = (성장성 + 안정성 + 가격) ÷ 3 — 각 세부 점수는 전체 종목 대비 백분위 순위로 산출됩니다.</p>
+      <h6>📐 종합점수 구성 (v2)</h6>
+      <p>종합점수 = 성장성×25% + 안정성×35% + 가격×25% + 타이밍×15% — 각 세부 점수는 전체 종목 대비 백분위 순위로 산출됩니다.</p>
       <ul>
-        <li><strong>성장성:</strong> 영업이익_CAGR×35% + 매출_CAGR×30% + 분기영업이익YoY×25% + 실적가속연속×10%</li>
-        <li><strong>안정성:</strong> ROE×40% + F스코어×35% + FCF수익률×25%</li>
-        <li><strong>가격:</strong> PER역순×35% + 복합괴리율×35% + PBR역순×15% + 밸류모델수×15%</li>
+        <li><strong>성장성 (25%):</strong> 영업이익_CAGR×30% + 매출_CAGR×25% + 분기영업이익YoY×25% + 실적가속연속×10% + 영업이익_연속성장×10%
+          <br><small class="text-muted">⚠️ 베이스이펙트 보정: CAGR·분기YoY 동시 상한캡 + 전년 영업이익률 3% 미만인 경우 성장성 25% 할인 (소형주 기저효과 과대평가 방지)</small></li>
+        <li><strong>안정성 (35%):</strong> F스코어×30% + 지속가치_품질×25% + FCF수익률×20% + ROE×15% + 이자보상배율×10%
+          <br><small class="text-muted">지속가치_품질: 이익·매출 동행성 + 영업이익률 안정성 (0~6점 척도) | ⚠️ 부채비율 200% 초과 시 안정성 20% 할인 (섹터 무관 동일 적용)</small></li>
+        <li><strong>가격 (25%):</strong> PER역순×35% + 복합괴리율×25% + PBR역순×20% + FCF수익률보조×10% + 밸류모델수×10%
+          <br><small class="text-muted">⚠️ 가치함정 경고 시 ×0.6 (40% 할인) | 베이스이펙트 종목은 복합괴리율 기여도 50% 할인 (TTM 급등 기준 적정가 과대추정 방지)</small></li>
+        <li><strong>타이밍 (15%):</strong> 과열도역순×30% + 상승조짐×35% + RS_등급×20% + 수급강도×15% (실적감속 경고 시 –15점 페널티)
+          <br><small class="text-muted">RS_등급(상대강도)·수급강도(외인+기관 순매수)를 직접 반영. 기술·수급이 뒷받침되는 종목에 가산.</small></li>
       </ul>
     `,
     leaders: `
@@ -356,9 +497,10 @@
       <h6>📐 종합점수 세부 구성</h6>
       <p>Multi-Pick은 전략별 점수 대신 <strong>종합점수</strong>로 정렬됩니다.</p>
       <ul>
-        <li><strong>성장성 (33.3%):</strong> 영업이익CAGR×35% + 매출CAGR×30% + 분기영업이익YoY×25% + 실적가속연속×10%</li>
-        <li><strong>안정성 (33.3%):</strong> ROE×40% + F스코어×35% + FCF수익률×25%</li>
-        <li><strong>가격 (33.3%):</strong> PER역순×35% + 복합괴리율×35% + PBR역순×15% + 밸류모델수×15%</li>
+        <li><strong>성장성 (25%):</strong> 영업이익CAGR×30% + 매출CAGR×25% + 분기영업이익YoY×25% + 실적가속연속×10% + 영업이익_연속성장×10%</li>
+        <li><strong>안정성 (35%):</strong> F스코어×30% + 지속가치_품질×25% + FCF수익률×20% + ROE×15% + 이자보상배율×10%</li>
+        <li><strong>가격 (25%):</strong> PER역순×35% + 복합괴리율×25% + PBR역순×20% + FCF수익률보조×10% + 밸류모델수×10%</li>
+        <li><strong>타이밍 (15%):</strong> 과열도역순×30% + 상승조짐×35% + RS_등급×20% + 수급강도×15% (실적감속 시 –15점 페널티)</li>
       </ul>
 
       <h6>🎯 활용법</h6>
@@ -830,6 +972,11 @@
       "상승조짐":     [v => v >= 70, v => v <= 30],   // High = Opportunity
       "타이밍_점수":  [v => v >= 75, v => v <= 40],
       "실적감속_경고":[v => v == 0,  v => v == 1],    // 0=Normal, 1=Warning
+      "영업이익_감속경고":[v => v == 0,  v => v == 1],
+      "매출_감속경고":[v => v == 0,  v => v == 1],
+      "PER_이상": [v => v == 0, v => v == 1],
+      "순이익_전년음수": [v => v == 0, v => v == 1],
+      "순이익_당기양수": [v => v == 1, v => v == 0],
       "거래량_가격_괴리": [v => v == 0, v => v >= 30], // 0=Normal, High=Divergence
     };
 
@@ -1009,229 +1156,382 @@
       "실적감속_경고": "실적 감속 경고. 영업이익 YoY가 3분기 연속 양수이지만 단조 감소 → 피크 실적 신호. (Good: 0=정상, Bad: 1=감속)",
       "영업이익_감속경고": "영업이익 YoY 감속 여부. 1이면 피크 실적 위험.",
       "영업이익_감속폭(pp)": "영업이익 YoY 감속폭. 3분기 전 YoY - 최근 YoY (pp).",
+      "매출_감속경고": "매출 YoY 감속 여부. 1이면 외형 성장 모멘텀이 둔화 중이라는 뜻.",
       "거래량_가격_괴리": "거래량-가격 괴리 지수. 가격↑+거래량↓ 동시 발생 시 양수. 높을수록 상승 동력 소진 신호.",
     };
 
   // ─── 세부 모달의 지표 그룹 ────────────────────────────────────────────
+  // 순서: 가격/밸류 → 수익성/효율 → 성장성 → 연속성장 → TTM실적 → Forward →
+  //       재무건전성 → 배당 → 모멘텀/RS → 기술적 → 수급 → 타이밍 → 전략점수 → 데이터품질
   const METRIC_GROUPS = [
     {
       title: "가격 & 밸류에이션",
-      metrics: [
-        { key: "종가",           label: "현재가",      fmt: "int" },
-        { key: "시가총액",       label: "시가총액",    fmt: "eok" },
-        { key: "PER",            label: "PER",          fmt: "f2" },
-        { key: "PBR",            label: "PBR",          fmt: "f2" },
-        { key: "PSR",            label: "PSR",          fmt: "f2" },
-        { key: "PEG",            label: "PEG",          fmt: "f2" },
-        { key: "EPS",            label: "EPS",          fmt: "int" },
-        { key: "BPS",            label: "BPS",          fmt: "int" },
-        { key: "이익수익률(%)",  label: "이익수익률%",  fmt: "f2" },
-        { key: "적정주가_SRIM",  label: "S-RIM 적정가",  fmt: "int" },
-        { key: "괴리율(%)",      label: "S-RIM 괴리%",  fmt: "f2" },
-        { key: "적정주가_종합",  label: "복합 적정가",   fmt: "int" },
-        { key: "종합괴리율(%)",  label: "복합 괴리%",    fmt: "f2" },
-        { key: "밸류_모델수",    label: "밸류모델수",    fmt: "int" },
-        { key: "SRIM_오메가",    label: "ω (omega)",    fmt: "f3" },
-        { key: "적정주가_EPV",   label: "EPV 적정가",   fmt: "int" },
-        { key: "적정주가_DDM",   label: "DDM 적정가",   fmt: "int" },
-        { key: "적정주가_FWD",   label: "FWD 적정가",   fmt: "int" },
+      subGroups: [
+        {
+          subTitle: "시장 가격",
+          metrics: [
+            { key: "종가",     label: "현재가",   fmt: "int" },
+            { key: "시가총액", label: "시가총액", fmt: "eok" },
+          ]
+        },
+        {
+          subTitle: "밸류에이션 배수",
+          metrics: [
+            { key: "PER",           label: "PER",         fmt: "f2" },
+            { key: "PBR",           label: "PBR",         fmt: "f2" },
+            { key: "PSR",           label: "PSR",         fmt: "f2" },
+            { key: "PEG",           label: "PEG",         fmt: "f2" },
+            { key: "이익수익률(%)", label: "이익수익률%", fmt: "f2" },
+          ]
+        },
+        {
+          subTitle: "주당 가치",
+          metrics: [
+            { key: "EPS", label: "EPS", fmt: "int" },
+            { key: "BPS", label: "BPS", fmt: "int" },
+          ]
+        },
+        {
+          subTitle: "적정가치 평가",
+          metrics: [
+            { key: "적정주가_SRIM", label: "S-RIM 적정가", fmt: "int" },
+            { key: "적정주가_EPV",  label: "EPV 적정가",   fmt: "int" },
+            { key: "적정주가_DDM",  label: "DDM 적정가",   fmt: "int" },
+            { key: "적정주가_FWD",  label: "FWD 적정가",   fmt: "int" },
+            { key: "적정주가_종합", label: "복합 적정가",   fmt: "int" },
+            { key: "종합괴리율(%)", label: "복합 괴리%",    fmt: "f2" },
+            { key: "괴리율(%)",     label: "S-RIM 괴리%",  fmt: "f2" },
+            { key: "밸류_모델수",   label: "밸류모델수",   fmt: "int" },
+            { key: "SRIM_오메가",   label: "ω (omega)",    fmt: "f3" },
+          ]
+        },
       ]
     },
     {
-      title: "수익성",
-      metrics: [
-        { key: "ROE(%)",         label: "ROE%",        fmt: "f2" },
-        { key: "영업이익률(%)",  label: "영업이익률%",  fmt: "f2" },
-        { key: "FCF수익률(%)",   label: "FCF수익률%",   fmt: "f2" },
-        { key: "이익품질_양호",  label: "이익품질",     fmt: "flag" },
-        { key: "현금전환율(%)",  label: "현금전환율%",  fmt: "f1" },
-        { key: "CAPEX비율(%)",   label: "CAPEX비율%",   fmt: "f1" },
+      title: "수익성 & 효율성",
+      subGroups: [
+        {
+          subTitle: "핵심 수익성",
+          metrics: [
+            { key: "ROE(%)",        label: "ROE%",       fmt: "f2" },
+            { key: "ROIC(%)",       label: "ROIC%",      fmt: "f1" },
+            { key: "FCF수익률(%)",  label: "FCF수익률%",  fmt: "f2" },
+            { key: "이익수익률(%)", label: "이익수익률%", fmt: "f2" },
+            { key: "이익품질_양호", label: "이익품질",    fmt: "flag" },
+          ]
+        },
+        {
+          subTitle: "현금 효율",
+          metrics: [
+            { key: "현금전환율(%)", label: "현금전환율%", fmt: "f1" },
+            { key: "CAPEX비율(%)",  label: "CAPEX비율%",  fmt: "f1" },
+          ]
+        },
+        {
+          subTitle: "마진 분석",
+          metrics: [
+            { key: "영업이익률_최근", label: "영업이익률% (최근)", fmt: "f1" },
+            { key: "영업이익률_전년", label: "영업이익률% (전년)", fmt: "f1" },
+            { key: "GPM_최근(%)",     label: "GPM 최근%",          fmt: "f1" },
+            { key: "GPM_전년(%)",     label: "GPM 전년%",          fmt: "f1" },
+            { key: "GPM_변화(pp)",    label: "GPM 변화(pp)",       fmt: "f1" },
+          ]
+        },
+        {
+          subTitle: "자본 효율 추이",
+          metrics: [
+            { key: "ROIC_전년(%)",      label: "ROIC 전년%",       fmt: "f1" },
+            { key: "ROIC_개선",         label: "ROIC 개선",         fmt: "flag" },
+            { key: "퀄리티_턴어라운드", label: "퀄리티 턴어라운드", fmt: "flag" },
+          ]
+        },
       ]
     },
     {
       title: "성장성",
-      metrics: [
-        { key: "매출_CAGR",           label: "매출CAGR%",       fmt: "f1" },
-        { key: "영업이익_CAGR",       label: "OP CAGR%",        fmt: "f1" },
-        { key: "순이익_CAGR",         label: "NP CAGR%",        fmt: "f1" },
-        { key: "영업CF_CAGR",         label: "영업CF CAGR%",    fmt: "f1" },
-        { key: "FCF_CAGR",            label: "FCF CAGR%",       fmt: "f1" },
-        { key: "Q_매출_YoY(%)",       label: "Q 매출YoY%",      fmt: "f1" },
-        { key: "Q_영업이익_YoY(%)",   label: "Q OP YoY%",       fmt: "f1" },
-        { key: "Q_순이익_YoY(%)",     label: "Q NP YoY%",       fmt: "f1" },
-        { key: "TTM_매출_YoY(%)",     label: "TTM 매출YoY%",    fmt: "f1" },
-        { key: "TTM_영업이익_YoY(%)", label: "TTM OP YoY%",     fmt: "f1" },
-        { key: "TTM_순이익_YoY(%)",   label: "TTM NP YoY%",     fmt: "f1" },
+      subGroups: [
+        {
+          subTitle: "장기 성장 (CAGR)",
+          metrics: [
+            { key: "매출_CAGR",     label: "매출 CAGR%",   fmt: "f1" },
+            { key: "영업이익_CAGR", label: "OP CAGR%",     fmt: "f1" },
+            { key: "순이익_CAGR",   label: "NP CAGR%",     fmt: "f1" },
+            { key: "영업CF_CAGR",   label: "영업CF CAGR%", fmt: "f1" },
+            { key: "FCF_CAGR",      label: "FCF CAGR%",    fmt: "f1" },
+          ]
+        },
+        {
+          subTitle: "분기 성장 (Q YoY)",
+          metrics: [
+            { key: "Q_매출_YoY(%)",     label: "Q 매출YoY%", fmt: "f1" },
+            { key: "Q_영업이익_YoY(%)", label: "Q OP YoY%",  fmt: "f1" },
+            { key: "Q_순이익_YoY(%)",   label: "Q NP YoY%",  fmt: "f1" },
+          ]
+        },
+        {
+          subTitle: "TTM 성장 (연환산 YoY)",
+          metrics: [
+            { key: "TTM_매출_YoY(%)",     label: "TTM 매출YoY%", fmt: "f1" },
+            { key: "TTM_영업이익_YoY(%)", label: "TTM OP YoY%",  fmt: "f1" },
+            { key: "TTM_순이익_YoY(%)",   label: "TTM NP YoY%",  fmt: "f1" },
+          ]
+        },
       ]
     },
     {
-      title: "재무건전성",
-      metrics: [
-        { key: "F스코어",      label: "F-Score",    fmt: "int" },
-        { key: "F1_수익성",    label: "F1 수익성",  fmt: "flag" },
-        { key: "F2_영업CF",    label: "F2 영업CF",  fmt: "flag" },
-        { key: "F3_ROA개선",   label: "F3 ROA개선", fmt: "flag" },
-        { key: "F4_이익품질",  label: "F4 이익품질", fmt: "flag" },
-        { key: "F5_레버리지", label: "F5 레버리지", fmt: "flag" },
-        { key: "F6_유동성",    label: "F6 유동성",  fmt: "flag" },
-        { key: "F7_희석없음",  label: "F7 희석없음", fmt: "flag" },
-        { key: "F8_매출총이익률", label: "F8 매출총이익률", fmt: "flag" },
-        { key: "F9_자산회전율", label: "F9 자산회전율", fmt: "flag" },
-        { key: "부채비율(%)",  label: "부채비율%",  fmt: "f1" },
-        { key: "유동비율(%)",  label: "유동비율%",  fmt: "f1" },
-        { key: "부채상환능력", label: "부채상환능력", fmt: "f2" },
-        { key: "이자보상배율", label: "이자보상배율", fmt: "f2" },
-      ]
-    },
-    {
-      title: "배당",
-      metrics: [
-        { key: "배당수익률(%)",    label: "배당수익률%",  fmt: "f2" },
-        { key: "DPS_최근",         label: "DPS",          fmt: "int" },
-        { key: "배당성향(%)",      label: "배당성향%",    fmt: "f1" },
-        { key: "배당_경고신호",    label: "배당경고",     fmt: "flag" },
-        { key: "DPS_CAGR",         label: "DPS CAGR%",    fmt: "f1" },
-        { key: "배당_연속증가",    label: "배당연속증가",  fmt: "int" },
-        { key: "배당_수익동반증가", label: "수익동반증가", fmt: "flag" },
-        { key: "현금전환율(%)",    label: "현금전환%",    fmt: "f1" },
-      ]
-    },
-    {
-      title: "기술적 지표",
-      metrics: [
-        { key: "52주_최고대비(%)", label: "52주 최고대비%", fmt: "f1" },
-        { key: "52주_최저대비(%)", label: "52주 최저대비%", fmt: "f1" },
-        { key: "MA20_이격도(%)",   label: "MA20%",          fmt: "f1" },
-        { key: "MA60_이격도(%)",   label: "MA60%",          fmt: "f1" },
-        { key: "RSI_14",           label: "RSI(14)",         fmt: "f1" },
-        { key: "거래대금_20일평균", label: "거래대금(20일평균)", fmt: "eok" },
-        { key: "거래대금_증감(%)", label: "거래대금 증감%",  fmt: "f1" },
-        { key: "변동성_60일(%)",   label: "변동성(60일)%",  fmt: "f1" },
-      ]
-    },
-    {
-      title: "모멘텀 & 상대강도",
-      metrics: [
-        { key: "RS_60d",        label: "RS(60d)",         fmt: "f1" },
-        { key: "RS_120d",       label: "RS(120d)",        fmt: "f1" },
-        { key: "RS_250d",       label: "RS(250d)",        fmt: "f1" },
-        { key: "Composite_RS",  label: "Composite RS",    fmt: "f1" },
-        { key: "RS_등급",       label: "RS 등급",         fmt: "f1" },
-      ]
-    },
-    {
-      title: "수급 & 매집",
-      metrics: [
-        { key: "수급강도",       label: "수급강도",         fmt: "f1" },
-        { key: "외인순매수_20d", label: "외인순매수(20d)",  fmt: "eok" },
-        { key: "기관순매수_20d", label: "기관순매수(20d)",  fmt: "eok" },
-        { key: "스마트머니_승률", label: "스마트머니 승률",  fmt: "f1" },
-        { key: "양매수_비율",    label: "양매수 비율",      fmt: "f1" },
-        { key: "VCP_신호",       label: "VCP 신호",        fmt: "flag" },
+      title: "연속 성장",
+      subGroups: [
+        {
+          subTitle: "연속 성장 기간",
+          metrics: [
+            { key: "매출_연속성장",          label: "매출 연속성장",   fmt: "int" },
+            { key: "영업이익_연속성장",      label: "OP 연속성장",     fmt: "int" },
+            { key: "순이익_연속성장",        label: "NP 연속성장",     fmt: "int" },
+            { key: "영업CF_연속성장",        label: "CF 연속성장",     fmt: "int" },
+            { key: "Q_매출_연속YoY성장",     label: "Q 매출 연속YoY", fmt: "int" },
+            { key: "Q_영업이익_연속YoY성장", label: "Q OP 연속YoY",   fmt: "int" },
+            { key: "Q_순이익_연속YoY성장",   label: "Q NP 연속YoY",   fmt: "int" },
+          ]
+        },
+        {
+          subTitle: "실적 전환",
+          metrics: [
+            { key: "흑자전환",      label: "흑자전환",      fmt: "flag" },
+            { key: "이익률_개선",   label: "이익률 개선",   fmt: "flag" },
+            { key: "이익률_급개선", label: "이익률 급개선", fmt: "flag" },
+            { key: "이익률_변동폭", label: "이익률 변동폭", fmt: "f1" },
+          ]
+        },
+        {
+          subTitle: "가속 & 감속",
+          metrics: [
+            { key: "영업이익_가속도",     label: "OP 가속도",      fmt: "f1" },
+            { key: "매출_가속도",         label: "매출 가속도",     fmt: "f1" },
+            { key: "실적가속_연속",       label: "실적 가속 연속",  fmt: "flag" },
+            { key: "실적감속_경고",       label: "실적 감속 경고",  fmt: "flag" },
+            { key: "영업이익_감속경고",   label: "OP 감속 경고",    fmt: "flag" },
+            { key: "영업이익_감속폭(pp)", label: "OP 감속폭(pp)",   fmt: "f1" },
+          ]
+        },
       ]
     },
     {
       title: "TTM 실적 (억원)",
-      metrics: [
-        { key: "TTM_매출",    label: "TTM 매출 (억)",    fmt: "int" },
-        { key: "TTM_영업이익", label: "TTM 영업이익 (억)", fmt: "int" },
-        { key: "TTM_순이익",  label: "TTM 순이익 (억)",  fmt: "int" },
-        { key: "TTM_영업CF",  label: "TTM 영업CF (억)",  fmt: "int" },
-        { key: "TTM_CAPEX",   label: "TTM CAPEX (억)",   fmt: "int" },
-        { key: "TTM_FCF",     label: "TTM FCF (억)",     fmt: "int" },
-        { key: "자본",        label: "자본 (억)",        fmt: "int" },
-        { key: "부채",        label: "부채 (억)",        fmt: "int" },
-        { key: "자산총계",    label: "자산총계 (억)",    fmt: "int" },
+      subGroups: [
+        {
+          subTitle: "손익 & 현금흐름",
+          metrics: [
+            { key: "TTM_매출",     label: "TTM 매출 (억)",        fmt: "int" },
+            { key: "TTM_영업이익", label: "TTM 영업이익 (억)",     fmt: "int" },
+            { key: "TTM_순이익",   label: "TTM 순이익 (억)",       fmt: "int" },
+            { key: "TTM_영업CF",   label: "영업CF, 최근연간 (억)", fmt: "int" },
+            { key: "TTM_CAPEX",    label: "CAPEX, 최근연간 (억)",  fmt: "int" },
+            { key: "TTM_FCF",      label: "FCF, 최근연간 (억)",    fmt: "int" },
+          ]
+        },
+        {
+          subTitle: "재무상태 (시점 값)",
+          metrics: [
+            { key: "자본",     label: "자본 (억)",     fmt: "int" },
+            { key: "부채",     label: "부채 (억)",     fmt: "int" },
+            { key: "자산총계", label: "자산총계 (억)", fmt: "int" },
+          ]
+        },
+      ]
+    },
+    {
+      title: "Forward 컨센서스 추정치 ⚠️",
+      subGroups: [
+        {
+          subTitle: "밸류에이션 추정",
+          metrics: [
+            { key: "컨센서스_커버리지", label: "커버리지",  fmt: "flag" },
+            { key: "Fwd_PER",          label: "Fwd PER",   fmt: "f2" },
+            { key: "Fwd_PBR",          label: "Fwd PBR",   fmt: "f2" },
+            { key: "Fwd_EPS",          label: "Fwd EPS",   fmt: "int" },
+          ]
+        },
+        {
+          subTitle: "성장/수익성 추정",
+          metrics: [
+            { key: "Fwd_ROE(%)",               label: "Fwd ROE%",       fmt: "f1" },
+            { key: "Fwd_OPM(%)",               label: "Fwd OPM%",       fmt: "f1" },
+            { key: "Fwd_영업이익_성장률(%)",   label: "Fwd OP성장%",    fmt: "f1" },
+            { key: "Fwd_매출_성장률(%)",       label: "Fwd 매출성장%",  fmt: "f1" },
+            { key: "Fwd_순이익_성장률(%)",     label: "Fwd NP성장%",    fmt: "f1" },
+            { key: "Fwd_2yr_영업이익_성장(%)", label: "2yr OP성장%",    fmt: "f1" },
+            { key: "Fwd_모멘텀_점수",          label: "Fwd 모멘텀점수", fmt: "f1" },
+          ]
+        },
+      ]
+    },
+    {
+      title: "재무건전성",
+      subGroups: [
+        {
+          subTitle: "F-Score 상세",
+          metrics: [
+            { key: "F스코어",         label: "F-Score (종합)",  fmt: "int" },
+            { key: "F1_수익성",       label: "F1 수익성",       fmt: "flag" },
+            { key: "F2_영업CF",       label: "F2 영업CF",       fmt: "flag" },
+            { key: "F3_ROA개선",      label: "F3 ROA개선",      fmt: "flag" },
+            { key: "F4_이익품질",     label: "F4 이익품질",     fmt: "flag" },
+            { key: "F5_레버리지",     label: "F5 레버리지",     fmt: "flag" },
+            { key: "F6_유동성",       label: "F6 유동성",       fmt: "flag" },
+            { key: "F7_희석없음",     label: "F7 희석없음",     fmt: "flag" },
+            { key: "F8_매출총이익률", label: "F8 매출총이익률", fmt: "flag" },
+            { key: "F9_자산회전율",   label: "F9 자산회전율",   fmt: "flag" },
+          ]
+        },
+        {
+          subTitle: "부채 & 안전성",
+          metrics: [
+            { key: "부채비율(%)",  label: "부채비율%",   fmt: "f1" },
+            { key: "유동비율(%)",  label: "유동비율%",   fmt: "f1" },
+            { key: "이자보상배율", label: "이자보상배율", fmt: "f2" },
+            { key: "부채상환능력", label: "부채상환능력", fmt: "f2" },
+            { key: "무차입_기업",  label: "무차입",       fmt: "flag" },
+          ]
+        },
+      ]
+    },
+    {
+      title: "배당",
+      subGroups: [
+        {
+          subTitle: "배당 현황",
+          metrics: [
+            { key: "배당수익률(%)", label: "배당수익률%", fmt: "f2" },
+            { key: "DPS_최근",      label: "DPS",         fmt: "int" },
+            { key: "배당성향(%)",   label: "배당성향%",   fmt: "f1" },
+            { key: "배당_경고신호", label: "배당경고",    fmt: "flag" },
+          ]
+        },
+        {
+          subTitle: "배당 성장",
+          metrics: [
+            { key: "DPS_CAGR",          label: "DPS CAGR%",  fmt: "f1" },
+            { key: "배당_연속증가",      label: "배당연속증가", fmt: "int" },
+            { key: "배당_수익동반증가",  label: "수익동반증가", fmt: "flag" },
+          ]
+        },
+      ]
+    },
+    {
+      title: "모멘텀 & 상대강도",
+      subGroups: [
+        {
+          subTitle: "상대강도 (RS)",
+          metrics: [
+            { key: "RS_60d",   label: "RS(60d)",   fmt: "f1" },
+            { key: "RS_120d",  label: "RS(120d)",  fmt: "f1" },
+            { key: "RS_250d",  label: "RS(250d)",  fmt: "f1" },
+          ]
+        },
+        {
+          subTitle: "종합 등급",
+          metrics: [
+            { key: "Composite_RS", label: "Composite RS", fmt: "f1" },
+            { key: "RS_등급",      label: "RS 등급",      fmt: "f1" },
+          ]
+        },
+      ]
+    },
+    {
+      title: "기술적 지표",
+      subGroups: [
+        {
+          subTitle: "가격 위치",
+          metrics: [
+            { key: "52주_최고대비(%)", label: "52주 최고대비%", fmt: "f1" },
+            { key: "52주_최저대비(%)", label: "52주 최저대비%", fmt: "f1" },
+            { key: "MA20_이격도(%)",   label: "MA20%",          fmt: "f1" },
+            { key: "MA60_이격도(%)",   label: "MA60%",          fmt: "f1" },
+          ]
+        },
+        {
+          subTitle: "모멘텀 오실레이터",
+          metrics: [
+            { key: "RSI_14", label: "RSI(14)", fmt: "f1" },
+          ]
+        },
+        {
+          subTitle: "거래 활동",
+          metrics: [
+            { key: "거래대금_20일평균", label: "거래대금(20일평균)", fmt: "eok" },
+            { key: "거래대금_증감(%)",  label: "거래대금 증감%",     fmt: "f1" },
+            { key: "변동성_60일(%)",    label: "변동성(60일)%",      fmt: "f1" },
+          ]
+        },
+      ]
+    },
+    {
+      title: "수급 & 매집",
+      subGroups: [
+        {
+          subTitle: "수급 흐름",
+          metrics: [
+            { key: "수급강도",       label: "수급강도",        fmt: "f1" },
+            { key: "외인순매수_20d", label: "외인순매수(20d)", fmt: "eok" },
+            { key: "기관순매수_20d", label: "기관순매수(20d)", fmt: "eok" },
+          ]
+        },
+        {
+          subTitle: "매집 패턴",
+          metrics: [
+            { key: "스마트머니_승률", label: "스마트머니 승률", fmt: "f1" },
+            { key: "양매수_비율",     label: "양매수 비율",     fmt: "f1" },
+            { key: "VCP_신호",        label: "VCP 신호",        fmt: "flag" },
+          ]
+        },
+      ]
+    },
+    {
+      title: "타이밍 신호",
+      subGroups: [
+        {
+          subTitle: "복합 신호",
+          metrics: [
+            { key: "과열도",    label: "과열도",    fmt: "f1" },
+            { key: "상승조짐",  label: "상승조짐",  fmt: "f1" },
+            { key: "타이밍_점수", label: "타이밍 점수", fmt: "f1" },
+          ]
+        },
+        {
+          subTitle: "구성 요소",
+          metrics: [
+            { key: "거래량_가격_괴리", label: "거래량-가격 괴리", fmt: "f1" },
+            { key: "실적감속_경고",    label: "실적 감속 경고",   fmt: "flag" },
+          ]
+        },
       ]
     },
     {
       title: "전략 점수",
       metrics: [
-        { key: "종합점수",      label: "종합점수",      fmt: "f1" },
-        { key: "성장성_점수",   label: "성장성 점수",   fmt: "f1" },
-        { key: "안정성_점수",   label: "안정성 점수",   fmt: "f1" },
-        { key: "가격_점수",     label: "가격 점수",     fmt: "f1" },
-        { key: "타이밍_점수",   label: "타이밍 점수",   fmt: "f1" },
-        { key: "주도주_점수",   label: "주도주 점수",   fmt: "f1" },
-        { key: "우량가치_점수", label: "우량가치 점수", fmt: "f1" },
-        { key: "고성장_점수",   label: "고성장 점수",   fmt: "f1" },
-        { key: "현금배당_점수", label: "현금배당 점수", fmt: "f1" },
-        { key: "턴어라운드_점수", label: "턴어라운드 점수", fmt: "f1" },
-        { key: "전략수",        label: "전략수",        fmt: "int" },
-        { key: "과열도",        label: "과열도",        fmt: "f1" },
-        { key: "상승조짐",      label: "상승조짐",      fmt: "f1" },
-      ]
-    },
-    {
-      title: "연속 성장",
-      metrics: [
-        { key: "매출_연속성장",         label: "매출 연속성장",       fmt: "int" },
-        { key: "영업이익_연속성장",     label: "OP 연속성장",         fmt: "int" },
-        { key: "순이익_연속성장",       label: "NP 연속성장",         fmt: "int" },
-        { key: "영업CF_연속성장",       label: "CF 연속성장",         fmt: "int" },
-        { key: "Q_매출_연속YoY성장",    label: "Q 매출 연속YoY성장",  fmt: "int" },
-        { key: "Q_영업이익_연속YoY성장", label: "Q OP 연속YoY성장",   fmt: "int" },
-        { key: "Q_순이익_연속YoY성장",  label: "Q NP 연속YoY성장",   fmt: "int" },
-        { key: "흑자전환",         label: "흑자전환",       fmt: "flag" },
-        { key: "이익률_개선",      label: "이익률 개선",    fmt: "flag" },
-        { key: "이익률_급개선",    label: "이익률 급개선",  fmt: "flag" },
-        { key: "이익률_변동폭",    label: "이익률 변동폭",  fmt: "f1" },
-        { key: "영업이익_가속도",  label: "OP 가속도",      fmt: "f1" },
-        { key: "매출_가속도",      label: "매출 가속도",    fmt: "f1" },
-        { key: "실적가속_연속",       label: "실적 가속 연속",    fmt: "flag" },
-        { key: "실적감속_경고",       label: "실적 감속 경고",    fmt: "flag" },
-        { key: "영업이익_감속경고",   label: "OP 감속 경고",      fmt: "flag" },
-        { key: "영업이익_감속폭(pp)", label: "OP 감속폭(pp)",     fmt: "f1" },
-      ]
-    },
-    {
-      title: "타이밍 신호",
-      metrics: [
-        { key: "과열도",              label: "과열도",            fmt: "f1" },
-        { key: "상승조짐",            label: "상승조짐",          fmt: "f1" },
-        { key: "타이밍_점수",         label: "타이밍 점수",       fmt: "f1" },
-        { key: "거래량_가격_괴리",    label: "거래량-가격 괴리",  fmt: "f1" },
-        { key: "실적감속_경고",       label: "실적 감속 경고",    fmt: "flag" },
-      ]
-    },
-    {
-      title: "효율성 & 마진",
-      metrics: [
-        { key: "ROIC(%)",          label: "ROIC%",             fmt: "f1" },
-        { key: "ROIC_전년(%)",     label: "ROIC 전년%",        fmt: "f1" },
-        { key: "ROIC_개선",        label: "ROIC 개선",         fmt: "flag" },
-        { key: "영업이익률_최근",  label: "영업이익률% (최근)", fmt: "f1" },
-        { key: "영업이익률_전년",  label: "영업이익률% (전년)", fmt: "f1" },
-        { key: "GPM_최근(%)",      label: "GPM 최근%",         fmt: "f1" },
-        { key: "GPM_전년(%)",      label: "GPM 전년%",         fmt: "f1" },
-        { key: "GPM_변화(pp)",     label: "GPM 변화(pp)",      fmt: "f1" },
-        { key: "퀄리티_턴어라운드", label: "퀄리티 턴어라운드", fmt: "flag" },
-      ]
-    },
-    {
-      title: "Forward 컨센서스 추정치 ⚠️",
-      metrics: [
-        { key: "컨센서스_커버리지",          label: "커버리지",       fmt: "flag" },
-        { key: "Fwd_PER",                    label: "Fwd PER",        fmt: "f2" },
-        { key: "Fwd_PBR",                    label: "Fwd PBR",        fmt: "f2" },
-        { key: "Fwd_EPS",                    label: "Fwd EPS",        fmt: "int" },
-        { key: "Fwd_ROE(%)",                 label: "Fwd ROE%",       fmt: "f1" },
-        { key: "Fwd_OPM(%)",                 label: "Fwd OPM%",       fmt: "f1" },
-        { key: "Fwd_영업이익_성장률(%)",     label: "Fwd OP성장%",    fmt: "f1" },
-        { key: "Fwd_매출_성장률(%)",         label: "Fwd 매출성장%",  fmt: "f1" },
-        { key: "Fwd_순이익_성장률(%)",       label: "Fwd NP성장%",    fmt: "f1" },
-        { key: "Fwd_2yr_영업이익_성장(%)",   label: "2yr OP성장%",    fmt: "f1" },
-        { key: "Fwd_모멘텀_점수",            label: "Fwd 모멘텀점수", fmt: "f1" },
+        { key: "종합점수",         label: "종합점수",         fmt: "f1" },
+        { key: "성장성_점수",      label: "성장성 점수",      fmt: "f1" },
+        { key: "안정성_점수",      label: "안정성 점수",      fmt: "f1" },
+        { key: "가격_점수",        label: "가격 점수",        fmt: "f1" },
+        { key: "타이밍_점수",      label: "타이밍 점수",      fmt: "f1" },
+        { key: "주도주_점수",      label: "주도주 점수",      fmt: "f1" },
+        { key: "우량가치_점수",    label: "우량가치 점수",    fmt: "f1" },
+        { key: "고성장_점수",      label: "고성장 점수",      fmt: "f1" },
+        { key: "현금배당_점수",    label: "현금배당 점수",    fmt: "f1" },
+        { key: "턴어라운드_점수",  label: "턴어라운드 점수",  fmt: "f1" },
+        { key: "전략수",           label: "전략수",           fmt: "int" },
+        { key: "과열도",           label: "과열도",           fmt: "f1" },
+        { key: "상승조짐",         label: "상승조짐",         fmt: "f1" },
       ]
     },
     {
       title: "데이터 품질",
       metrics: [
-        { key: "데이터_연수",      label: "데이터 연수",      fmt: "int" },
-        { key: "최근분기",         label: "기준분기",         fmt: "str" },
-        { key: "PER_이상",         label: "PER 이상",         fmt: "flag" },
-        { key: "순이익_전년음수",  label: "전년 순손실",      fmt: "flag" },
-        { key: "순이익_당기양수",  label: "당기 흑자",        fmt: "flag" },
+        { key: "데이터_연수",     label: "데이터 연수", fmt: "int" },
+        { key: "최근분기",        label: "기준분기",    fmt: "str" },
+        { key: "PER_이상",        label: "PER 이상",    fmt: "flag" },
+        { key: "순이익_전년음수", label: "전년 순손실", fmt: "flag" },
+        { key: "순이익_당기양수", label: "당기 흑자",   fmt: "flag" },
       ]
     },
   ];
@@ -1246,9 +1546,14 @@
         { col: "PBR",             label: "PBR" },
         { col: "PSR",             label: "PSR" },
         { col: "PEG",             label: "PEG" },
+        { col: "EPS",             label: "EPS" },
+        { col: "BPS",             label: "BPS" },
         { col: "이익수익률(%)",   label: "이익수익률%" },
         { col: "괴리율(%)",       label: "S-RIM 괴리%" },
         { col: "적정주가_SRIM",   label: "S-RIM 적정가(원)" },
+        { col: "적정주가_EPV",    label: "EPV 적정가(원)" },
+        { col: "적정주가_DDM",    label: "DDM 적정가(원)" },
+        { col: "적정주가_FWD",    label: "FWD 적정가(원)" },
         { col: "종합괴리율(%)",   label: "복합 괴리%" },
         { col: "적정주가_종합",   label: "복합 적정가(원)" },
       ]
@@ -1300,7 +1605,6 @@
         { col: "Q_순이익_연속YoY성장",    label: "Q NP연속YoY" },
         { col: "실적가속_연속",           label: "실적가속연속" },
         { col: "이익률_변동폭",           label: "이익률변동폭" },
-        { col: "데이터_연수",             label: "데이터연수" },
       ]
     },
     {
@@ -1345,21 +1649,22 @@
       key: "dividend", label: "배당",
       fields: [
         { col: "배당수익률(%)",      label: "배당수익률%" },
+        { col: "DPS_최근",           label: "최근DPS" },
         { col: "DPS_CAGR",           label: "DPS CAGR%" },
         { col: "배당_연속증가",      label: "배당연속증가" },
         { col: "배당성향(%)",        label: "배당성향%" },
-        { col: "배당_수익동반증가",  label: "수익동반증가" },
+        { col: "배당_수익동반증가",  label: "수익동반증가", type: "flag" },
       ]
     },
     {
       key: "turnaround", label: "턴어라운드",
       fields: [
-        { col: "흑자전환",          label: "흑자전환" },
-        { col: "이익률_개선",       label: "이익률개선" },
-        { col: "이익률_급개선",     label: "이익률급개선" },
-        { col: "ROIC_개선",         label: "ROIC개선" },
-        { col: "퀄리티_턴어라운드", label: "퀄리티턴어라운드" },
-        { col: "VCP_신호",          label: "VCP신호" },
+        { col: "흑자전환",          label: "흑자전환", type: "flag" },
+        { col: "이익률_개선",       label: "이익률개선", type: "flag" },
+        { col: "이익률_급개선",     label: "이익률급개선", type: "flag" },
+        { col: "ROIC_개선",         label: "ROIC개선", type: "flag" },
+        { col: "퀄리티_턴어라운드", label: "퀄리티턴어라운드", type: "flag" },
+        { col: "VCP_신호",          label: "VCP신호", type: "flag" },
       ]
     },
     {
@@ -1382,15 +1687,39 @@
       ]
     },
     {
+      key: "risk", label: "리스크 / 경고",
+      fields: [
+        { col: "실적감속_경고",      label: "실적감속경고", type: "flag" },
+        { col: "영업이익_감속경고",  label: "영업이익감속", type: "flag" },
+        { col: "영업이익_감속폭(pp)",label: "영업이익감속폭(pp)" },
+        { col: "매출_감속경고",      label: "매출감속경고", type: "flag" },
+        { col: "거래량_가격_괴리",   label: "거래량-가격괴리" },
+        { col: "배당_경고신호",      label: "배당경고", type: "flag" },
+      ]
+    },
+    {
       key: "fundamental", label: "재무 규모",
       fields: [
         { col: "TTM_매출",      label: "TTM매출(억)",  unit: 1e8 },
         { col: "TTM_영업이익",  label: "TTM OP(억)",   unit: 1e8 },
         { col: "TTM_순이익",    label: "TTM NP(억)",   unit: 1e8 },
         { col: "TTM_영업CF",    label: "TTM OCF(억)",  unit: 1e8 },
+        { col: "TTM_CAPEX",     label: "TTM CAPEX(억)",unit: 1e8 },
         { col: "TTM_FCF",       label: "TTM FCF(억)",  unit: 1e8 },
         { col: "자본",          label: "자본(억)",     unit: 1e8 },
         { col: "부채",          label: "부채(억)",     unit: 1e8 },
+        { col: "자산총계",      label: "자산총계(억)", unit: 1e8 },
+      ]
+    },
+    {
+      key: "data_quality", label: "데이터 품질",
+      fields: [
+        { col: "데이터_연수",      label: "데이터연수" },
+        { col: "밸류_모델수",      label: "밸류모델수" },
+        { col: "SRIM_오메가",      label: "SRIM 오메가" },
+        { col: "PER_이상",         label: "PER 계산불가", type: "flag" },
+        { col: "순이익_전년음수",  label: "전년 적자", type: "flag" },
+        { col: "순이익_당기양수",  label: "당기 흑자", type: "flag" },
       ]
     },
     {
@@ -1404,15 +1733,192 @@
         { col: "Fwd_매출_성장률(%)",       label: "Fwd 매출성장%" },
         { col: "Fwd_순이익_성장률(%)",     label: "Fwd NP성장%" },
         { col: "Fwd_2yr_영업이익_성장(%)", label: "Fwd 2yr OP성장%" },
-        { col: "컨센서스_커버리지",        label: "커버리지" },
       ]
+    },
+    {
+      key: "forward_trust", label: "Forward 신뢰도",
+      fields: [
+        { col: "컨센서스_커버리지", label: "커버리지" },
+        { col: "Fwd_EPS",          label: "Fwd EPS" },
+        { col: "Fwd_모멘텀_점수",  label: "Fwd 모멘텀점수" },
+      ]
+    },
+  ];
+
+  const FLAG_FILTER_FIELDS = new Set([
+    "배당_수익동반증가",
+    "흑자전환",
+    "이익률_개선",
+    "이익률_급개선",
+    "ROIC_개선",
+    "퀄리티_턴어라운드",
+    "VCP_신호",
+    "실적감속_경고",
+    "영업이익_감속경고",
+    "매출_감속경고",
+    "배당_경고신호",
+    "PER_이상",
+    "순이익_전년음수",
+    "순이익_당기양수",
+  ]);
+
+  const GOOD_FILTER_BOUNDS = {
+    "PER": { max: 15 },
+    "PBR": { max: 1.2 },
+    "PSR": { max: 1.0 },
+    "PEG": { max: 0.5 },
+    "이익수익률(%)": { min: 10 },
+    "ROE(%)": { min: 15 },
+    "ROIC(%)": { min: 15 },
+    "영업이익률(%)": { min: 10 },
+    "FCF수익률(%)": { min: 5 },
+    "현금전환율(%)": { min: 100 },
+    "CAPEX비율(%)": { max: 30 },
+    "부채비율(%)": { max: 100 },
+    "유동비율(%)": { min: 150 },
+    "이자보상배율": { min: 5 },
+    "F스코어": { min: 7 },
+    "매출_CAGR": { min: 15 },
+    "영업이익_CAGR": { min: 15 },
+    "순이익_CAGR": { min: 15 },
+    "FCF_CAGR": { min: 15 },
+    "Q_매출_YoY(%)": { min: 15 },
+    "Q_영업이익_YoY(%)": { min: 15 },
+    "Q_순이익_YoY(%)": { min: 15 },
+    "배당수익률(%)": { min: 3 },
+    "DPS_CAGR": { min: 10 },
+    "배당성향(%)": { max: 50 },
+    "거래대금_20일평균": { min: 5 },
+    "수급강도": { min: 1 },
+    "Composite_RS": { min: 70 },
+    "RS_등급": { min: 70 },
+    "컨센서스_커버리지": { min: 1 },
+    "Fwd_PER": { max: 12 },
+    "Fwd_PBR": { max: 1.2 },
+    "Fwd_ROE(%)": { min: 15 },
+    "Fwd_OPM(%)": { min: 10 },
+    "Fwd_영업이익_성장률(%)": { min: 15 },
+    "Fwd_매출_성장률(%)": { min: 10 },
+    "Fwd_순이익_성장률(%)": { min: 15 },
+    "Fwd_2yr_영업이익_성장(%)": { min: 10 },
+    "Fwd_모멘텀_점수": { min: 80 },
+    "과열도": { max: 30 },
+    "상승조짐": { min: 70 },
+    "타이밍_점수": { min: 75 },
+    "종합점수": { min: 80 },
+    "성장성_점수": { min: 80 },
+    "안정성_점수": { min: 80 },
+    "가격_점수": { min: 80 },
+    "주도주_점수": { min: 80 },
+    "우량가치_점수": { min: 80 },
+    "고성장_점수": { min: 80 },
+    "현금배당_점수": { min: 80 },
+    "턴어라운드_점수": { min: 80 },
+    "전략수": { min: 3 },
+  };
+
+  const RECOMMENDED_PRESETS = [
+    {
+      id: "leaders_finder",
+      name: "주도주 발굴",
+      screen: "leaders",
+      sort: { col: "주도주_점수", order: "desc" },
+      columnFilters: {
+        "RS_등급": { min: "80", max: "" },
+        "수급강도": { min: "0", max: "" },
+        "거래대금_20일평균": { min: "5", max: "" },
+        "과열도": { min: "", max: "60" },
+      },
+      flagFilters: {},
+    },
+    {
+      id: "quality_value",
+      name: "우량가치",
+      screen: "quality_value",
+      sort: { col: "우량가치_점수", order: "desc" },
+      columnFilters: {
+        "ROIC(%)": { min: "10", max: "" },
+        "PEG": { min: "", max: "1.2" },
+        "F스코어": { min: "5", max: "" },
+        "부채비율(%)": { min: "", max: "120" },
+        "과열도": { min: "", max: "70" },
+      },
+      flagFilters: {},
+    },
+    {
+      id: "growth_momentum",
+      name: "고성장",
+      screen: "growth_mom",
+      sort: { col: "고성장_점수", order: "desc" },
+      columnFilters: {
+        "Q_영업이익_YoY(%)": { min: "10", max: "" },
+        "영업이익_CAGR": { min: "15", max: "" },
+        "RS_등급": { min: "50", max: "" },
+      },
+      flagFilters: { "실적감속_경고": "0" },
+    },
+    {
+      id: "cash_dividend",
+      name: "배당",
+      screen: "cash_div",
+      sort: { col: "현금배당_점수", order: "desc" },
+      columnFilters: {
+        "FCF수익률(%)": { min: "3", max: "" },
+        "배당수익률(%)": { min: "1", max: "" },
+        "현금전환율(%)": { min: "70", max: "" },
+        "부채비율(%)": { min: "", max: "120" },
+      },
+      flagFilters: { "배당_경고신호": "0" },
+    },
+    {
+      id: "turnaround",
+      name: "턴어라운드",
+      screen: "turnaround",
+      sort: { col: "턴어라운드_점수", order: "desc" },
+      columnFilters: {
+        "턴어라운드_점수": { min: "60", max: "" },
+        "TTM_순이익": { min: "0", max: "" },
+        "상승조짐": { min: "50", max: "" },
+        "과열도": { min: "", max: "60" },
+      },
+      flagFilters: {},
+    },
+    {
+      id: "forward_covered",
+      name: "Forward 커버",
+      screen: "forward_covered",
+      sort: { col: "Fwd_모멘텀_점수", order: "desc" },
+      columnFilters: {
+        "컨센서스_커버리지": { min: "1", max: "" },
+        "Fwd_영업이익_성장률(%)": { min: "10", max: "" },
+        "과열도": { min: "", max: "65" },
+      },
+      flagFilters: { "실적감속_경고": "0" },
+    },
+    {
+      id: "multi_pick",
+      name: "멀티픽",
+      screen: "multi_strategy",
+      sort: { col: "전략수", order: "desc" },
+      columnFilters: {
+        "전략수": { min: "3", max: "" },
+        "종합점수": { min: "70", max: "" },
+        "과열도": { min: "", max: "60" },
+      },
+      flagFilters: {},
     },
   ];
 
   // 전체 필드 목록 (카테고리 탭 = "all"일 때 사용)
   const ALL_FILTER_FIELDS = FILTER_CATEGORIES
     .filter(c => c.key !== "all")
-    .flatMap(c => c.fields.map(f => ({ ...f, catKey: c.key })));
+    .flatMap(c => c.fields.map(f => ({
+      ...f,
+      type: f.type || (FLAG_FILTER_FIELDS.has(f.col) ? "flag" : "range"),
+      catKey: c.key
+    })));
+
+  const FILTER_FIELD_MAP = Object.fromEntries(ALL_FILTER_FIELDS.map(f => [f.col, f]));
 
   // 컬럼별 단위 배수 (시가총액: 억 단위 입력 → 원으로 변환)
   const UNIT_FACTORS = {};
@@ -1583,6 +2089,9 @@
       if (min !== "") params.set(`min_${col}`, parseFloat(min) * factor);
       if (max !== "") params.set(`max_${col}`, parseFloat(max) * factor);
     });
+    Object.entries(flagFilters).forEach(([col, value]) => {
+      if (value === "0" || value === "1") params.set(`flag_${col}`, value);
+    });
 
     try {
       const res  = await fetch(`/api/stocks?${params}`);
@@ -1600,6 +2109,128 @@
         renderTabBadges();
       }
     } catch (e) { console.error("loadStocks:", e); }
+  }
+
+  function isScoreColumn(key) {
+    return key === "종합점수" || key === "Fwd_모멘텀_점수" || key.endsWith("_점수");
+  }
+
+  function formatMetricReason(label, value, suffix = "") {
+    if (value == null || value === "") return label;
+    if (typeof value === "number" && Number.isFinite(value)) {
+      const absVal = Math.abs(value);
+      const decimals = absVal >= 100 || Number.isInteger(value) ? 0 : 1;
+      return `${label} ${value.toFixed(decimals)}${suffix}`;
+    }
+    return `${label} ${value}${suffix}`;
+  }
+
+  function buildScoreReasonLines(stock, scoreKey) {
+    const candidates = [];
+    const add = (weight, text, condition = true) => {
+      if (condition) candidates.push({ weight, text });
+    };
+    const getNum = key => {
+      const v = stock[key];
+      return v == null || v === "" || Number.isNaN(Number(v)) ? null : Number(v);
+    };
+
+    switch (scoreKey) {
+      case "종합점수":
+        [["성장성_점수", "성장성"], ["안정성_점수", "안정성"], ["가격_점수", "가치"], ["타이밍_점수", "타이밍"]]
+          .forEach(([key, label]) => {
+            const v = getNum(key);
+            if (v != null) add(v, formatMetricReason(label, v, "점"));
+          });
+        add((getNum("전략수") || 0) * 15, `${stock["전략수"] || 0}개 전략 동시 통과`, (getNum("전략수") || 0) >= 2);
+        break;
+      case "타이밍_점수":
+        add((100 - (getNum("과열도") || 100)), formatMetricReason("낮은 과열도", getNum("과열도")));
+        add(getNum("상승조짐") || 0, formatMetricReason("상승조짐", getNum("상승조짐")));
+        add(getNum("RS_등급") || 0, formatMetricReason("RS 등급", getNum("RS_등급")));
+        add(Math.max(getNum("수급강도") || 0, 0) * 20, formatMetricReason("수급강도", getNum("수급강도")));
+        break;
+      case "주도주_점수":
+        add(getNum("RS_등급") || 0, formatMetricReason("RS 등급", getNum("RS_등급")));
+        add(Math.max(getNum("수급강도") || 0, 0) * 20, formatMetricReason("수급강도", getNum("수급강도")));
+        add(Math.max(getNum("Q_영업이익_YoY(%)") || 0, 0), formatMetricReason("Q OP YoY", getNum("Q_영업이익_YoY(%)"), "%"));
+        add((getNum("실적가속_연속") || 0) * 30, "실적 가속 연속");
+        add(Math.max(getNum("거래대금_증감(%)") || 0, 0), formatMetricReason("거래대금 증가", getNum("거래대금_증감(%)"), "%"));
+        break;
+      case "우량가치_점수":
+        add(getNum("ROIC(%)") || 0, formatMetricReason("ROIC", getNum("ROIC(%)"), "%"));
+        add(getNum("FCF수익률(%)") || 0, formatMetricReason("FCF수익률", getNum("FCF수익률(%)"), "%"));
+        add((getNum("F스코어") || 0) * 12, formatMetricReason("F-Score", getNum("F스코어")));
+        add(Math.max(getNum("종합괴리율(%)") || 0, 0), formatMetricReason("복합괴리율", getNum("종합괴리율(%)"), "%"));
+        add(getNum("PEG") != null ? Math.max(100 - getNum("PEG") * 40, 0) : 0, formatMetricReason("낮은 PEG", getNum("PEG")));
+        break;
+      case "고성장_점수":
+        add(Math.max(getNum("영업이익_CAGR") || 0, 0), formatMetricReason("OP CAGR", getNum("영업이익_CAGR"), "%"));
+        add(Math.max(getNum("Q_영업이익_YoY(%)") || 0, 0), formatMetricReason("Q OP YoY", getNum("Q_영업이익_YoY(%)"), "%"));
+        add(Math.max(getNum("매출_CAGR") || 0, 0), formatMetricReason("매출 CAGR", getNum("매출_CAGR"), "%"));
+        add((getNum("실적가속_연속") || 0) * 30, "실적 가속 연속");
+        add(getNum("RS_등급") || 0, formatMetricReason("RS 등급", getNum("RS_등급")));
+        break;
+      case "현금배당_점수":
+        add(Math.max(getNum("배당수익률(%)") || 0, 0) * 10, formatMetricReason("배당수익률", getNum("배당수익률(%)"), "%"));
+        add(Math.max(getNum("FCF수익률(%)") || 0, 0) * 8, formatMetricReason("FCF수익률", getNum("FCF수익률(%)"), "%"));
+        add(Math.max(getNum("현금전환율(%)") || 0, 0) / 2, formatMetricReason("현금전환율", getNum("현금전환율(%)"), "%"));
+        add(Math.max(getNum("DPS_CAGR") || 0, 0), formatMetricReason("DPS CAGR", getNum("DPS_CAGR"), "%"));
+        add(getNum("배당성향(%)") != null ? Math.max(100 - getNum("배당성향(%)"), 0) : 0, formatMetricReason("안정적 배당성향", getNum("배당성향(%)"), "%"));
+        break;
+      case "턴어라운드_점수":
+        add((getNum("흑자전환") || 0) * 40, "흑자전환");
+        add((getNum("이익률_급개선") || 0) * 40, "이익률 급개선");
+        add((getNum("ROIC_개선") || 0) * 35, "ROIC 개선");
+        add(Math.max(getNum("상승조짐") || 0, 0), formatMetricReason("상승조짐", getNum("상승조짐")));
+        add(Math.max(getNum("TTM_순이익") || 0, 0) > 0 ? 25 : 0, "TTM 순이익 흑자");
+        break;
+      case "Fwd_모멘텀_점수":
+        add((getNum("컨센서스_커버리지") || 0) * 20, "컨센서스 커버 종목");
+        add(Math.max(getNum("Fwd_영업이익_성장률(%)") || 0, 0), formatMetricReason("Fwd OP 성장", getNum("Fwd_영업이익_성장률(%)"), "%"));
+        add(Math.max(getNum("Fwd_2yr_영업이익_성장(%)") || 0, 0), formatMetricReason("Fwd 2yr OP 성장", getNum("Fwd_2yr_영업이익_성장(%)"), "%"));
+        add(Math.max(getNum("Fwd_ROE(%)") || 0, 0), formatMetricReason("Fwd ROE", getNum("Fwd_ROE(%)"), "%"));
+        add((100 - (getNum("과열도") || 100)), formatMetricReason("낮은 과열도", getNum("과열도")));
+        break;
+      default:
+        if (scoreKey.endsWith("_점수")) {
+          add(getNum(scoreKey) || 0, formatMetricReason(scoreKey.replace("_점수", ""), getNum(scoreKey), "점"));
+        }
+        break;
+    }
+
+    return candidates
+      .sort((a, b) => b.weight - a.weight)
+      .map(item => item.text)
+      .filter(Boolean)
+      .slice(0, 3);
+  }
+
+  function buildScoreTooltipAttr(stock, scoreKey) {
+    const reasons = buildScoreReasonLines(stock, scoreKey);
+    if (!reasons.length) return "";
+    const title = `<div class='text-start'><strong>발굴 이유 Top 3</strong><br>${reasons.map((line, idx) => `${idx + 1}. ${escapeHtml(line)}`).join("<br>")}</div>`;
+    return ` data-bs-toggle="tooltip" data-bs-html="true" data-bs-placement="left" title="${title}"`;
+  }
+
+  function buildRiskBadges(stock) {
+    const badges = [];
+    if (Number(stock["실적감속_경고"]) === 1) {
+      badges.push(`<span class="stock-risk-badge warn" title="실적감속 경고: 피크 실적 이후 둔화 가능성">감속</span>`);
+    }
+    if (Number(stock["매출_감속경고"]) === 1 && Number(stock["실적감속_경고"]) !== 1) {
+      badges.push(`<span class="stock-risk-badge warn" title="매출 감속 경고">매출감속</span>`);
+    }
+    if (Number(stock["배당_경고신호"]) === 1) {
+      badges.push(`<span class="stock-risk-badge warn" title="배당 경고: 배당성향/현금흐름/과도한 수익률 점검 필요">배당주의</span>`);
+    }
+    if (Number(stock["PER_이상"]) === 1) {
+      badges.push(`<span class="stock-risk-badge danger" title="PER 계산 불가 또는 음수 구간">PER불가</span>`);
+    }
+    if (Number(stock["순이익_전년음수"]) === 1 && Number(stock["순이익_당기양수"]) === 1) {
+      badges.push(`<span class="stock-risk-badge info" title="전년 적자에서 당기 흑자 전환">흑전</span>`);
+    }
+    return badges.join("");
   }
 
   // ─── 테이블 렌더링 ────────────────────────────────────────────────────
@@ -1645,6 +2276,7 @@
         const rep = reportMap[code];
         const aiBadge = (rep && c.key === "종목명")
           ? ` <span class="badge badge-ai" title="${rep.model} · ${rep.date}">AI</span>` : "";
+        const riskBadges = c.key === "종목명" ? buildRiskBadges(s) : "";
         let overheatBadge = "";
         let breakoutBadge = "";
         if (c.key === "종목명") {
@@ -1660,7 +2292,8 @@
             else if (br >= _BADGE_TH.br.interest) breakoutBadge = ` <span class="badge" style="background:#6ea8fe;color:#000;font-size:.6rem;" title="상승조짐 ${br} (${_BADGE_TH.br.interest}+)">관심</span>`;
           }
         }
-        return `<td class="${cls}">${fmt(s[c.key], c.fmt)}${newBadge}${aiBadge}${overheatBadge}${breakoutBadge}</td>`;
+        const scoreTipAttr = isScoreColumn(c.key) ? buildScoreTooltipAttr(s, c.key) : "";
+        return `<td class="${cls}"${scoreTipAttr}>${fmt(s[c.key], c.fmt)}${newBadge}${aiBadge}${riskBadges}${overheatBadge}${breakoutBadge}</td>`;
       }).join("");
       return `<tr data-code="${code}" class="${isNew ? "row-new" : ""}">${pfBtn}${compareCb}${star}${cells}</tr>`;
     }).join("");
@@ -2016,20 +2649,30 @@
 
     // 지표 그룹별 렌더링
     const metricsEl = document.getElementById("detail-metrics");
+    const renderPill = m => {
+      const v = stock[m.key];
+      if (v === null || v === undefined) return "";
+      const tip = METRIC_TOOLTIPS[m.key]
+        ? `data-bs-toggle="tooltip" data-bs-placement="top" title="${METRIC_TOOLTIPS[m.key]}"` : "";
+      const cls = getMetricColor(m.key, v);
+      return `<div class="metric-pill" ${tip}>
+        <div class="lbl">${m.label}</div>
+        <div class="val ${cls}">${fmt(v, m.fmt)}</div>
+      </div>`;
+    };
     metricsEl.innerHTML = METRIC_GROUPS.map(group => {
-      const pills = group.metrics.map(m => {
-        const v = stock[m.key];
-        if (v === null || v === undefined) return "";
-        const tip = METRIC_TOOLTIPS[m.key]
-          ? `data-bs-toggle="tooltip" data-bs-placement="top" title="${METRIC_TOOLTIPS[m.key]}"` : "";
-        
-        const cls = getMetricColor(m.key, v);
-
-        return `<div class="metric-pill" ${tip}>
-          <div class="lbl">${m.label}</div>
-          <div class="val ${cls}">${fmt(v, m.fmt)}</div>
-        </div>`;
-      }).filter(Boolean).join("");
+      if (group.subGroups) {
+        // 서브그룹 구조 렌더링
+        const subHtml = group.subGroups.map(sg => {
+          const pills = sg.metrics.map(renderPill).filter(Boolean).join("");
+          if (!pills) return "";
+          return `<div class="w-100 metric-subgroup-title">${sg.subTitle}</div>${pills}`;
+        }).filter(Boolean).join("");
+        if (!subHtml) return "";
+        return `<div class="w-100 mt-2 mb-1"><small class="fw-bold text-muted text-uppercase">${group.title}</small></div>${subHtml}`;
+      }
+      // 기존 단일 그룹 렌더링
+      const pills = group.metrics.map(renderPill).filter(Boolean).join("");
       if (!pills) return "";
       return `<div class="w-100 mt-2 mb-1"><small class="fw-bold text-muted text-uppercase">${group.title}</small></div>${pills}`;
     }).join("");
@@ -2384,6 +3027,14 @@
   }
 
   async function _pollAnalysisStatus(code, mode, elapsed) {
+    const MAX_WAIT_SEC = 780; // 서버 타임아웃(720s) + 여유 60s
+    if (elapsed > MAX_WAIT_SEC) {
+      document.getElementById("report-loading").style.display = "none";
+      document.getElementById("report-content").innerHTML =
+        `<div class="alert alert-warning">분석 시간이 초과되었습니다 (${elapsed}초). 잠시 후 다시 시도해주세요.</div>`;
+      _setAnalysisLock(false);
+      return;
+    }
     try {
       const res  = await fetch(`/api/stocks/${code}/analysis/status`);
       const data = await res.json();
@@ -2554,10 +3205,113 @@
   // ─── Advanced Filter ─────────────────────────────────────────────────
   let advFilterOpen = false;
 
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function getFieldMeta(col) {
+    return FILTER_FIELD_MAP[col] || { col, label: col, type: FLAG_FILTER_FIELDS.has(col) ? "flag" : "range" };
+  }
+
+  function isFieldActive(field) {
+    if ((field.type || getFieldMeta(field.col).type) === "flag") {
+      return Object.prototype.hasOwnProperty.call(flagFilters, field.col);
+    }
+    const vals = columnFilters[field.col];
+    return !!(vals && (vals.min !== "" || vals.max !== ""));
+  }
+
+  function getTotalActiveFilters() {
+    return Object.keys(columnFilters).length + Object.keys(flagFilters).length;
+  }
+
+  function updateBadgeButtons() {
+    document.querySelectorAll("#badge-filter-group [data-badge]").forEach(b =>
+      b.classList.toggle("active", b.dataset.badge === _badgeFilter)
+    );
+  }
+
+  function clearAdvancedFilterState({ clearSearch = true } = {}) {
+    Object.keys(columnFilters).forEach(k => delete columnFilters[k]);
+    Object.keys(flagFilters).forEach(k => delete flagFilters[k]);
+    if (clearSearch) {
+      const advSearch = document.getElementById("adv-search");
+      if (advSearch) advSearch.value = "";
+    }
+  }
+
+  function getFlagStateLabel(value) {
+    return value === "1" ? "포함" : value === "0" ? "제외" : "무시";
+  }
+
+  function formatFilterSummary(col, vals) {
+    const meta = getFieldMeta(col);
+    const parts = [];
+    if (vals.min !== "") parts.push(`>= ${vals.min}`);
+    if (vals.max !== "") parts.push(`<= ${vals.max}`);
+    return `${meta.label} ${parts.join(" · ")}`.trim();
+  }
+
+  function renderActiveFilterSummary() {
+    const wrap = document.getElementById("adv-active-summary");
+    if (!wrap) return;
+    const chips = [];
+    const market = document.getElementById("f-market")?.value || "";
+    const q = document.getElementById("f-search")?.value?.trim() || "";
+    const sectors = getSelectedSectors();
+
+    if (market) chips.push({ type: "market", key: "market", text: `시장: ${market}` });
+    if (sectors.length) chips.push({ type: "sectors", key: "sectors", text: `섹터: ${sectors.join(", ")}` });
+    if (q) chips.push({ type: "search", key: "search", text: `검색: ${q}` });
+    if (_badgeFilter) chips.push({ type: "badge", key: "badge", text: `뱃지: ${_badgeFilter}` });
+
+    Object.entries(columnFilters).forEach(([col, vals]) => {
+      chips.push({ type: "column", key: col, text: formatFilterSummary(col, vals) });
+    });
+    Object.entries(flagFilters).forEach(([col, value]) => {
+      chips.push({ type: "flag", key: col, text: `${getFieldMeta(col).label} ${getFlagStateLabel(value)}` });
+    });
+
+    if (!chips.length) {
+      wrap.style.display = "none";
+      wrap.innerHTML = "";
+      return;
+    }
+
+    wrap.style.display = "";
+    wrap.innerHTML = chips.map(chip => `
+      <span class="adv-active-chip">
+        <span>${escapeHtml(chip.text)}</span>
+        <button type="button" class="remove" data-chip-type="${chip.type}" data-chip-key="${escapeHtml(chip.key)}">x</button>
+      </span>
+    `).join("");
+
+    wrap.querySelectorAll(".remove").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const { chipType, chipKey } = btn.dataset;
+        if (chipType === "market") document.getElementById("f-market").value = "";
+        else if (chipType === "sectors") setSelectedSectors([]);
+        else if (chipType === "search") document.getElementById("f-search").value = "";
+        else if (chipType === "badge") { _badgeFilter = ""; updateBadgeButtons(); }
+        else if (chipType === "column") delete columnFilters[chipKey];
+        else if (chipType === "flag") delete flagFilters[chipKey];
+        currentPage = 1;
+        if (advFilterOpen) renderFilterPanel();
+        else updateAdvButton();
+        loadStocks();
+      });
+    });
+  }
+
   function updateAdvButton() {
     const btn   = document.getElementById("btn-adv-toggle");
     if (!btn) return;
-    const total = Object.keys(columnFilters).length;
+    const total = getTotalActiveFilters();
     const arrow = advFilterOpen ? "▲" : "▼";
     btn.classList.toggle("active", advFilterOpen);
     if (total > 0) {
@@ -2582,15 +3336,55 @@
   }
 
   function getActiveCount(catKey) {
-    if (catKey === "all") return Object.keys(columnFilters).length;
+    if (catKey === "all") return getTotalActiveFilters();
     const cat = FILTER_CATEGORIES.find(c => c.key === catKey);
     if (!cat || !cat.fields) return 0;
-    return cat.fields.filter(f =>
-      columnFilters[f.col] && (columnFilters[f.col].min !== "" || columnFilters[f.col].max !== "")
-    ).length;
+    return cat.fields.filter(f => isFieldActive(f)).length;
+  }
+
+  function applyQuickGoodFilter(col) {
+    const cfg = GOOD_FILTER_BOUNDS[col];
+    if (!cfg) return;
+    columnFilters[col] = {
+      min: cfg.min !== undefined ? String(cfg.min) : "",
+      max: cfg.max !== undefined ? String(cfg.max) : "",
+    };
+    if (columnFilters[col].min === "" && columnFilters[col].max === "") delete columnFilters[col];
+    currentPage = 1;
+    renderFilterPanel();
+    loadStocks();
+  }
+
+  function setFlagFilter(col, value) {
+    if (value === "") delete flagFilters[col];
+    else flagFilters[col] = value;
+    currentPage = 1;
+    renderFilterPanel();
+    loadStocks();
+  }
+
+  function renderRecommendedPresets() {
+    const list = document.getElementById("recommended-preset-list");
+    if (!list) return;
+    list.innerHTML = RECOMMENDED_PRESETS.map(preset => {
+      const desc = STRATEGY_DESCRIPTIONS[preset.screen]?.criteria || "";
+      return `<button type="button" class="preset-chip recommended" data-preset-id="${preset.id}">
+        <span class="preset-title">${escapeHtml(preset.name)}</span>
+        <span class="preset-desc">${escapeHtml(desc)}</span>
+      </button>`;
+    }).join("");
+    list.querySelectorAll("[data-preset-id]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const preset = RECOMMENDED_PRESETS.find(item => item.id === btn.dataset.presetId);
+        if (preset) applyPreset(preset);
+      });
+    });
   }
 
   function renderFilterPanel() {
+    renderRecommendedPresets();
+    renderPresets();
+
     // 카테고리 탭
     const tabsEl = document.getElementById("adv-cat-tabs");
     tabsEl.innerHTML = FILTER_CATEGORIES.map(cat => {
@@ -2604,10 +3398,11 @@
     );
 
     // 활성 필터 수 배지 + 버튼 업데이트
-    const total = Object.keys(columnFilters).length;
+    const total = getTotalActiveFilters();
     const badge = document.getElementById("adv-active-count");
     if (badge) { badge.textContent = total; badge.style.display = total > 0 ? "" : "none"; }
     updateAdvButton();
+    renderActiveFilterSummary();
 
     // 검색어 필터
     const searchQ = (document.getElementById("adv-search")?.value || "").toLowerCase();
@@ -2620,18 +3415,38 @@
     if (!fields.length) { gridEl.innerHTML = `<div class="adv-filter-empty">지표 없음</div>`; return; }
 
     gridEl.innerHTML = fields.map(f => {
+      const meta     = getFieldMeta(f.col);
       const vals     = columnFilters[f.col] || { min: "", max: "" };
-      const isActive = vals.min !== "" || vals.max !== "";
+      const flagVal  = Object.prototype.hasOwnProperty.call(flagFilters, f.col) ? flagFilters[f.col] : "";
+      const isActive = isFieldActive(meta);
       const unitNote = f.unit ? ` (억)` : "";
       const tipText  = METRIC_TOOLTIPS[f.col] || "";
-      const tipAttr  = tipText ? ` data-tip="${tipText.replace(/"/g, '&quot;')}"` : "";
+      const tipAttr  = tipText ? ` data-tip="${escapeHtml(tipText)}"` : "";
+      const quickBtn = GOOD_FILTER_BOUNDS[f.col] && meta.type !== "flag"
+        ? `<button type="button" class="adv-filter-quick" data-col="${f.col}" title="툴팁의 Good 기준을 빠르게 입력">좋음</button>`
+        : "";
+      if (meta.type === "flag") {
+        return `<div class="adv-filter-row adv-filter-row--flag${isActive ? " adv-filter-row--active" : ""}">
+          <div class="adv-filter-label-wrap">
+            <span class="adv-filter-label" title="${escapeHtml(f.col)}"${tipAttr}>${escapeHtml(f.label)}${unitNote}</span>
+          </div>
+          <div class="adv-flag-group" data-col="${f.col}">
+            <button type="button" class="adv-flag-btn${flagVal === "" ? " active" : ""}" data-col="${f.col}" data-value="">무시</button>
+            <button type="button" class="adv-flag-btn${flagVal === "1" ? " active" : ""}" data-col="${f.col}" data-value="1">포함</button>
+            <button type="button" class="adv-flag-btn exclude${flagVal === "0" ? " active" : ""}" data-col="${f.col}" data-value="0">제외</button>
+          </div>
+        </div>`;
+      }
       return `<div class="adv-filter-row${isActive ? " adv-filter-row--active" : ""}">
-        <span class="adv-filter-label" title="${f.col}"${tipAttr}>${f.label}${unitNote}</span>
+        <div class="adv-filter-label-wrap">
+          <span class="adv-filter-label" title="${escapeHtml(f.col)}"${tipAttr}>${escapeHtml(f.label)}${unitNote}</span>
+          ${quickBtn}
+        </div>
         <input type="number" step="any" class="adv-filter-input" data-col="${f.col}" data-type="min"
-          value="${vals.min}" placeholder="최솟값">
+          value="${escapeHtml(vals.min)}" placeholder="최솟값">
         <span class="adv-filter-sep">~</span>
         <input type="number" step="any" class="adv-filter-input" data-col="${f.col}" data-type="max"
-          value="${vals.max}" placeholder="최댓값">
+          value="${escapeHtml(vals.max)}" placeholder="최댓값">
       </div>`;
     }).join("");
 
@@ -2646,6 +3461,12 @@
         loadStocks();
       })
     );
+    gridEl.querySelectorAll(".adv-flag-btn").forEach(btn =>
+      btn.addEventListener("click", () => setFlagFilter(btn.dataset.col, btn.dataset.value))
+    );
+    gridEl.querySelectorAll(".adv-filter-quick").forEach(btn =>
+      btn.addEventListener("click", () => applyQuickGoodFilter(btn.dataset.col))
+    );
   }
 
   // ─── 필터 프리셋 ─────────────────────────────────────────────────────
@@ -2658,25 +3479,42 @@
 
   function getCurrentFilterSnapshot() {
     return {
+      version:       2,
+      screen:        currentScreen,
       market:        document.getElementById("f-market")?.value  || "",
       sectors:       getSelectedSectors(),
       search:        document.getElementById("f-search")?.value  || "",
+      badge:         _badgeFilter,
       columnFilters: JSON.parse(JSON.stringify(columnFilters)),
+      flagFilters:   JSON.parse(JSON.stringify(flagFilters)),
+      sort:          { col: sortCol, order: sortOrder },
     };
   }
 
   function applyPreset(snap) {
+    const targetScreen = snap.screen || currentScreen;
+    setScreen(targetScreen, { preserveFilters: true, skipLoad: true });
     if (snap.market !== undefined) document.getElementById("f-market").value = snap.market;
     if (snap.sectors !== undefined) setSelectedSectors(snap.sectors);
     // 하위 호환: 구버전 preset에 단일 sector 문자열이 저장된 경우
     else if (snap.sector !== undefined) setSelectedSectors(snap.sector ? [snap.sector] : []);
     if (snap.search !== undefined) document.getElementById("f-search").value = snap.search;
+    _badgeFilter = snap.badge || "";
+    updateBadgeButtons();
     Object.keys(columnFilters).forEach(k => delete columnFilters[k]);
+    Object.keys(flagFilters).forEach(k => delete flagFilters[k]);
     if (snap.columnFilters) {
       Object.assign(columnFilters, snap.columnFilters);
     }
+    if (snap.flagFilters) Object.assign(flagFilters, snap.flagFilters);
+    if (snap.sort?.col) {
+      sortCol = snap.sort.col;
+      sortOrder = snap.sort.order || "desc";
+    }
+    currentPage = 1;
+    buildHeader();
     if (advFilterOpen) renderFilterPanel(); else updateAdvButton();
-    currentPage = 1; loadStocks();
+    loadStocks();
   }
 
   function renderPresets() {
@@ -2710,7 +3548,7 @@
   }
 
   function resetAdvFilter() {
-    Object.keys(columnFilters).forEach(k => delete columnFilters[k]);
+    clearAdvancedFilterState();
     if (advFilterOpen) renderFilterPanel();
     else updateAdvButton();
     currentPage = 1;
@@ -2942,6 +3780,7 @@
         el._bsTooltip = new bootstrap.Tooltip(el, {
           trigger: "hover",
           placement: el.dataset.bsPlacement || "top",
+          html: el.dataset.bsHtml === "true",
         });
       }
     });
@@ -3371,6 +4210,59 @@
   const btnPrev  = document.getElementById("btn-prev");
   const btnNext  = document.getElementById("btn-next");
 
+  function updateStrategyGuideState() {
+    const desc = STRATEGY_DESCRIPTIONS[currentScreen];
+    if (desc) {
+      document.getElementById("strategy-desc").innerHTML =
+        `<strong>${desc.title}</strong>&nbsp;&nbsp;<small class="text-muted">${desc.criteria}</small>`;
+    }
+    const btnGuide = document.getElementById("btn-strategy-guide");
+    if (!btnGuide) return;
+    btnGuide.style.display = STRATEGY_GUIDES[currentScreen] ? "" : "none";
+  }
+
+  function setScreen(screen, { preserveFilters = false, skipLoad = false } = {}) {
+    const prevScreen = currentScreen;
+    currentScreen = screen;
+    sortCol = TAB_DEFAULT_SORT[currentScreen];
+    sortOrder = "desc";
+    currentPage = 1;
+
+    document.querySelectorAll("#screen-tabs .nav-link").forEach(link =>
+      link.classList.toggle("active", link.dataset.screen === currentScreen)
+    );
+
+    if (!preserveFilters) {
+      document.getElementById("f-market").value = "";
+      document.getElementById("f-search").value = "";
+      setSelectedSectors([]);
+      clearAdvancedFilterState({ clearSearch: true });
+      _badgeFilter = "";
+      updateBadgeButtons();
+    }
+
+    if (currentScreen === "portfolio") {
+      document.getElementById("portfolio-summary-bar").style.display = "";
+    } else {
+      document.getElementById("portfolio-summary-bar").style.display = "none";
+      document.getElementById("portfolio-subtabs").style.display = "none";
+      ["pf-performance-panel", "pf-health-panel", "pf-tx-panel", "pf-rebalance-panel"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = "none";
+      });
+      if (prevScreen === "portfolio") loadMarketSummary();
+    }
+
+    if (currentScreen !== "portfolio") buildHeader();
+    const csvBtn = document.getElementById("btn-export-csv");
+    if (csvBtn) csvBtn.style.display = "";
+    renderChangeBanner();
+    updateStrategyGuideState();
+    if (advFilterOpen) renderFilterPanel();
+    else updateAdvButton();
+    if (!skipLoad) loadStocks();
+  }
+
   // ─── 이벤트 리스너 ────────────────────────────────────────────────────
 
   // 페이지네이션
@@ -3386,16 +4278,18 @@
 
   // 검색 폼
   document.getElementById("filter-form").addEventListener("submit", e => {
+    if (advFilterOpen) renderFilterPanel();
     e.preventDefault(); currentPage = 1; loadStocks();
   });
   document.getElementById("btn-clear").addEventListener("click", () => {
     document.getElementById("f-market").value = "";
     setSelectedSectors([]);
     document.getElementById("f-search").value = "";
+    clearAdvancedFilterState({ clearSearch: true });
     _badgeFilter = "";
-    document.querySelectorAll("#badge-filter-group [data-badge]").forEach(b =>
-      b.classList.toggle("active", b.dataset.badge === "")
-    );
+    updateBadgeButtons();
+    if (advFilterOpen) renderFilterPanel();
+    else updateAdvButton();
     currentPage = 1; loadStocks();
   });
 
@@ -3403,9 +4297,8 @@
   document.getElementById("badge-filter-group")?.querySelectorAll("[data-badge]").forEach(btn => {
     btn.addEventListener("click", () => {
       _badgeFilter = btn.dataset.badge;
-      document.querySelectorAll("#badge-filter-group [data-badge]").forEach(b =>
-        b.classList.toggle("active", b.dataset.badge === _badgeFilter)
-      );
+      updateBadgeButtons();
+      if (advFilterOpen) renderFilterPanel();
       currentPage = 1;
       loadStocks();
     });
@@ -3418,7 +4311,6 @@
   // Advanced Filter
   document.getElementById("btn-adv-toggle")?.addEventListener("click", () => {
     toggleAdvFilter();
-    if (advFilterOpen) renderPresets();
   });
   document.getElementById("btn-adv-reset")?.addEventListener("click", resetAdvFilter);
   document.getElementById("adv-search")?.addEventListener("input", () => renderFilterPanel());
@@ -3426,7 +4318,8 @@
   // 프리셋 저장 버튼
   document.getElementById("btn-preset-save")?.addEventListener("click", () => {
     const snap = getCurrentFilterSnapshot();
-    const hasFilter = snap.market || (snap.sectors && snap.sectors.length) || snap.search || Object.keys(snap.columnFilters).length;
+    const hasFilter = snap.market || (snap.sectors && snap.sectors.length) || snap.search || snap.badge ||
+      Object.keys(snap.columnFilters).length || Object.keys(snap.flagFilters).length;
     if (!hasFilter) { alert("저장할 필터 조건이 없습니다."); return; }
     const name = prompt("프리셋 이름을 입력하세요:", "내 프리셋");
     if (!name) return;
@@ -4242,59 +5135,7 @@
   document.querySelectorAll("#screen-tabs .nav-link").forEach(l =>
     l.addEventListener("click", e => {
       e.preventDefault();
-      const prevScreen = currentScreen;
-      document.querySelectorAll("#screen-tabs .nav-link").forEach(x => x.classList.remove("active"));
-      l.classList.add("active");
-      currentScreen = l.dataset.screen;
-      sortCol       = TAB_DEFAULT_SORT[currentScreen];
-      sortOrder     = "desc";
-      currentPage   = 1;
-
-      // 필터 초기화
-      document.getElementById("f-market").value = "";
-      document.getElementById("f-search").value = "";
-      setSelectedSectors([]);
-      Object.keys(columnFilters).forEach(k => delete columnFilters[k]);
-      _badgeFilter = "";
-      document.querySelectorAll("#badge-filter-group [data-badge]").forEach(b =>
-        b.classList.toggle("active", b.dataset.badge === "")
-      );
-      updateAdvButton();
-
-      // 포트폴리오 ↔ 일반 탭 전환 시 요약 바/마켓 요약 토글
-      if (currentScreen === "portfolio") {
-        document.getElementById("portfolio-summary-bar").style.display = "";
-      } else {
-        document.getElementById("portfolio-summary-bar").style.display = "none";
-        document.getElementById("portfolio-subtabs").style.display = "none";
-        ["pf-performance-panel","pf-health-panel","pf-tx-panel","pf-rebalance-panel"].forEach(id => {
-          const el = document.getElementById(id);
-          if (el) el.style.display = "none";
-        });
-        if (prevScreen === "portfolio") loadMarketSummary();
-      }
-
-      // 포트폴리오 탭은 자체 헤더를 빌드하므로 buildHeader 스킵
-      if (currentScreen !== "portfolio") buildHeader();
-      loadStocks();
-      // CSV 버튼은 모든 탭에서 표시
-      const csvBtn = document.getElementById("btn-export-csv");
-      if (csvBtn) csvBtn.style.display = "";
-      renderChangeBanner();
-      
-      const desc = STRATEGY_DESCRIPTIONS[currentScreen];
-      if (desc) {
-        document.getElementById("strategy-desc").innerHTML =
-          `<strong>${desc.title}</strong>&nbsp;&nbsp;<small class="text-muted">${desc.criteria}</small>`;
-      }
-      
-      // 가이드 버튼 표시 제어
-      const btnGuide = document.getElementById("btn-strategy-guide");
-      if (STRATEGY_GUIDES[currentScreen]) {
-        btnGuide.style.display = "";
-      } else {
-        btnGuide.style.display = "none";
-      }
+      setScreen(l.dataset.screen);
     })
   );
 
@@ -4449,8 +5290,6 @@
     });
   });
 
-  const initDesc = STRATEGY_DESCRIPTIONS.all;
-  document.getElementById("strategy-desc").innerHTML =
-    `<strong>${initDesc.title}</strong>&nbsp;&nbsp;<small class="text-muted">${initDesc.criteria}</small>`;
+  updateStrategyGuideState();
 
 })();

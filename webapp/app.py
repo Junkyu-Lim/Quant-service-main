@@ -19,6 +19,7 @@ import db as _db
 from analysis.claude_analyzer import (
     generate_report,
     generate_portfolio_report,
+    generate_macro_assessment,
     generate_diff_summary,
     compute_correlation_matrix,
     build_stock_analysis_input_hash,
@@ -197,6 +198,20 @@ def api_stocks():
                     v = float(val)
                     filtered = filtered[filtered[col] >= v] if key.startswith("min_") else filtered[filtered[col] <= v]
                 except: pass
+        elif key.startswith("flag_"):
+            col = key[5:]
+            if col in filtered.columns:
+                try:
+                    flag_val = int(float(val))
+                except (TypeError, ValueError):
+                    continue
+                if flag_val not in (0, 1):
+                    continue
+                col_vals = pd.to_numeric(filtered[col], errors="coerce")
+                if flag_val == 1:
+                    filtered = filtered[col_vals == 1]
+                else:
+                    filtered = filtered[col_vals != 1]
     # ── 뱃지 필터 (절대 기준) ──────────────────────────────────────────────
     _BADGE_TH = {"관심": ("상승조짐", 40), "조짐": ("상승조짐", 55),
                  "경계": ("과열도", 45), "주의": ("과열도", 60), "과열": ("과열도", 75)}
@@ -1142,6 +1157,44 @@ def api_portfolio_analysis_by_id(report_id: int):
     })
 
 
+@app.route("/api/macro/analysis", methods=["GET"])
+def api_macro_analysis_get():
+    """최신 AI 매크로 분석 결과 조회"""
+    row = _db.load_macro_analysis()
+    if row is None:
+        return jsonify({"error": "No macro analysis"}), 404
+    try:
+        scores = json.loads(row.get("scores_json") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        scores = {}
+    return jsonify({
+        "scores": scores,
+        "model": row.get("model_used", ""),
+        "generated_date": row.get("generated_date", ""),
+    })
+
+
+@app.route("/api/macro/analysis", methods=["POST"])
+def api_macro_analysis_post():
+    """AI 매크로 분석 실행 및 저장"""
+    try:
+        result = generate_macro_assessment()
+        scores = result.get("scores", {})
+        _db.save_macro_analysis(
+            scores_json=json.dumps(scores, ensure_ascii=False),
+            model=result.get("model", ""),
+            date=result.get("generated_date", ""),
+        )
+        return jsonify({
+            "scores": scores,
+            "model": result.get("model", ""),
+            "generated_date": result.get("generated_date", ""),
+        })
+    except Exception as e:
+        log.exception("Macro analysis failed")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/portfolio/analysis", methods=["GET"])
 def api_portfolio_analysis_get():
     """포트폴리오 분석 보고서 조회 (캐시)"""
@@ -1177,10 +1230,19 @@ def api_portfolio_analysis_post():
     if not entries:
         return jsonify({"error": "포트폴리오가 비어 있습니다."}), 400
 
-    # 요청 body에서 워치리스트 코드 및 매크로 컨텍스트 파싱
+    # 요청 body에서 워치리스트 코드 파싱
     body = request.get_json(silent=True) or {}
     watchlist_codes = [str(c).strip().zfill(6) for c in body.get("watchlist_codes", []) if c]
-    macro_context = body.get("macro_context") or None  # 선택 사항
+
+    # 매크로 컨텍스트: 요청에 포함된 경우 우선 사용, 없으면 DB에서 최신 AI 분석 결과 로드
+    macro_context = body.get("macro_context") or None
+    if not macro_context:
+        macro_row = _db.load_macro_analysis()
+        if macro_row and macro_row.get("scores_json"):
+            try:
+                macro_context = json.loads(macro_row["scores_json"])
+            except (json.JSONDecodeError, TypeError):
+                macro_context = None
 
     # 예수금 조회
     cash_balance = _db.load_cash()
@@ -1369,6 +1431,7 @@ def _apply_screen_filter(df: pd.DataFrame, name: str) -> pd.DataFrame:
             & (df["순이익_당기양수"].fillna(0) == 1)
             & (df["순이익_전년음수"].fillna(0) == 0)
             & (df["시가총액"].fillna(0) >= 100_000_000_000)
+            & (df.get("가치함정_경고", pd.Series(0, index=df.index)).fillna(0) == 0)
         )
         mask_finance = (
             is_finance
@@ -1379,6 +1442,7 @@ def _apply_screen_filter(df: pd.DataFrame, name: str) -> pd.DataFrame:
             & (df["순이익_당기양수"].fillna(0) == 1)
             & (df["순이익_전년음수"].fillna(0) == 0)
             & (df["시가총액"].fillna(0) >= 300_000_000_000)
+            & (df.get("가치함정_경고", pd.Series(0, index=df.index)).fillna(0) == 0)
         )
         return df[mask_general | mask_finance]
     elif name == "growth_mom":
