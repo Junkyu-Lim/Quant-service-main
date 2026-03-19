@@ -58,7 +58,15 @@ def run_update_prices():
 
     ind = preprocess_indicators(ind)
     multiplier = detect_unit_multiplier(ind)
-    anal_df = analyze_all(fs, ind)
+
+    # DPS 이력 누적 보존: indicators는 배치마다 덮어써서 과거 데이터가 유실될 수 있으므로
+    # DPS 행만 추출하여 dividend_history에 UPSERT (종목코드+기준일 기준)
+    dps_rows = ind[ind["지표구분"] == "DPS"][["종목코드", "기준일", "값"]].copy()
+    dps_rows = dps_rows.rename(columns={"값": "DPS"})
+    _db.save_dividend_history(dps_rows, biz_day)
+
+    div_hist = _db.load_dividend_history()
+    anal_df = analyze_all(fs, ind, div_hist_df=div_hist)
 
     full_df = calc_valuation(daily, anal_df, multiplier, shares)
     full_df = calc_technical_indicators(
@@ -152,7 +160,14 @@ def run_pipeline(skip_collect: bool = False, test_mode: bool = False, skip_price
     _progress("지표 전처리 중", 62)
     ind = preprocess_indicators(ind)
     multiplier = detect_unit_multiplier(ind)
-    anal_df = analyze_all(fs, ind, progress_callback=_progress)
+
+    # DPS 이력 누적 보존
+    dps_rows = ind[ind["지표구분"] == "DPS"][["종목코드", "기준일", "값"]].copy()
+    dps_rows = dps_rows.rename(columns={"값": "DPS"})
+    _db.save_dividend_history(dps_rows, get_biz_day())
+
+    div_hist = _db.load_dividend_history()
+    anal_df = analyze_all(fs, ind, progress_callback=_progress, div_hist_df=div_hist)
 
     _progress("밸류에이션 계산 중", 70)
     full_df = calc_valuation(daily, anal_df, multiplier, shares)

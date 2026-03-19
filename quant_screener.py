@@ -783,18 +783,21 @@ def analyze_one_stock(ticker, ind_grp, fs_grp):
 
     return res
 
-def analyze_all(fs_df, ind_df, progress_callback=None):
+def analyze_all(fs_df, ind_df, progress_callback=None, div_hist_df=None):
     """Analyze all stocks with optional progress callback.
 
     Args:
         fs_df: Financial statements dataframe
         ind_df: Indicators dataframe
         progress_callback: Optional callable(stage: str, pct: int) for progress tracking
+        div_hist_df: Optional accumulated dividend history dataframe (from dividend_history table).
+                     Used to supplement DPS data beyond FnGuide's rolling window for
+                     accurate consecutive dividend growth calculation (5+ years).
     """
     results = []
     tickers = list(set(fs_df["종목코드"].unique()) | set(ind_df["종목코드"].unique()))
     total = len(tickers)
-    
+
     log.info("사전 그룹화 진행 중 (Pre-grouping data for performance)...")
     ind_grouped = {k: v for k, v in ind_df.groupby("종목코드")} if not ind_df.empty else {}
     fs_grouped = {k: v for k, v in fs_df.groupby("종목코드")} if not fs_df.empty else {}
@@ -812,7 +815,44 @@ def analyze_all(fs_df, ind_df, progress_callback=None):
     if progress_callback:
         progress_callback(f"펀더멘털 분석 완료 ({total}/{total})", 70)
 
-    return pd.DataFrame(results)
+    result_df = pd.DataFrame(results)
+
+    # dividend_history로 배당_연속증가 재계산 (FnGuide 창보다 긴 이력 활용)
+    if div_hist_df is not None and not div_hist_df.empty:
+        result_df = _recalc_consecutive_div_growth(result_df, div_hist_df)
+
+    return result_df
+
+
+def _recalc_consecutive_div_growth(anal_df: pd.DataFrame, div_hist_df: pd.DataFrame) -> pd.DataFrame:
+    """dividend_history의 누적 DPS 이력으로 배당_연속증가를 재계산한다.
+
+    FnGuide Financial Highlight는 ~5-6년 창만 제공하므로, 누적 보존된
+    dividend_history를 사용하면 더 긴 이력으로 정확한 연속증가 연수를 계산할 수 있다.
+    """
+    today_str = pd.Timestamp.today().strftime("%Y-%m-%d")
+    recalc = {}
+    for code, grp in div_hist_df.groupby("종목코드"):
+        grp = grp.copy()
+        grp["기준일"] = grp["기준일"].astype(str)
+        # 미래 날짜 및 분기 기준일 제거 (3,6,9월)
+        grp = grp[grp["기준일"] <= today_str]
+        grp = grp[~grp["기준일"].apply(lambda d: pd.Timestamp(d).month in (3, 6, 9))]
+        if grp.empty:
+            continue
+        dps_dict = dict(zip(grp["기준일"], grp["DPS"]))
+        recalc[code] = count_consecutive_growth(dps_dict)
+
+    if recalc:
+        recalc_s = pd.Series(recalc, name="배당_연속증가_hist")
+        anal_df = anal_df.merge(recalc_s.reset_index().rename(columns={"index": "종목코드"}),
+                                on="종목코드", how="left")
+        # 누적 이력이 있는 종목은 재계산값으로 교체, 없는 종목은 기존값 유지
+        mask = anal_df["배당_연속증가_hist"].notna()
+        anal_df.loc[mask, "배당_연속증가"] = anal_df.loc[mask, "배당_연속증가_hist"]
+        anal_df = anal_df.drop(columns=["배당_연속증가_hist"])
+
+    return anal_df
 
 # ═════════════════════════════════════════════
 # 밸류에이션 & 기술적 지표 (v8 원본 + 수급)
@@ -1378,8 +1418,8 @@ def calc_investor_strength(inv_df, daily, price_hist=None):
             "수급강도": strength,
             "외인순매수_20d": f_amount,
             "기관순매수_20d": i_amount,
-            "스마트머니_승률": smart_ratio,
-            "양매수_비율": both_ratio,
+            "스마트머니_승률": smart_ratio * 100 if pd.notna(smart_ratio) else np.nan,
+            "양매수_비율": both_ratio * 100 if pd.notna(both_ratio) else np.nan,
             "VCP_신호": vcp,
         })
     return pd.DataFrame(res)
@@ -1452,13 +1492,13 @@ def calc_breakout_signal(df):
     # ── 축 3: 수급 유입 조짐 (30%) ──
     supply = pd.Series(0.0, index=df.index)
 
-    # 스마트머니 승률: 0.5→0, 0.7→17.5, 0.9→35
+    # 스마트머니 승률: 50→0, 70→17.5, 90→35  (0~100% 스케일)
     sm = df.get("스마트머니_승률", pd.Series(0, index=df.index)).fillna(0)
-    supply += np.clip((sm - 0.5) / 0.4 * 35, 0, 35)
+    supply += np.clip((sm - 50) / 40 * 35, 0, 35)
 
-    # 양매수 비율: 0.2→0, 0.5→25
+    # 양매수 비율: 20→0, 50→25  (0~100% 스케일)
     both = df.get("양매수_비율", pd.Series(0, index=df.index)).fillna(0)
-    supply += np.clip((both - 0.2) / 0.3 * 25, 0, 25)
+    supply += np.clip((both - 20) / 30 * 25, 0, 25)
 
     # 수급강도 양수: 최대 20점
     strength = df.get("수급강도", pd.Series(0, index=df.index)).fillna(0)
@@ -1796,6 +1836,7 @@ def apply_cash_div_screen(df):
         & (df["시가총액"] >= 50_000_000_000)          # 500억 유지
         & (df["배당성향(%)"].fillna(999) < 80)         # 신규: EPS 대비 과도 배당 차단
         & (df["현금전환율(%)"].fillna(0) >= 70)        # 신규: 이익→현금 전환 품질
+        & (df["배당_연속증가"].fillna(0) >= 2)         # 2년 이상 연속 배당 증가 (이력 축적에 따라 상향 가능)
     )
     return df[mask].sort_values("현금배당_점수", ascending=False)
 
@@ -1829,7 +1870,7 @@ def apply_turnaround_screen(df):
     )
     # 스마트머니 승률 50%+ OR VCP 신호 보조 조건 (있을 때만 적용)
     if "스마트머니_승률" in df.columns:
-        smart_mask = (df["스마트머니_승률"].fillna(0) >= 0.5) | (df.get("VCP_신호", 0).fillna(0) == 1)
+        smart_mask = (df["스마트머니_승률"].fillna(0) >= 50) | (df.get("VCP_신호", 0).fillna(0) == 1)
         mask = base_mask & smart_mask
         # 스마트머니 데이터 없는 종목은 기본 조건으로 통과
         no_data_mask = base_mask & df["스마트머니_승률"].isna()

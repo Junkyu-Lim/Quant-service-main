@@ -1463,6 +1463,7 @@ def _apply_screen_filter(df: pd.DataFrame, name: str) -> pd.DataFrame:
             & (df["시가총액"].fillna(0) >= 50_000_000_000)
             & (df["배당성향(%)"].fillna(999) < 80)          # 신규: Payout Trap 차단
             & (df["현금전환율(%)"].fillna(0) >= 70)         # 신규: 이익→현금 품질
+            & (df["배당_연속증가"].fillna(0) >= 2)          # 2년 이상 연속 배당 증가 (이력 축적에 따라 상향 가능)
         )
         return df[mask]
     elif name == "turnaround":
@@ -1477,7 +1478,7 @@ def _apply_screen_filter(df: pd.DataFrame, name: str) -> pd.DataFrame:
         # 스마트머니 승률 50%+ OR VCP 신호 보조 (데이터 있을 때만, NaN 종목은 통과)
         if "스마트머니_승률" in df.columns:
             smart_mask = (
-                (df["스마트머니_승률"].fillna(0) >= 0.5)
+                (df["스마트머니_승률"].fillna(0) >= 50)
                 | (df.get("VCP_신호", pd.Series(0, index=df.index)).fillna(0) == 1)
             )
             no_data_mask = df["스마트머니_승률"].isna()

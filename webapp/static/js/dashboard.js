@@ -13,6 +13,7 @@
   let sortOrder     = "desc";
   const columnFilters = {};       // { col: { min, max } }
   const flagFilters   = {};       // { col: "1" | "0" }
+  const _activePresetIds = new Set();  // 현재 누적 적용된 프리셋 ID 추적
   let batchChanges  = null;
   const compareSet  = new Set();  // 비교 선택된 종목코드
   let advCat        = "all";
@@ -479,8 +480,8 @@
             <li>퀄리티_턴어라운드: GPM +2%p↑ + CF + ROIC → 점수 가산 (체질 개선 확인)</li>
           </ul>
         </li>
-        <li><strong>스마트머니_승률:</strong> 최근 20거래일 중 외인 또는 기관이 순매수한 날의 비율. 0.5 이상이면 수급 유입 신호.</li>
-        <li><strong>VCP_신호 (변동성 수축 패턴):</strong> 가격 CV 축소 + 거래량 축소 + 스마트머니_승률 ≥ 60% 동시 충족 시 켜짐 — 주가 에너지 응축 구간.</li>
+        <li><strong>스마트머니_승률:</strong> 최근 20거래일 중 외인 또는 기관이 순매수한 날의 비율(%). 50 이상이면 수급 유입 신호.</li>
+        <li><strong>VCP_신호 (변동성 수축 패턴):</strong> 가격 CV 축소 + 거래량 축소 + 스마트머니_승률 ≥ 60 동시 충족 시 켜짐 — 주가 에너지 응축 구간.</li>
         <li><strong>높은 복합괴리율:</strong> 실적은 좋아졌는데 주가가 아직 반응하지 않아 S-RIM/EPV/DDM/Forward 복합 적정주가 대비 현저히 저평가된 종목을 찾으세요.</li>
       </ul>
 
@@ -913,8 +914,8 @@
       "수급강도":         [v => v >= 1.0, v => v < 0],
       "외인순매수_20d":   [v => v > 0, v => v < 0],
       "기관순매수_20d":   [v => v > 0, v => v < 0],
-      "스마트머니_승률":   [v => v >= 0.6, v => v <= 0.3],
-      "양매수_비율":       [v => v >= 0.2, v => v == 0],
+      "스마트머니_승률":   [v => v >= 60, v => v <= 30],
+      "양매수_비율":       [v => v >= 20, v => v == 0],
       "거래대금_증감(%)": [v => v >= 50, v => v <= -20],
       "52주_최고대비(%)": [v => v >= -5, v => v <= -30], // Near High = Momentum Good
       "MA20_이격도(%)":   [v => v >= 0, v => v <= -5],   // Trend support
@@ -1818,9 +1819,11 @@
   };
 
   const RECOMMENDED_PRESETS = [
+    // ── 핵심 전략 ──
     {
-      id: "leaders_finder",
-      name: "주도주 발굴",
+      id: "leaders_finder", name: "주도주 발굴", icon: "🔥",
+      desc: "RS 80↑ · 수급(+) · 거래대금 5억↑ · 과열도 60↓",
+      group: "핵심 전략",
       screen: "leaders",
       sort: { col: "주도주_점수", order: "desc" },
       columnFilters: {
@@ -1832,22 +1835,25 @@
       flagFilters: {},
     },
     {
-      id: "quality_value",
-      name: "우량가치",
+      id: "quality_value", name: "우량가치", icon: "💎",
+      desc: "ROIC 10%↑ · ROE 10%↑ · PEG≤1.2 · F-Score 6↑ · 부채 120%↓",
+      group: "핵심 전략",
       screen: "quality_value",
       sort: { col: "우량가치_점수", order: "desc" },
       columnFilters: {
         "ROIC(%)": { min: "10", max: "" },
+        "ROE(%)": { min: "10", max: "" },
         "PEG": { min: "", max: "1.2" },
-        "F스코어": { min: "5", max: "" },
+        "F스코어": { min: "6", max: "" },
         "부채비율(%)": { min: "", max: "120" },
         "과열도": { min: "", max: "70" },
       },
       flagFilters: {},
     },
     {
-      id: "growth_momentum",
-      name: "고성장",
+      id: "growth_momentum", name: "고성장", icon: "🚀",
+      desc: "Q OP YoY 10%↑ · OP CAGR 15%↑ · RS 50↑ · 실적감속 제외",
+      group: "핵심 전략",
       screen: "growth_mom",
       sort: { col: "고성장_점수", order: "desc" },
       columnFilters: {
@@ -1858,8 +1864,52 @@
       flagFilters: { "실적감속_경고": "0" },
     },
     {
-      id: "cash_dividend",
-      name: "배당",
+      id: "multi_pick", name: "멀티픽", icon: "🏆",
+      desc: "3개 전략 이상 동시 통과 · 종합점수 70↑ · 과열도 60↓",
+      group: "핵심 전략",
+      screen: "multi_strategy",
+      sort: { col: "전략수", order: "desc" },
+      columnFilters: {
+        "전략수": { min: "3", max: "" },
+        "종합점수": { min: "70", max: "" },
+        "과열도": { min: "", max: "60" },
+      },
+      flagFilters: {},
+    },
+    // ── 가치 · 배당 ──
+    {
+      id: "deep_value", name: "딥밸류", icon: "🏷️",
+      desc: "PBR<1 · S-RIM 괴리 20%↑ · PER 5~20 · FCF(+) · F-Score 5↑",
+      group: "가치 · 배당",
+      screen: "",
+      sort: { col: "괴리율(%)", order: "desc" },
+      columnFilters: {
+        "PBR": { min: "", max: "1" },
+        "괴리율(%)": { min: "20", max: "" },
+        "PER": { min: "5", max: "20" },
+        "FCF수익률(%)": { min: "0", max: "" },
+        "F스코어": { min: "5", max: "" },
+      },
+      flagFilters: {},
+    },
+    {
+      id: "dividend_aristocrat", name: "배당귀족", icon: "👑",
+      desc: "배당수익률 2%↑ · 연속증가 2년↑ · 배당성향 20~60% · 수익동반증가",
+      group: "가치 · 배당",
+      screen: "cash_div",
+      sort: { col: "배당수익률(%)", order: "desc" },
+      columnFilters: {
+        "배당수익률(%)": { min: "2", max: "" },
+        "배당_연속증가": { min: "2", max: "" },
+        "배당성향(%)": { min: "20", max: "60" },
+        "현금전환율(%)": { min: "70", max: "" },
+      },
+      flagFilters: { "배당_경고신호": "0", "배당_수익동반증가": "1" },
+    },
+    {
+      id: "cash_dividend", name: "현금배당", icon: "💰",
+      desc: "FCF수익률 3%↑ · 배당수익률 1%↑ · 현금전환율 70%↑ · 부채 120%↓",
+      group: "가치 · 배당",
       screen: "cash_div",
       sort: { col: "현금배당_점수", order: "desc" },
       columnFilters: {
@@ -1870,9 +1920,80 @@
       },
       flagFilters: { "배당_경고신호": "0" },
     },
+    // ── 성장 · 모멘텀 ──
     {
-      id: "turnaround",
-      name: "턴어라운드",
+      id: "garp", name: "GARP", icon: "⚖️",
+      desc: "매출CAGR 10%↑ · ROIC 10%↑ · 현금전환율 80%↑ · PEG≤1.5",
+      group: "성장 · 모멘텀",
+      screen: "",
+      sort: { col: "종합점수", order: "desc" },
+      columnFilters: {
+        "매출_CAGR": { min: "10", max: "" },
+        "ROIC(%)": { min: "10", max: "" },
+        "현금전환율(%)": { min: "80", max: "" },
+        "PEG": { min: "", max: "1.5" },
+      },
+      flagFilters: { "실적감속_경고": "0" },
+    },
+    {
+      id: "breakout", name: "돌파 후보", icon: "📈",
+      desc: "상승조짐 60↑ · VCP신호 · 스마트머니 승률 60%↑ · 과열도 50↓",
+      group: "성장 · 모멘텀",
+      screen: "",
+      sort: { col: "상승조짐", order: "desc" },
+      columnFilters: {
+        "상승조짐": { min: "60", max: "" },
+        "과열도": { min: "", max: "50" },
+        "스마트머니_승률": { min: "60", max: "" },
+      },
+      flagFilters: { "VCP_신호": "1" },
+    },
+    {
+      id: "forward_covered", name: "Forward 커버", icon: "🔭",
+      desc: "컨센서스 커버 · Fwd OP 성장 10%↑ · 과열도 65↓ · 실적감속 제외",
+      group: "성장 · 모멘텀",
+      screen: "forward_covered",
+      sort: { col: "Fwd_모멘텀_점수", order: "desc" },
+      columnFilters: {
+        "컨센서스_커버리지": { min: "1", max: "" },
+        "Fwd_영업이익_성장률(%)": { min: "10", max: "" },
+        "과열도": { min: "", max: "65" },
+      },
+      flagFilters: { "실적감속_경고": "0" },
+    },
+    // ── 특수 상황 ──
+    {
+      id: "smart_money", name: "스마트머니", icon: "🧠",
+      desc: "스마트머니 승률 70%↑ · 양매수 비율 50%↑ · 수급강도(+)",
+      group: "특수 상황",
+      screen: "",
+      sort: { col: "스마트머니_승률", order: "desc" },
+      columnFilters: {
+        "스마트머니_승률": { min: "70", max: "" },
+        "양매수_비율": { min: "50", max: "" },
+        "수급강도": { min: "0", max: "" },
+      },
+      flagFilters: {},
+    },
+    {
+      id: "safe_margin", name: "안전마진", icon: "🛡️",
+      desc: "과열도 30↓ · F-Score 6↑ · 부채 100%↓ · FCF(+) · 변동성 40%↓",
+      group: "특수 상황",
+      screen: "",
+      sort: { col: "안정성_점수", order: "desc" },
+      columnFilters: {
+        "과열도": { min: "", max: "30" },
+        "F스코어": { min: "6", max: "" },
+        "부채비율(%)": { min: "", max: "100" },
+        "FCF수익률(%)": { min: "0", max: "" },
+        "변동성_60일(%)": { min: "", max: "40" },
+      },
+      flagFilters: {},
+    },
+    {
+      id: "turnaround", name: "턴어라운드", icon: "🔄",
+      desc: "턴어라운드 점수 60↑ · TTM 순이익 흑자 · 상승조짐 50↑ · 과열도 60↓",
+      group: "특수 상황",
       screen: "turnaround",
       sort: { col: "턴어라운드_점수", order: "desc" },
       columnFilters: {
@@ -1884,28 +2005,221 @@
       flagFilters: {},
     },
     {
-      id: "forward_covered",
-      name: "Forward 커버",
-      screen: "forward_covered",
-      sort: { col: "Fwd_모멘텀_점수", order: "desc" },
+      id: "quality_turnaround", name: "퀄리티 턴어라운드", icon: "🔧",
+      desc: "ROIC 개선 · 이익률 개선 · F-Score 5↑ · 과열도 50↓",
+      group: "특수 상황",
+      screen: "",
+      sort: { col: "종합점수", order: "desc" },
       columnFilters: {
-        "컨센서스_커버리지": { min: "1", max: "" },
-        "Fwd_영업이익_성장률(%)": { min: "10", max: "" },
-        "과열도": { min: "", max: "65" },
+        "F스코어": { min: "5", max: "" },
+        "과열도": { min: "", max: "50" },
+      },
+      flagFilters: { "ROIC_개선": "1", "이익률_개선": "1" },
+    },
+    // ── 투자 대가 (Investment Masters) ──
+    {
+      id: "buffett", name: "워런 버핏", icon: "🏛️",
+      desc: "ROE 12%↑ · 영업이익률 10%↑ · 영업이익 연속성장 3년↑ · 부채비율 100%↓ · PER 5~25 · F스코어 6↑",
+      group: "투자 대가 (Investment Masters)",
+      screen: "",
+      sort: { col: "우량가치_점수", order: "desc" },
+      columnFilters: {
+        "ROE(%)":            { min: "12", max: "" },
+        "영업이익률(%)":     { min: "10", max: "" },
+        "영업이익_연속성장": { min: "3", max: "" },
+        "부채비율(%)":       { min: "", max: "100" },
+        "PER":               { min: "5", max: "25" },
+        "F스코어":           { min: "6", max: "" },
+      },
+      flagFilters: {},
+    },
+    {
+      id: "damodaran", name: "다모다란", icon: "📊",
+      desc: "ROIC 12%↑ · 괴리율 15%↑ · PEG ≤1.5 · FCF수익률 3%↑ · 매출CAGR 5%↑",
+      group: "투자 대가 (Investment Masters)",
+      screen: "",
+      sort: { col: "종합점수", order: "desc" },
+      columnFilters: {
+        "ROIC(%)":       { min: "12", max: "" },
+        "괴리율(%)":     { min: "15", max: "" },
+        "PEG":           { min: "", max: "1.5" },
+        "FCF수익률(%)":  { min: "3", max: "" },
+        "매출_CAGR":     { min: "5", max: "" },
+      },
+      flagFilters: {},
+    },
+    {
+      id: "fisher", name: "필립 피셔", icon: "🔬",
+      desc: "매출CAGR 15%↑ · 영업이익CAGR 15%↑ · 매출 연속성장 3년↑ · 영업이익률 8%↑ · 감속경고 제외",
+      group: "투자 대가 (Investment Masters)",
+      screen: "",
+      sort: { col: "성장성_점수", order: "desc" },
+      columnFilters: {
+        "매출_CAGR":       { min: "15", max: "" },
+        "영업이익_CAGR":   { min: "15", max: "" },
+        "매출_연속성장":   { min: "3", max: "" },
+        "영업이익률(%)":   { min: "8", max: "" },
       },
       flagFilters: { "실적감속_경고": "0" },
     },
     {
-      id: "multi_pick",
-      name: "멀티픽",
-      screen: "multi_strategy",
-      sort: { col: "전략수", order: "desc" },
+      id: "dorsey", name: "팻 도시", icon: "🏰",
+      desc: "ROIC 15%↑ · 영업이익률 12%↑ · FCF수익률 5%↑ · CAPEX비율 30%↓ · 현금전환율 80%↑",
+      group: "투자 대가 (Investment Masters)",
+      screen: "",
+      sort: { col: "우량가치_점수", order: "desc" },
       columnFilters: {
-        "전략수": { min: "3", max: "" },
-        "종합점수": { min: "70", max: "" },
-        "과열도": { min: "", max: "60" },
+        "ROIC(%)":       { min: "15", max: "" },
+        "영업이익률(%)": { min: "12", max: "" },
+        "FCF수익률(%)":  { min: "5", max: "" },
+        "CAPEX비율(%)":  { min: "", max: "30" },
+        "현금전환율(%)": { min: "80", max: "" },
       },
       flagFilters: {},
+    },
+    {
+      id: "lynch", name: "피터 린치", icon: "🎯",
+      desc: "PEG ≤1.2 · 영업이익CAGR 10%↑ · 순이익CAGR 10%↑ · 부채비율 150%↓ · PER 5~30",
+      group: "투자 대가 (Investment Masters)",
+      screen: "",
+      sort: { col: "종합점수", order: "desc" },
+      columnFilters: {
+        "PEG":             { min: "", max: "1.2" },
+        "영업이익_CAGR":   { min: "10", max: "" },
+        "순이익_CAGR":     { min: "10", max: "" },
+        "부채비율(%)":     { min: "", max: "150" },
+        "PER":             { min: "5", max: "30" },
+      },
+      flagFilters: {},
+    },
+    {
+      id: "kostolany", name: "코스톨라니", icon: "🎭",
+      desc: "과열도 30↓ · 상승조짐 50↑ · 52주최저대비 30%↓ · F스코어 5↑ · 스마트머니 승률 50%↑",
+      group: "투자 대가 (Investment Masters)",
+      screen: "",
+      sort: { col: "상승조짐", order: "desc" },
+      columnFilters: {
+        "과열도":            { min: "", max: "30" },
+        "상승조짐":          { min: "50", max: "" },
+        "52주_최저대비(%)":  { min: "", max: "30" },
+        "F스코어":           { min: "5", max: "" },
+        "스마트머니_승률":   { min: "50", max: "" },
+      },
+      flagFilters: {},
+    },
+    // ── 가치 투자 거장 (Value Masters) ──
+    {
+      id: "graham", name: "벤저민 그레이엄", icon: "🏦",
+      desc: "PBR 0.8↓ · PER 5~12 · 이익수익률 8%↑ · 유동비율 150%↑ · 부채비율 80%↓ · 이자보상배율 5↑",
+      group: "가치 투자 거장 (Value Masters)",
+      screen: "",
+      sort: { col: "이익수익률(%)", order: "desc" },
+      columnFilters: {
+        "PBR":             { min: "", max: "0.8" },
+        "PER":             { min: "5", max: "12" },
+        "이익수익률(%)":   { min: "8", max: "" },
+        "유동비율(%)":     { min: "150", max: "" },
+        "부채비율(%)":     { min: "", max: "80" },
+        "이자보상배율":    { min: "5", max: "" },
+        "순이익_연속성장": { min: "2", max: "" },
+      },
+      flagFilters: {},
+    },
+    {
+      id: "greenblatt", name: "조엘 그린블라트", icon: "✨",
+      desc: "이익수익률 8%↑ · ROIC 12%↑ · PER 3~20 · 시가총액 500억↑ · 영업이익 흑자",
+      group: "가치 투자 거장 (Value Masters)",
+      screen: "",
+      sort: { col: "이익수익률(%)", order: "desc" },
+      columnFilters: {
+        "이익수익률(%)":   { min: "8", max: "" },
+        "ROIC(%)":         { min: "12", max: "" },
+        "PER":             { min: "3", max: "20" },
+        "시가총액":        { min: "500", max: "" },
+        "TTM_영업이익":    { min: "0", max: "" },
+      },
+      flagFilters: {},
+    },
+    {
+      id: "neff", name: "존 네프", icon: "📉",
+      desc: "PER 3~12 · 순이익CAGR 5~25% · 배당수익률 1.5%↑ · 영업이익률 5%↑ · 과열도 50↓",
+      group: "가치 투자 거장 (Value Masters)",
+      screen: "",
+      sort: { col: "가격_점수", order: "desc" },
+      columnFilters: {
+        "PER":             { min: "3", max: "12" },
+        "순이익_CAGR":     { min: "5", max: "25" },
+        "배당수익률(%)":   { min: "1.5", max: "" },
+        "영업이익률(%)":   { min: "5", max: "" },
+        "부채비율(%)":     { min: "", max: "150" },
+        "과열도":          { min: "", max: "50" },
+      },
+      flagFilters: {},
+    },
+    // ── 퀀트 팩터 전략 (Quant Factor Strategies) ──
+    {
+      id: "oneil", name: "윌리엄 오닐 (CAN SLIM)", icon: "📡",
+      desc: "Q 영업이익YoY 20%↑ · 영업이익CAGR 15%↑ · 실적가속 · RS등급 70↑ · 기관순매수 · 감속경고 제외",
+      group: "퀀트 팩터 전략 (Quant Factor Strategies)",
+      screen: "",
+      sort: { col: "고성장_점수", order: "desc" },
+      columnFilters: {
+        "Q_영업이익_YoY(%)": { min: "20", max: "" },
+        "영업이익_CAGR":     { min: "15", max: "" },
+        "실적가속_연속":     { min: "1", max: "" },
+        "RS_등급":           { min: "70", max: "" },
+        "기관순매수_20d":    { min: "0", max: "" },
+        "거래대금_20일평균": { min: "3", max: "" },
+      },
+      flagFilters: { "실적감속_경고": "0" },
+    },
+    {
+      id: "oshaughnessy", name: "오쇼너시 (Trending Value)", icon: "📐",
+      desc: "PSR ≤1.0 · PBR ≤1.5 · FCF수익률 3%↑ · RS등급 60↑ · Composite RS 50↑ · 시총 1000억↑",
+      group: "퀀트 팩터 전략 (Quant Factor Strategies)",
+      screen: "",
+      sort: { col: "Composite_RS", order: "desc" },
+      columnFilters: {
+        "PSR":               { min: "", max: "1.0" },
+        "PBR":               { min: "", max: "1.5" },
+        "FCF수익률(%)":      { min: "3", max: "" },
+        "RS_등급":           { min: "60", max: "" },
+        "Composite_RS":      { min: "50", max: "" },
+        "시가총액":          { min: "1000", max: "" },
+      },
+      flagFilters: {},
+    },
+    {
+      id: "low_vol", name: "저변동성 퀄리티", icon: "🛌",
+      desc: "변동성 25%↓ · F스코어 6↑ · ROE 8%↑ · 부채비율 120%↓ · 배당수익률 1%↑ · 영업이익 흑자",
+      group: "퀀트 팩터 전략 (Quant Factor Strategies)",
+      screen: "",
+      sort: { col: "안정성_점수", order: "desc" },
+      columnFilters: {
+        "변동성_60일(%)":    { min: "", max: "25" },
+        "F스코어":           { min: "6", max: "" },
+        "ROE(%)":            { min: "8", max: "" },
+        "부채비율(%)":       { min: "", max: "120" },
+        "TTM_영업이익":      { min: "0", max: "" },
+        "거래대금_20일평균": { min: "2", max: "" },
+        "배당수익률(%)":     { min: "1", max: "" },
+      },
+      flagFilters: {},
+    },
+    {
+      id: "dreman", name: "데이비드 드레먼", icon: "🔥",
+      desc: "52주고점대비 -25%↓ · PER 3~15 · 배당수익률 2%↑ · F스코어 5↑ · 이익률 개선 중",
+      group: "퀀트 팩터 전략 (Quant Factor Strategies)",
+      screen: "",
+      sort: { col: "가격_점수", order: "desc" },
+      columnFilters: {
+        "52주_최고대비(%)":  { min: "", max: "-25" },
+        "PER":               { min: "3", max: "15" },
+        "배당수익률(%)":     { min: "2", max: "" },
+        "F스코어":           { min: "5", max: "" },
+        "TTM_영업이익":      { min: "0", max: "" },
+      },
+      flagFilters: { "이익률_개선": "1" },
     },
   ];
 
@@ -3239,6 +3553,7 @@
   function clearAdvancedFilterState({ clearSearch = true } = {}) {
     Object.keys(columnFilters).forEach(k => delete columnFilters[k]);
     Object.keys(flagFilters).forEach(k => delete flagFilters[k]);
+    _activePresetIds.clear();
     if (clearSearch) {
       const advSearch = document.getElementById("adv-search");
       if (advSearch) advSearch.value = "";
@@ -3366,13 +3681,23 @@
   function renderRecommendedPresets() {
     const list = document.getElementById("recommended-preset-list");
     if (!list) return;
-    list.innerHTML = RECOMMENDED_PRESETS.map(preset => {
-      const desc = STRATEGY_DESCRIPTIONS[preset.screen]?.criteria || "";
-      return `<button type="button" class="preset-chip recommended" data-preset-id="${preset.id}">
-        <span class="preset-title">${escapeHtml(preset.name)}</span>
-        <span class="preset-desc">${escapeHtml(desc)}</span>
-      </button>`;
-    }).join("");
+    const groups = [];
+    let cur = null;
+    RECOMMENDED_PRESETS.forEach(p => {
+      if (p.group !== cur) { cur = p.group; groups.push({ label: cur, presets: [] }); }
+      groups[groups.length - 1].presets.push(p);
+    });
+    list.innerHTML = groups.map(g => `
+      <div class="preset-group-label">${escapeHtml(g.label)}</div>
+      ${g.presets.map(preset => {
+        const desc = preset.desc || STRATEGY_DESCRIPTIONS[preset.screen]?.criteria || "";
+        const isActive = _activePresetIds.has(preset.id);
+        return `<button type="button" class="preset-chip recommended${isActive ? ' preset-active' : ''}" data-preset-id="${preset.id}">
+          <span class="preset-title">${preset.icon ? preset.icon + " " : ""}${escapeHtml(preset.name)}</span>
+          <span class="preset-desc">${escapeHtml(desc)}</span>
+        </button>`;
+      }).join("")}
+    `).join("");
     list.querySelectorAll("[data-preset-id]").forEach(btn => {
       btn.addEventListener("click", () => {
         const preset = RECOMMENDED_PRESETS.find(item => item.id === btn.dataset.presetId);
@@ -3492,8 +3817,6 @@
   }
 
   function applyPreset(snap) {
-    const targetScreen = snap.screen || currentScreen;
-    setScreen(targetScreen, { preserveFilters: true, skipLoad: true });
     if (snap.market !== undefined) document.getElementById("f-market").value = snap.market;
     if (snap.sectors !== undefined) setSelectedSectors(snap.sectors);
     // 하위 호환: 구버전 preset에 단일 sector 문자열이 저장된 경우
@@ -3501,19 +3824,22 @@
     if (snap.search !== undefined) document.getElementById("f-search").value = snap.search;
     _badgeFilter = snap.badge || "";
     updateBadgeButtons();
-    Object.keys(columnFilters).forEach(k => delete columnFilters[k]);
-    Object.keys(flagFilters).forEach(k => delete flagFilters[k]);
+    // 누적 병합: 기존 필터를 유지하면서 새 프리셋 필터를 덮어씀
     if (snap.columnFilters) {
-      Object.assign(columnFilters, snap.columnFilters);
+      Object.assign(columnFilters, JSON.parse(JSON.stringify(snap.columnFilters)));
     }
-    if (snap.flagFilters) Object.assign(flagFilters, snap.flagFilters);
+    if (snap.flagFilters) {
+      Object.assign(flagFilters, JSON.parse(JSON.stringify(snap.flagFilters)));
+    }
     if (snap.sort?.col) {
       sortCol = snap.sort.col;
       sortOrder = snap.sort.order || "desc";
     }
     currentPage = 1;
+    if (snap.id) _activePresetIds.add(snap.id);
     buildHeader();
     if (advFilterOpen) renderFilterPanel(); else updateAdvButton();
+    renderRecommendedPresets();
     loadStocks();
   }
 

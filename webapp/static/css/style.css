@@ -536,6 +536,13 @@ tr.row-new { background-color: rgba(25, 135, 84, 0.04) !important; }
 .preset-bar-recommended {
   background: linear-gradient(180deg, #f8fbff 0%, #eef5ff 100%);
 }
+.preset-group-label {
+  grid-column: 1 / -1;
+  font-size: .68rem; font-weight: 700; color: #5a6c8a;
+  padding: 6px 0 2px; margin-top: 2px;
+  letter-spacing: 0.3px;
+}
+.preset-group-label:first-child { margin-top: 0; }
 .preset-list {
   display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px;
 }
@@ -565,6 +572,14 @@ tr.row-new { background-color: rgba(25, 135, 84, 0.04) !important; }
   margin-left: 2px;
 }
 .preset-chip .preset-del:hover { color: #dc3545; }
+.preset-chip.preset-active {
+  background: #cfe2ff; border-color: #86b7fe;
+  box-shadow: 0 0 0 2px rgba(13,110,253,.25);
+}
+.preset-chip.recommended.preset-active {
+  background: #e8f0fe; border-color: #86b7fe;
+  box-shadow: 0 0 0 2px rgba(13,110,253,.2);
+}
 
 .stock-risk-badge {
   display: inline-flex; align-items: center;

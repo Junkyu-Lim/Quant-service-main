@@ -190,6 +190,13 @@ _SCHEMA_STATEMENTS = [
     목표비중    DOUBLE NOT NULL DEFAULT 0,
     updated_at  TEXT NOT NULL
 )""",
+    """CREATE TABLE IF NOT EXISTS dividend_history (
+    종목코드      TEXT NOT NULL,
+    기준일        TEXT NOT NULL,
+    DPS           DOUBLE NOT NULL,
+    collected_date TEXT NOT NULL,
+    PRIMARY KEY (종목코드, 기준일)
+)""",
     """CREATE TABLE IF NOT EXISTS dashboard_result (
     종목코드      TEXT PRIMARY KEY,
     종목명        TEXT,
@@ -391,6 +398,45 @@ def save_dashboard(df: pd.DataFrame):
         conn.execute("CREATE TABLE dashboard_result AS SELECT * FROM _dash_tmp")
         conn.unregister("_dash_tmp")
     log.info("저장: dashboard_result (%d건)", len(df))
+
+
+def save_dividend_history(dps_df: pd.DataFrame, collected_date: str):
+    """DPS 이력을 dividend_history에 누적 저장 (종목코드+기준일 기준 UPSERT).
+
+    indicators 테이블은 배치마다 덮어써서 과거 데이터가 유실될 수 있으므로
+    DPS 데이터만 별도로 보존하여 5년+ 연속증가 판단에 활용한다.
+    """
+    if dps_df.empty:
+        return
+    data = dps_df.copy()
+    # Timestamp → "YYYY-MM-DD" 문자열
+    for col in data.columns:
+        if pd.api.types.is_datetime64_any_dtype(data[col]):
+            data[col] = data[col].dt.strftime("%Y-%m-%d")
+    data["collected_date"] = collected_date
+    data = data[["종목코드", "기준일", "DPS", "collected_date"]]
+    data = data.dropna(subset=["DPS"])
+
+    with get_conn() as conn:
+        conn.register("_dps_tmp", data)
+        conn.execute("""
+            INSERT OR REPLACE INTO dividend_history (종목코드, 기준일, DPS, collected_date)
+            SELECT 종목코드, 기준일, DPS, collected_date FROM _dps_tmp
+        """)
+        conn.unregister("_dps_tmp")
+    log.info("저장: dividend_history (%d건, date=%s)", len(data), collected_date)
+
+
+def load_dividend_history() -> pd.DataFrame:
+    """dividend_history 전체 반환 (모든 종목, 모든 연도)."""
+    with get_conn() as conn:
+        try:
+            df = conn.execute(
+                "SELECT 종목코드, 기준일, DPS FROM dividend_history ORDER BY 종목코드, 기준일"
+            ).df()
+        except Exception:
+            return pd.DataFrame(columns=["종목코드", "기준일", "DPS"])
+    return df
 
 
 # ─────────────────────────────────────────────
