@@ -6,11 +6,13 @@
   "use strict";
 
   // ─── 상태 ───────────────────────────────────────────────────────────────
+  let currentCountry = localStorage.getItem("quant_country") || "kr";
   let currentScreen = "all";
   let currentPage   = 1;
   let pageSize      = 50;
   let sortCol       = "종합점수";
   let sortOrder     = "desc";
+  let currentCapTier = "";
   const columnFilters = {};       // { col: { min, max } }
   const flagFilters   = {};       // { col: "1" | "0" }
   const _activePresetIds = new Set();  // 현재 누적 적용된 프리셋 ID 추적
@@ -32,6 +34,24 @@
   // 틀 고정 대상 컬럼 키 (모든 탭 공통)
   const STICKY_KEYS = new Set(["종목코드", "종목명", "섹터", "시장구분", "종가", "시가총액"]);
 
+  const US_HIDDEN_SCREENS = new Set(["forward_covered", "portfolio"]);
+
+  function isUsMode() {
+    return currentCountry === "us";
+  }
+
+  function apiPrefix() {
+    return isUsMode() ? "/api/us" : "/api";
+  }
+
+  function hiddenScreens() {
+    return isUsMode() ? US_HIDDEN_SCREENS : new Set();
+  }
+
+  function getWatchlistKey() {
+    return isUsMode() ? "quant_watchlist_us" : "quant_watchlist";
+  }
+
   // ─── 탭 기본 정렬 ─────────────────────────────────────────────────────
   const TAB_DEFAULT_SORT = {
     all:              "종합점수",
@@ -47,13 +67,12 @@
   };
 
   // ─── 관심종목 ──────────────────────────────────────────────────────────
-  const WATCHLIST_KEY = "quant_watchlist";
   function getWatchlist() {
-    try { return new Set(JSON.parse(localStorage.getItem(WATCHLIST_KEY) || "[]")); }
+    try { return new Set(JSON.parse(localStorage.getItem(getWatchlistKey()) || "[]")); }
     catch { return new Set(); }
   }
   function saveWatchlist(set) {
-    localStorage.setItem(WATCHLIST_KEY, JSON.stringify([...set]));
+    localStorage.setItem(getWatchlistKey(), JSON.stringify([...set]));
   }
 
   // ─── 매크로 AI 분석 ──────────────────────────────────────────────────────
@@ -158,8 +177,11 @@
     }, 8000);
 
     try {
+      const userPrompt = (document.getElementById("macro-user-prompt")?.value || "").trim();
       const res = await fetch("/api/macro/analysis", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_prompt: userPrompt }),
         signal: AbortSignal.timeout(180000),  // 3분 타임아웃
       });
       const data = await res.json();
@@ -222,12 +244,13 @@
   function exportTableCSV() {
     const rows = document.querySelectorAll("#stock-tbody tr[data-code]");
     if (!rows.length) { alert("내보낼 데이터가 없습니다."); return; }
+    const controlCount = getTableControls().length;
     const headers = [...document.querySelectorAll("#table-header th")]
       .map(th => th.textContent.trim())
-      .filter((_, i) => i >= 2); // 체크박스, 별표 열 제외
+      .filter((_, i) => i >= controlCount);
     const lines = [headers.join(",")];
     rows.forEach(tr => {
-      const cells = [...tr.querySelectorAll("td")].slice(2); // 체크박스, 별표 제외
+      const cells = [...tr.querySelectorAll("td")].slice(controlCount);
       lines.push(cells.map(td => `"${td.textContent.trim().replace(/"/g, '""')}"`).join(","));
     });
     const bom = "\uFEFF";
@@ -251,6 +274,21 @@
     watchlist:       { title: "⭐ 관심 종목",             criteria: "사용자가 직접 추가한 종목" },
     portfolio:       { title: "📋 포트폴리오 (보유종목)",   criteria: "매수 수량/단가 기록, 수익률/비중 분석" },
   };
+  const US_STRATEGY_DESCRIPTIONS = {
+    all:            { title: "📊 전체 종목", criteria: "NYSE/NASDAQ + GICS 기준 US 스크리너" },
+    leaders:        { title: "🔥 시장 주도주 (US)", criteria: "시총 $10B↑ · 흑자 · RS 80↑ · 거래대금 $5M↑" },
+    quality_value:  { title: "💎 우량가치 (US)", criteria: "ROIC 10%↑ · F스코어 5↑ · PEG<1.5 · 시총 $2B↑" },
+    growth_mom:     { title: "🚀 고성장 모멘텀 (US)", criteria: "매출/이익 CAGR 10%↑ · 분기 이익 성장 · RS 50↑ · 시총 $1B↑" },
+    cash_div:       { title: "💰 현금배당 (US)", criteria: "FCF수익률 3%↑ · 배당수익률 1%↑ · 배당 연속증가 · 시총 $1B↑" },
+    turnaround:     { title: "🔄 턴어라운드 (US)", criteria: "흑전/이익률 급개선 · OCF(+) · 거래대금 급증 또는 VCP · 시총 $500M↑" },
+    multi_strategy: { title: "🏆 Multi-Pick (US)", criteria: "5개 전략 중 3개 이상 동시 통과" },
+    watchlist:      { title: "⭐ 관심 종목", criteria: "US 관심종목 별도 저장" },
+  };
+
+  function getStrategyDescription(screen = currentScreen) {
+    const map = isUsMode() ? US_STRATEGY_DESCRIPTIONS : STRATEGY_DESCRIPTIONS;
+    return map[screen] || STRATEGY_DESCRIPTIONS[screen];
+  }
 
   // ─── 전략별 상세 가이드 콘텐츠 ──────────────────────────────────────────
   const STRATEGY_GUIDES = {
@@ -809,6 +847,68 @@
       { key: "비중",    label: "비중%",   w: "58px",  fmt: "f1" },
     ]
   };
+
+  const US_REMOVED_KEYS = new Set([
+    "수급강도", "외인순매수_20d", "기관순매수_20d",
+    "스마트머니_승률", "양매수_비율",
+    "컨센서스_커버리지",
+    "Fwd_PER", "Fwd_PBR", "Fwd_EPS", "Fwd_ROE(%)", "Fwd_OPM(%)",
+    "Fwd_영업이익_성장률(%)", "Fwd_매출_성장률(%)", "Fwd_순이익_성장률(%)",
+    "Fwd_2yr_영업이익_성장(%)", "Fwd_모멘텀_점수",
+  ]);
+  const USD_VALUE_KEYS = new Set(["종가", "EPS", "BPS", "DPS_최근", "적정주가_SRIM", "적정주가_EPV", "적정주가_DDM", "적정주가_FWD", "적정주가_종합"]);
+  const USD_CAP_KEYS = new Set(["시가총액", "거래대금_20일평균", "TTM_매출", "TTM_영업이익", "TTM_순이익", "TTM_영업CF", "TTM_CAPEX", "TTM_FCF", "자본", "부채", "자산총계"]);
+
+  function makeUsColumns(cols) {
+    const out = cols
+      .filter(col => !US_REMOVED_KEYS.has(col.key))
+      .map(col => {
+        const next = { ...col };
+        if (next.key === "종목코드") next.label = "Ticker";
+        if (next.key === "시장구분") next.label = "Exch";
+        if (USD_VALUE_KEYS.has(next.key)) next.fmt = "usd";
+        if (USD_CAP_KEYS.has(next.key)) next.fmt = "usd_cap";
+        return next;
+      });
+
+    const sectorIdx = out.findIndex(col => col.key === "섹터");
+    if (!out.some(col => col.key === "시장구분")) {
+      out.splice(sectorIdx >= 0 ? sectorIdx + 1 : 2, 0, { key: "시장구분", label: "Exch" });
+    }
+    if (!out.some(col => col.key === "industry")) {
+      const exchangeIdx = out.findIndex(col => col.key === "시장구분");
+      out.splice(exchangeIdx >= 0 ? exchangeIdx + 1 : (sectorIdx >= 0 ? sectorIdx + 1 : 3), 0, { key: "industry", label: "Industry" });
+    }
+    return out;
+  }
+
+  const US_COLUMNS = {
+    all: makeUsColumns(COLUMNS.all),
+    leaders: makeUsColumns(COLUMNS.leaders),
+    quality_value: makeUsColumns(COLUMNS.quality_value),
+    growth_mom: makeUsColumns(COLUMNS.growth_mom),
+    cash_div: makeUsColumns(COLUMNS.cash_div),
+    turnaround: makeUsColumns(COLUMNS.turnaround),
+    multi_strategy: makeUsColumns(COLUMNS.multi_strategy),
+    watchlist: makeUsColumns(COLUMNS.watchlist),
+  };
+
+  function getColumnsForScreen(screen = currentScreen) {
+    const source = isUsMode() ? US_COLUMNS : COLUMNS;
+    return source[screen] || source.all;
+  }
+
+  function getTableControls() {
+    const controls = [];
+    if (!isUsMode()) controls.push({ key: "_pf", label: "+PF", width: 44 });
+    controls.push({ key: "_cb", label: "", width: 30 });
+    controls.push({ key: "_star", label: "★", width: 34 });
+    return controls;
+  }
+
+  function getDefaultSort(screen = currentScreen) {
+    return TAB_DEFAULT_SORT[screen] || "종합점수";
+  }
 
   // ─── 탭별 그룹 구분선 경계 컬럼 ──────────────────────────────────────────
   const TAB_GROUP_STARTS = {
@@ -2239,6 +2339,16 @@
   ALL_FILTER_FIELDS.forEach(f => { if (f.unit) UNIT_FACTORS[f.col] = f.unit; });
 
   // ─── 포맷팅 ──────────────────────────────────────────────────────────
+  function formatUsdCap(value) {
+    const num = Number(value);
+    const abs = Math.abs(num);
+    if (abs >= 1e12) return `$${(num / 1e12).toFixed(1)}T`;
+    if (abs >= 1e9) return `$${(num / 1e9).toFixed(1)}B`;
+    if (abs >= 1e6) return `$${(num / 1e6).toFixed(1)}M`;
+    if (abs >= 1e3) return `$${(num / 1e3).toFixed(1)}K`;
+    return `$${num.toFixed(0)}`;
+  }
+
   function fmt(v, type) {
     if (v === null || v === undefined) return "-";
     if (type === "int")  return Number(v).toLocaleString("ko-KR", { maximumFractionDigits: 0 });
@@ -2246,6 +2356,8 @@
     if (type === "f2")   return Number(v).toFixed(2);
     if (type === "flag") return Number(v) === 1 ? "O" : "X";
     if (type === "eok")  return Math.round(Number(v) / 1e8).toLocaleString("ko-KR") + "억";
+    if (type === "usd")  return `$${Number(v).toLocaleString("en-US", { minimumFractionDigits: Number(v) < 1000 ? 2 : 0, maximumFractionDigits: Number(v) < 1000 ? 2 : 0 })}`;
+    if (type === "usd_cap") return formatUsdCap(v);
     return String(v);
   }
   function valClass(v) {
@@ -2256,7 +2368,7 @@
   // ─── 시장 요약 카드 ───────────────────────────────────────────────────
   async function loadMarketSummary() {
     try {
-      const res  = await fetch("/api/markets/summary");
+      const res  = await fetch(`${apiPrefix()}/markets/summary`);
       if (!res.ok) return;
       const data = await res.json();
       const el   = document.getElementById("market-summary");
@@ -2280,7 +2392,7 @@
   // ─── 탭 종목 수 / 변동 배지 ──────────────────────────────────────────
   async function loadTabCounts() {
     try {
-      const res = await fetch("/api/stocks/tab_counts");
+      const res = await fetch(`${apiPrefix()}/stocks/tab_counts`);
       if (!res.ok) return;
       tabCounts = await res.json();
       renderTabBadges();
@@ -2322,7 +2434,7 @@
   // ─── 배치 변경 배너 ───────────────────────────────────────────────────
   async function loadBatchChanges() {
     try {
-      const res  = await fetch("/api/batch/changes");
+      const res  = await fetch(`${apiPrefix()}/batch/changes`);
       if (!res.ok) return;
       batchChanges = await res.json();
       renderChangeBanner();
@@ -2346,16 +2458,49 @@
       </div>`;
   }
 
+  function getCurrentMarketValue() {
+    return isUsMode()
+      ? (document.getElementById("f-exchange")?.value || "")
+      : (document.getElementById("f-market")?.value || "");
+  }
+
+  function setCurrentMarketValue(value) {
+    const el = isUsMode() ? document.getElementById("f-exchange") : document.getElementById("f-market");
+    if (el) el.value = value || "";
+  }
+
+  function getCurrentIndexMember() {
+    return document.getElementById("f-index-member")?.value || "";
+  }
+
+  function updateCapTierButtons() {
+    document.querySelectorAll("#cap-tier-group .cap-tier-btn").forEach(btn => {
+      btn.classList.toggle("active", btn.dataset.capTier === currentCapTier);
+    });
+  }
+
+  function resetCountryFilters() {
+    const marketEl = document.getElementById("f-market");
+    const exchangeEl = document.getElementById("f-exchange");
+    const indexEl = document.getElementById("f-index-member");
+    if (marketEl) marketEl.value = "";
+    if (exchangeEl) exchangeEl.value = "";
+    if (indexEl) indexEl.value = "";
+    currentCapTier = "";
+    updateCapTierButtons();
+  }
+
   // ─── 종목 목록 로드 ───────────────────────────────────────────────────
   async function loadStocks() {
     disposeTooltips(); // 로드 시작 시 툴팁 제거
     // 로딩 스피너
-    const loadingCols = (COLUMNS[currentScreen] || COLUMNS.all).length + 2;
+    const loadingCols = getColumnsForScreen().length + getTableControls().length;
     tbody.innerHTML = `<tr><td colspan="${loadingCols}" class="text-center py-4 text-muted">
       <span class="spinner-border spinner-border-sm me-2" role="status"></span>데이터 로딩 중...
     </td></tr>`;
 
-    const market = document.getElementById("f-market").value;
+    const market = getCurrentMarketValue();
+    const indexMember = getCurrentIndexMember();
     const q      = document.getElementById("f-search").value.trim();
     let apiScreen  = currentScreen;
     let codesParam = "";
@@ -2393,6 +2538,8 @@
     const sectors = getSelectedSectors();
     if (market)          params.set("market", market);
     if (sectors.length)  params.set("sectors", sectors.join(","));
+    if (isUsMode() && indexMember) params.set("index_member", indexMember);
+    if (isUsMode() && currentCapTier) params.set("cap_tier", currentCapTier);
     if (q)          params.set("q", q);
     if (codesParam) params.set("codes", codesParam);
     if (_badgeFilter) params.set("badge", _badgeFilter);
@@ -2408,7 +2555,7 @@
     });
 
     try {
-      const res  = await fetch(`/api/stocks?${params}`);
+      const res  = await fetch(`${apiPrefix()}/stocks?${params}`);
       if (!res.ok) throw new Error(`서버 오류: ${res.status}`);
       const data = await res.json();
       renderTable(data.items);
@@ -2555,9 +2702,10 @@
     const cg = tableEl2?.querySelector("colgroup");
     if (cg) cg.remove();
 
-    const cols = COLUMNS[currentScreen] || COLUMNS.all;
+    const cols = getColumnsForScreen();
+    const controls = getTableControls();
     if (!items.length) {
-      tbody.innerHTML = `<tr><td colspan="${cols.length + 4}" class="text-center py-4 text-muted">데이터 없음</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="${cols.length + controls.length}" class="text-center py-4 text-muted">데이터 없음</td></tr>`;
       return;
     }
     const wl       = getWatchlist();
@@ -2569,9 +2717,15 @@
       const code    = s["종목코드"];
       const watched = wl.has(code);
       const isNew   = newCodes.has(code);
-      const pfBtn    = `<td class="text-center p-1" style="min-width:44px;width:44px"><button class="btn btn-sm btn-outline-info pf-add-btn" data-code="${code}" data-name="${(s["종목명"]||"").replace(/"/g,"&quot;")}" style="font-size:.6rem;padding:1px 4px;line-height:1.2;">+PF</button></td>`;
-      const compareCb = `<td class="text-center p-1" style="min-width:30px;width:30px"><input type="checkbox" class="compare-cb" data-code="${code}" ${compareSet.has(code) ? "checked" : ""}></td>`;
-      const star      = `<td class="text-center p-1" style="min-width:34px;width:34px"><button class="watch-btn${watched ? " watched" : ""}" data-code="${code}">${watched ? "★" : "☆"}</button></td>`;
+      const controlCells = controls.map(ctrl => {
+        if (ctrl.key === "_pf") {
+          return `<td class="text-center p-1" style="min-width:${ctrl.width}px;width:${ctrl.width}px"><button class="btn btn-sm btn-outline-info pf-add-btn" data-code="${code}" data-name="${(s["종목명"]||"").replace(/"/g,"&quot;")}" style="font-size:.6rem;padding:1px 4px;line-height:1.2;">+PF</button></td>`;
+        }
+        if (ctrl.key === "_cb") {
+          return `<td class="text-center p-1" style="min-width:${ctrl.width}px;width:${ctrl.width}px"><input type="checkbox" class="compare-cb" data-code="${code}" ${compareSet.has(code) ? "checked" : ""}></td>`;
+        }
+        return `<td class="text-center p-1" style="min-width:${ctrl.width}px;width:${ctrl.width}px"><button class="watch-btn${watched ? " watched" : ""}" data-code="${code}">${watched ? "★" : "☆"}</button></td>`;
+      }).join("");
       const groupStartSet = TAB_GROUP_STARTS[currentScreen] || new Set();
       const cells = cols.map(c => {
         let cls = groupStartSet.has(c.key) ? "wl-group-start" : "";
@@ -2609,7 +2763,7 @@
         const scoreTipAttr = isScoreColumn(c.key) ? buildScoreTooltipAttr(s, c.key) : "";
         return `<td class="${cls}"${scoreTipAttr}>${fmt(s[c.key], c.fmt)}${newBadge}${aiBadge}${riskBadges}${overheatBadge}${breakoutBadge}</td>`;
       }).join("");
-      return `<tr data-code="${code}" class="${isNew ? "row-new" : ""}">${pfBtn}${compareCb}${star}${cells}</tr>`;
+      return `<tr data-code="${code}" class="${isNew ? "row-new" : ""}">${controlCells}${cells}</tr>`;
     }).join("");
 
     tbody.querySelectorAll(".watch-btn").forEach(btn =>
@@ -2730,13 +2884,13 @@
 
   // ─── 틀 고정 컬럼 ────────────────────────────────────────────────────
   function _computeStickyIndices() {
-    // 제어 컬럼 3개 (+PF, checkbox, ★) + 데이터 컬럼 중 STICKY_KEYS에 해당하는 연속된 컬럼
-    const indices = new Set([0, 1, 2]);
-    const cols = COLUMNS[currentScreen] || COLUMNS.all;
+    const controls = getTableControls();
+    const indices = new Set(controls.map((_, idx) => idx));
+    const cols = getColumnsForScreen();
     let consecutive = true;
     cols.forEach((col, i) => {
       if (consecutive && STICKY_KEYS.has(col.key)) {
-        indices.add(i + 3); // +3 for control cols
+        indices.add(i + controls.length);
       } else {
         consecutive = false;
       }
@@ -2764,8 +2918,8 @@
 
     const indices = _computeStickyIndices();
     const lastIdx = Math.max(...indices);
-    const cols = COLUMNS[currentScreen] || COLUMNS.all;
-    const ctrlKeys = ["_pf", "_cb", "_star"];
+    const cols = getColumnsForScreen();
+    const ctrlKeys = getTableControls().map(ctrl => ctrl.key);
 
     // 사전 정의 너비로 고정 (offsetWidth 의존 제거 → 누적 증가 방지)
     const sortedIndices = [...indices].sort((a, b) => a - b);
@@ -2774,7 +2928,7 @@
     let left = 0;
     sortedIndices.forEach(i => {
       if (!ths[i]) return;
-      const key = i < 3 ? ctrlKeys[i] : (cols[i - 3]?.key);
+      const key = i < ctrlKeys.length ? ctrlKeys[i] : (cols[i - ctrlKeys.length]?.key);
       const w = STICKY_COL_WIDTHS[key] || 80;
       ths[i].classList.add("sticky-col");
       if (i === lastIdx) ths[i].classList.add("sticky-col-last");
@@ -2811,7 +2965,8 @@
 
   // ─── 헤더 구성 ────────────────────────────────────────────────────────
   function buildHeader() {
-    const cols = COLUMNS[currentScreen] || COLUMNS.all;
+    const cols = getColumnsForScreen();
+    const controls = getTableControls();
     // 컬럼 레이블 길이 기반 최소 너비 계산 (한글 약 9px, 영문 약 7px, padding 포함)
     const tbl = document.getElementById("stock-table");
     if (tbl) { tbl.style.tableLayout = "auto"; const cg = tbl.querySelector("colgroup"); if (cg) cg.remove(); }
@@ -2820,7 +2975,7 @@
         const label = c.label || "";
         const charW = [...label].reduce((s, ch) => s + (/[\u3131-\uD7A3]/.test(ch) ? 10 : 7.5), 0);
         return sum + Math.max(52, charW + 24); // padding + sort arrow
-      }, 44 + 30 + 34); // +PF col + checkbox col + ★ col
+      }, controls.reduce((sum, ctrl) => sum + ctrl.width, 0));
       tbl.style.minWidth = Math.max(900, estimatedWidth) + "px";
     }
     // 탭별 그룹 경계 컬럼 (왼쪽 굵은 선) 및 레이블 정의
@@ -2873,8 +3028,11 @@
     };
     const WL_GROUP_STARTS = new Set(TAB_GROUP_STARTS[currentScreen] || []);
     const WL_GROUP_LABELS = TAB_GROUP_LABELS[currentScreen] || {};
+    const controlHeader = controls.map(ctrl =>
+      `<th style="min-width:${ctrl.width}px;width:${ctrl.width}px" class="text-center small text-muted">${ctrl.label}</th>`
+    ).join("");
     headerRow.innerHTML =
-      `<tr><th style="min-width:44px;width:44px" class="text-center small text-muted">+PF</th><th style="min-width:30px;width:30px" class="text-center small text-muted"></th><th style="min-width:34px;width:34px">★</th>` +
+      `<tr>${controlHeader}` +
       cols.map(c => {
         const arrow = sortCol === c.key ? (sortOrder === "desc" ? " ↓" : " ↑") : "";
         const tip = METRIC_TOOLTIPS[c.key]
@@ -2898,7 +3056,7 @@
             sortOrder = "asc";
           } else {
             // Reset to default sort for this tab
-            sortCol   = TAB_DEFAULT_SORT[currentScreen] || "종합점수";
+            sortCol   = getDefaultSort(currentScreen);
             sortOrder = "desc";
           }
         } else {
@@ -2918,7 +3076,7 @@
   async function openDetail(code) {
     currentDetailCode = code;
     try {
-      const res = await fetch(`/api/stocks/${code}`);
+      const res = await fetch(`${apiPrefix()}/stocks/${code}`);
       if (!res.ok) throw new Error("종목 정보를 불러올 수 없습니다.");
       currentDetailData = await res.json();
       renderDetailModal(currentDetailData);
@@ -2941,6 +3099,8 @@
     const isProxy = stock["_proxy"] === true;
     const proxyName = stock["_proxy_name"] || "";
     const proxyFrom = stock["_proxy_from"] || "";
+    const priceLabel = price != null ? `${fmt(price, isUsMode() ? "usd" : "int")}${isUsMode() ? "" : "원"}` : "";
+    const marketBadgeClass = ["KOSPI", "NYSE"].includes(market) ? "bg-primary" : "bg-danger";
 
     const rep = reportMap[code];
     const aiHeaderBadge = rep
@@ -2953,27 +3113,65 @@
 
     document.getElementById("detail-title").innerHTML =
       `<strong>${isProxy ? proxyName : name}</strong> <span class="text-muted fs-6">${isProxy ? proxyFrom : code}</span>
-       <span class="badge ${market === "KOSPI" ? "bg-primary" : "bg-danger"} ms-2">${market}</span>
+       <span class="badge ${marketBadgeClass} ms-2">${market}</span>
        ${sector ? `<span class="badge bg-secondary ms-1">${sector}</span>` : ""}
-       ${price != null ? `<span class="ms-2 fw-bold">${fmt(price, "int")}원</span>` : ""}
+       ${priceLabel ? `<span class="ms-2 fw-bold">${priceLabel}</span>` : ""}
        ${aiHeaderBadge}${proxyBadge}`;
 
     const btnWD = document.getElementById("btn-watch-detail");
     if (btnWD) { btnWD.dataset.code = code; updateAllStarButtons(); }
+    const detailPfBtn = document.getElementById("btn-portfolio-detail");
+    if (detailPfBtn) detailPfBtn.style.display = isUsMode() ? "none" : "";
+    const analysisWrap = document.getElementById("btn-analysis-wrap");
+    if (analysisWrap) analysisWrap.style.display = "";
 
     // 지표 그룹별 렌더링
     const metricsEl = document.getElementById("detail-metrics");
+
+    // US 모드: fmt 오버라이드 (USD_VALUE_KEYS → "usd", USD_CAP_KEYS → "usd_cap")
+    const resolveMetric = m => {
+      if (!isUsMode()) return m;
+      if (USD_VALUE_KEYS.has(m.key)) return { ...m, fmt: "usd" };
+      if (USD_CAP_KEYS.has(m.key))  return { ...m, fmt: "usd_cap" };
+      return m;
+    };
+
+    // US 모드: 그룹 제목 오버라이드
+    const US_GROUP_TITLE_MAP = {
+      "TTM 실적 (억원)": "TTM 실적 (USD)",
+    };
+    // US 모드: 지표 label 오버라이드 (억 → USD)
+    const US_LABEL_MAP = {
+      "TTM_매출":     "TTM Revenue",
+      "TTM_영업이익": "TTM Op. Income",
+      "TTM_순이익":   "TTM Net Income",
+      "TTM_영업CF":   "TTM Op. CF",
+      "TTM_CAPEX":    "TTM CAPEX",
+      "TTM_FCF":      "TTM FCF",
+      "자본":         "Equity",
+      "부채":         "Total Liabilities",
+      "자산총계":     "Total Assets",
+    };
+    const resolveLabel = m => {
+      if (!isUsMode()) return m.label;
+      return US_LABEL_MAP[m.key] || m.label;
+    };
+
     const renderPill = m => {
-      const v = stock[m.key];
+      const rm = resolveMetric(m);
+      const v = stock[rm.key];
       if (v === null || v === undefined) return "";
-      const tip = METRIC_TOOLTIPS[m.key]
-        ? `data-bs-toggle="tooltip" data-bs-placement="top" title="${METRIC_TOOLTIPS[m.key]}"` : "";
-      const cls = getMetricColor(m.key, v);
+      const tip = METRIC_TOOLTIPS[rm.key]
+        ? `data-bs-toggle="tooltip" data-bs-placement="top" title="${METRIC_TOOLTIPS[rm.key]}"` : "";
+      const cls = getMetricColor(rm.key, v);
       return `<div class="metric-pill" ${tip}>
-        <div class="lbl">${m.label}</div>
-        <div class="val ${cls}">${fmt(v, m.fmt)}</div>
+        <div class="lbl">${resolveLabel(rm)}</div>
+        <div class="val ${cls}">${fmt(v, rm.fmt)}</div>
       </div>`;
     };
+    const resolveGroupTitle = title =>
+      isUsMode() ? (US_GROUP_TITLE_MAP[title] || title) : title;
+
     metricsEl.innerHTML = METRIC_GROUPS.map(group => {
       if (group.subGroups) {
         // 서브그룹 구조 렌더링
@@ -2983,12 +3181,12 @@
           return `<div class="w-100 metric-subgroup-title">${sg.subTitle}</div>${pills}`;
         }).filter(Boolean).join("");
         if (!subHtml) return "";
-        return `<div class="w-100 mt-2 mb-1"><small class="fw-bold text-muted text-uppercase">${group.title}</small></div>${subHtml}`;
+        return `<div class="w-100 mt-2 mb-1"><small class="fw-bold text-muted text-uppercase">${resolveGroupTitle(group.title)}</small></div>${subHtml}`;
       }
       // 기존 단일 그룹 렌더링
       const pills = group.metrics.map(renderPill).filter(Boolean).join("");
       if (!pills) return "";
-      return `<div class="w-100 mt-2 mb-1"><small class="fw-bold text-muted text-uppercase">${group.title}</small></div>${pills}`;
+      return `<div class="w-100 mt-2 mb-1"><small class="fw-bold text-muted text-uppercase">${resolveGroupTitle(group.title)}</small></div>${pills}`;
     }).join("");
 
     // 분석 버튼에 code 설정
@@ -3158,7 +3356,7 @@
     const area = document.getElementById("financial-chart-area");
     try {
       const period = _finPeriod;
-      const url = `/api/stocks/${code}/financials?period=${period}`;
+      const url = `${apiPrefix()}/stocks/${code}/financials?period=${period}`;
       const res  = await fetch(url);
       if (!res.ok) { area.style.display = "none"; return; }
       const data = await res.json();
@@ -3201,7 +3399,8 @@
         });
       }
 
-      const titleText = period === "quarter" ? "분기 실적 추이 (억원)" : "연간 실적 추이 (억원)";
+      const finUnit = isUsMode() ? "USD" : "억원";
+      const titleText = period === "quarter" ? `분기 실적 추이 (${finUnit})` : `연간 실적 추이 (${finUnit})`;
       financialChart = new Chart(ctx, {
         type: "bar",
         data: { labels: data.years, datasets },
@@ -3214,8 +3413,8 @@
             legend: { position: "bottom", labels: { font: { size: 10 }, boxWidth: 12 } },
           },
           scales: {
-            y: { beginAtZero: false, ticks: { font: { size: 10 } },
-                 title: { display: true, text: "억원", font: { size: 9 } } },
+            y: { beginAtZero: false, ticks: { font: { size: 10 }, callback: v => isUsMode() ? formatUsdCap(v) : v.toLocaleString("ko-KR") },
+                 title: { display: true, text: finUnit, font: { size: 9 } } },
             ...(hasYoY ? { y2: { position: "right", beginAtZero: false,
                   ticks: { font: { size: 10 }, callback: v => v + "%" },
                   grid: { drawOnChartArea: false },
@@ -3252,7 +3451,7 @@
     sel.innerHTML = '<option value="">이전 보고서</option>';
     sel.style.display = "none";
     try {
-      const res = await fetch(`/api/stocks/${code}/analysis/history`);
+      const res = await fetch(`${_analysisApiBase(code)}/analysis/history`);
       if (!res.ok) return;
       const list = await res.json();
       if (!list.length) return;
@@ -3275,7 +3474,7 @@
     diffArea.innerHTML = "";
     contentEl.innerHTML = '<div class="text-center py-3"><div class="spinner-border spinner-border-sm"></div></div>';
     try {
-      const res = await fetch(`/api/stocks/analysis/history/${historyId}`);
+      const res = await fetch(`${_analysisHistoryApiBase()}/${historyId}`);
       if (!res.ok) throw new Error("조회 실패");
       const data = await res.json();
       contentEl.innerHTML =
@@ -3326,9 +3525,10 @@
       document.getElementById("report-content").innerHTML = staleWarning + (data.report_html || "");
       document.getElementById("report-meta").textContent  =
         `${data.model || ""} · ${data.generated_date || ""}${data.stale ? " (구버전)" : ""}`;
-      const paddedCode = code.toString().padStart(6, "0");
-      reportMap[paddedCode] = { model: data.model || "", date: data.generated_date || "" };
-      const nameCell = document.querySelector(`tr[data-code="${paddedCode}"] td:nth-child(3)`);
+      const codeKey = isUsMode() ? String(code) : code.toString().padStart(6, "0");
+      reportMap[codeKey] = { model: data.model || "", date: data.generated_date || "" };
+      const nameCellIdx = getTableControls().length + 2;
+      const nameCell = document.querySelector(`tr[data-code="${codeKey}"] td:nth-child(${nameCellIdx})`);
       if (nameCell && !nameCell.querySelector(".badge-ai")) {
         nameCell.insertAdjacentHTML("beforeend",
           ` <span class="badge badge-ai" title="${data.model} · ${data.generated_date}">AI</span>`);
@@ -3338,6 +3538,14 @@
     document.getElementById("btn-regenerate").dataset.code = code;
     document.getElementById("btn-regenerate").dataset.mode = mode;
     _setAnalysisLock(false);
+  }
+
+  function _analysisApiBase(code) {
+    return isUsMode() ? `/api/us/stocks/${code}` : `/api/stocks/${code}`;
+  }
+
+  function _analysisHistoryApiBase() {
+    return isUsMode() ? `/api/us/stocks/analysis/history` : `/api/stocks/analysis/history`;
   }
 
   async function _pollAnalysisStatus(code, mode, elapsed) {
@@ -3350,7 +3558,7 @@
       return;
     }
     try {
-      const res  = await fetch(`/api/stocks/${code}/analysis/status`);
+      const res  = await fetch(`${_analysisApiBase(code)}/analysis/status`);
       const data = await res.json();
       if (data.status === "running") {
         document.getElementById("report-loading-text").textContent =
@@ -3407,7 +3615,7 @@
         ? `<div class="alert alert-info py-2 mb-3">⏳ 현재 이 종목을 분석 중입니다. 완료 후 보고서가 업데이트됩니다.</div>`
         : "";
       try {
-        const getRes = await fetch(`/api/stocks/${code}/analysis`);
+        const getRes = await fetch(`${_analysisApiBase(code)}/analysis`);
         if (getRes.ok) {
           const cached = await getRes.json();
           document.getElementById("report-loading").style.display = "none";
@@ -3431,7 +3639,7 @@
     // 서버에 백그라운드 분석 시작 요청
     try {
       console.log("[AI분석] POST 요청 시작:", code, mode);
-      const postRes = await fetch(`/api/stocks/${code}/analysis`, {
+      const postRes = await fetch(`${_analysisApiBase(code)}/analysis`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode }),
@@ -3460,7 +3668,7 @@
   // ─── 파이프라인 ───────────────────────────────────────────────────────
   async function triggerPipeline(opts = {}) {
     try {
-      const res  = await fetch("/api/batch/trigger", {
+      const res  = await fetch(`${apiPrefix()}/batch/trigger`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(opts),
@@ -3486,7 +3694,7 @@
 
   async function pollPipelineStatus() {
     try {
-      const res  = await fetch("/api/batch/status");
+      const res  = await fetch(`${apiPrefix()}/batch/status`);
       const data = await res.json();
       const secs = Math.round((Date.now() - pipelineStartTime) / 1000);
 
@@ -3576,11 +3784,14 @@
     const wrap = document.getElementById("adv-active-summary");
     if (!wrap) return;
     const chips = [];
-    const market = document.getElementById("f-market")?.value || "";
+    const market = getCurrentMarketValue();
+    const indexMember = getCurrentIndexMember();
     const q = document.getElementById("f-search")?.value?.trim() || "";
     const sectors = getSelectedSectors();
 
-    if (market) chips.push({ type: "market", key: "market", text: `시장: ${market}` });
+    if (market) chips.push({ type: "market", key: "market", text: `${isUsMode() ? "거래소" : "시장"}: ${market}` });
+    if (isUsMode() && indexMember) chips.push({ type: "index", key: "index", text: `인덱스: ${indexMember}` });
+    if (isUsMode() && currentCapTier) chips.push({ type: "cap_tier", key: "cap_tier", text: `시총티어: ${currentCapTier}` });
     if (sectors.length) chips.push({ type: "sectors", key: "sectors", text: `섹터: ${sectors.join(", ")}` });
     if (q) chips.push({ type: "search", key: "search", text: `검색: ${q}` });
     if (_badgeFilter) chips.push({ type: "badge", key: "badge", text: `뱃지: ${_badgeFilter}` });
@@ -3609,7 +3820,9 @@
     wrap.querySelectorAll(".remove").forEach(btn => {
       btn.addEventListener("click", () => {
         const { chipType, chipKey } = btn.dataset;
-        if (chipType === "market") document.getElementById("f-market").value = "";
+        if (chipType === "market") setCurrentMarketValue("");
+        else if (chipType === "index") document.getElementById("f-index-member").value = "";
+        else if (chipType === "cap_tier") { currentCapTier = ""; updateCapTierButtons(); }
         else if (chipType === "sectors") setSelectedSectors([]);
         else if (chipType === "search") document.getElementById("f-search").value = "";
         else if (chipType === "badge") { _badgeFilter = ""; updateBadgeButtons(); }
@@ -3680,7 +3893,14 @@
 
   function renderRecommendedPresets() {
     const list = document.getElementById("recommended-preset-list");
+    const bar = document.getElementById("recommended-preset-bar");
     if (!list) return;
+    if (isUsMode()) {
+      if (bar) bar.style.display = "none";
+      list.innerHTML = "";
+      return;
+    }
+    if (bar) bar.style.display = "";
     const groups = [];
     let cur = null;
     RECOMMENDED_PRESETS.forEach(p => {
@@ -3805,8 +4025,11 @@
   function getCurrentFilterSnapshot() {
     return {
       version:       2,
+      country:       currentCountry,
       screen:        currentScreen,
-      market:        document.getElementById("f-market")?.value  || "",
+      market:        getCurrentMarketValue(),
+      indexMember:   getCurrentIndexMember(),
+      capTier:       currentCapTier,
       sectors:       getSelectedSectors(),
       search:        document.getElementById("f-search")?.value  || "",
       badge:         _badgeFilter,
@@ -3817,7 +4040,15 @@
   }
 
   function applyPreset(snap) {
-    if (snap.market !== undefined) document.getElementById("f-market").value = snap.market;
+    if (snap.country && snap.country !== currentCountry) {
+      setCountry(snap.country, { preserveScreen: false, skipReload: true });
+    }
+    if (snap.market !== undefined) setCurrentMarketValue(snap.market);
+    if (snap.indexMember !== undefined) document.getElementById("f-index-member").value = snap.indexMember || "";
+    if (snap.capTier !== undefined) {
+      currentCapTier = snap.capTier || "";
+      updateCapTierButtons();
+    }
     if (snap.sectors !== undefined) setSelectedSectors(snap.sectors);
     // 하위 호환: 구버전 preset에 단일 sector 문자열이 저장된 경우
     else if (snap.sector !== undefined) setSelectedSectors(snap.sector ? [snap.sector] : []);
@@ -3907,7 +4138,7 @@
     if (compareSet.size > 5) { alert("최대 5개까지 비교 가능합니다."); return; }
     const codes = [...compareSet].join(",");
     try {
-      const res  = await fetch(`/api/stocks/compare?codes=${codes}`);
+      const res  = await fetch(`${apiPrefix()}/stocks/compare?codes=${codes}`);
       if (!res.ok) throw new Error("비교 데이터 로드 실패");
       const data = await res.json();
       renderCompareModal(data);
@@ -4029,7 +4260,7 @@
     for (let si = 0; si < stocks.length; si++) {
       const s = stocks[si];
       try {
-        const res  = await fetch(`/api/stocks/${s["종목코드"]}/financials`);
+          const res  = await fetch(`${apiPrefix()}/stocks/${s["종목코드"]}/financials`);
         if (!res.ok) continue;
         const data = await res.json();
         if (!data.years || !data.years.length) continue;
@@ -4537,20 +4768,70 @@
   const btnNext  = document.getElementById("btn-next");
 
   function updateStrategyGuideState() {
-    const desc = STRATEGY_DESCRIPTIONS[currentScreen];
+    const desc = getStrategyDescription(currentScreen);
     if (desc) {
       document.getElementById("strategy-desc").innerHTML =
         `<strong>${desc.title}</strong>&nbsp;&nbsp;<small class="text-muted">${desc.criteria}</small>`;
     }
     const btnGuide = document.getElementById("btn-strategy-guide");
     if (!btnGuide) return;
-    btnGuide.style.display = STRATEGY_GUIDES[currentScreen] ? "" : "none";
+    btnGuide.style.display = !isUsMode() && STRATEGY_GUIDES[currentScreen] ? "" : "none";
+  }
+
+  function syncCountryUI() {
+    updateCapTierButtons();
+    document.querySelectorAll("#country-toggle [data-country]").forEach(btn => {
+      btn.classList.toggle("active", btn.dataset.country === currentCountry);
+    });
+    document.querySelectorAll(".kr-only-filter").forEach(el => {
+      el.style.display = isUsMode() ? "none" : "";
+    });
+    document.querySelectorAll(".us-only-filter").forEach(el => {
+      el.style.display = isUsMode() ? "" : "none";
+    });
+    document.querySelectorAll("#screen-tabs [data-hide-us]").forEach(el => {
+      el.style.display = isUsMode() ? "none" : "";
+    });
+    const detailPfBtn = document.getElementById("btn-portfolio-detail");
+    if (detailPfBtn) detailPfBtn.style.display = isUsMode() ? "none" : "";
+    const analysisWrap = document.getElementById("btn-analysis-wrap");
+    if (analysisWrap) analysisWrap.style.display = "";
+    const dailyBtn = document.getElementById("btn-trigger-daily");
+    const triggerBtn = document.getElementById("btn-trigger");
+    if (dailyBtn) dailyBtn.textContent = isUsMode() ? "⚡ US 일간 업데이트" : "⚡ 일간 업데이트";
+    if (triggerBtn) triggerBtn.textContent = isUsMode() ? "🔄 US 파이프라인" : "🔄 전체 파이프라인";
+    if (isUsMode()) {
+      document.getElementById("portfolio-summary-bar").style.display = "none";
+      document.getElementById("portfolio-subtabs").style.display = "none";
+    }
+  }
+
+  function setCountry(country, { preserveScreen = true, skipReload = false } = {}) {
+    currentCountry = country === "us" ? "us" : "kr";
+    localStorage.setItem("quant_country", currentCountry);
+    syncCountryUI();
+
+    const targetScreen = hiddenScreens().has(currentScreen) ? "all" : (preserveScreen ? currentScreen : "all");
+    setScreen(targetScreen, { preserveFilters: false, skipLoad: true });
+    updateWatchlistCount();
+
+    if (skipReload) return;
+    batchChanges = null;
+    compareSet.clear();
+    updateCompareBar();
+    loadMarketSummary();
+    loadBatchChanges();
+    loadTabCounts();
+    loadSectorOptions();
+    loadDataInfo();
+    Promise.resolve(loadReportMap()).then(() => loadStocks());
   }
 
   function setScreen(screen, { preserveFilters = false, skipLoad = false } = {}) {
+    if (hiddenScreens().has(screen)) screen = "all";
     const prevScreen = currentScreen;
     currentScreen = screen;
-    sortCol = TAB_DEFAULT_SORT[currentScreen];
+    sortCol = getDefaultSort(currentScreen);
     sortOrder = "desc";
     currentPage = 1;
 
@@ -4559,7 +4840,7 @@
     );
 
     if (!preserveFilters) {
-      document.getElementById("f-market").value = "";
+      resetCountryFilters();
       document.getElementById("f-search").value = "";
       setSelectedSectors([]);
       clearAdvancedFilterState({ clearSearch: true });
@@ -4601,6 +4882,25 @@
   });
   document.getElementById("btn-trigger").addEventListener("click", () => triggerPipeline());
   document.getElementById("btn-trigger-daily").addEventListener("click", () => triggerPipeline({ daily_only: true }));
+  document.querySelectorAll("#country-toggle [data-country]").forEach(btn =>
+    btn.addEventListener("click", () => {
+      if (btn.dataset.country !== currentCountry) setCountry(btn.dataset.country);
+    })
+  );
+  ["f-market", "f-exchange", "f-index-member"].forEach(id => {
+    document.getElementById(id)?.addEventListener("change", () => {
+      currentPage = 1;
+      loadStocks();
+    });
+  });
+  document.querySelectorAll("#cap-tier-group .cap-tier-btn").forEach(btn =>
+    btn.addEventListener("click", () => {
+      currentCapTier = btn.dataset.capTier || "";
+      updateCapTierButtons();
+      currentPage = 1;
+      loadStocks();
+    })
+  );
 
   // 검색 폼
   document.getElementById("filter-form").addEventListener("submit", e => {
@@ -4608,7 +4908,7 @@
     e.preventDefault(); currentPage = 1; loadStocks();
   });
   document.getElementById("btn-clear").addEventListener("click", () => {
-    document.getElementById("f-market").value = "";
+    resetCountryFilters();
     setSelectedSectors([]);
     document.getElementById("f-search").value = "";
     clearAdvancedFilterState({ clearSearch: true });
@@ -5420,11 +5720,13 @@
 
   // AI 보고서 보기 버튼 (기존 보고서 조회만, 새 분석 시작 안 함)
   document.getElementById("btn-view-report").addEventListener("click", function () {
+    if (isUsMode()) return;
     requestAnalysis(this.dataset.code || currentDetailCode, "claude", true);
   });
 
   // AI 분석 버튼 (항상 새로 분석 시작)
   document.getElementById("btn-analysis-claude").addEventListener("click", function () {
+    if (isUsMode()) return;
     requestAnalysis(this.dataset.code || currentDetailCode, "claude", false);
   });
 
@@ -5449,6 +5751,7 @@
 
   // 분석 가이드 버튼
   document.getElementById("btn-strategy-guide").addEventListener("click", () => {
+    if (isUsMode()) return;
     const guideHtml = STRATEGY_GUIDES[currentScreen];
     if (guideHtml) {
       document.getElementById("guide-content").innerHTML = guideHtml;
@@ -5499,7 +5802,7 @@
     const optWrap = document.getElementById("f-sector-options");
     if (!optWrap) return;
     try {
-      const res  = await fetch("/api/sectors");
+      const res  = await fetch(`${apiPrefix()}/sectors`);
       if (!res.ok) return;
       const data = await res.json();
       optWrap.innerHTML = "";
@@ -5552,9 +5855,16 @@
   // ─── 데이터 품질 정보 ─────────────────────────────────────────────────
   async function loadDataInfo() {
     try {
-      const res  = await fetch("/api/info");
+      const res  = await fetch(`${apiPrefix()}/info`);
       if (!res.ok) return;
       const info = await res.json();
+      const indexSelect = document.getElementById("f-index-member");
+      if (indexSelect) {
+        const ready = !isUsMode() || !!info.index_membership_ready;
+        indexSelect.disabled = !ready;
+        indexSelect.title = ready ? "" : "다음 US 수집 배치 후 활성화됩니다.";
+        if (!ready) indexSelect.value = "";
+      }
       const el   = document.getElementById("data-quality-badge");
       if (!el) return;
       // price_date 우선, 없으면 db_mtime fallback
@@ -5589,12 +5899,15 @@
   // ─── 보고서 맵 ────────────────────────────────────────────────────────
   async function loadReportMap() {
     try {
-      const res = await fetch("/api/reports");
+      const url = isUsMode() ? "/api/us/reports" : "/api/reports";
+      const res = await fetch(url);
       if (res.ok) reportMap = await res.json();
-    } catch (e) { /* 무시 */ }
+      else reportMap = {};
+    } catch (e) { reportMap = {}; }
   }
 
   // ─── 초기화 ──────────────────────────────────────────────────────────
+  syncCountryUI();
   buildHeader();
   loadMarketSummary();
   loadBatchChanges();
@@ -5603,6 +5916,7 @@
   loadDataInfo();
   loadPortfolio();
   updateWatchlistCount();
+  updateStrategyGuideState();
   // signalStats + reportMap을 먼저 로드한 뒤 테이블 렌더 → 뱃지 임계값 & AI 배지 누락 방지
   loadReportMap().then(() => loadStocks());
 

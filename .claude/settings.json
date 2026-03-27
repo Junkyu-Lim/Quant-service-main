@@ -50,7 +50,8 @@
       "Bash(cmd /c \"for %p in \\(32668 18664 13048 4344 36648 27780 35308 29516\\) do taskkill /PID %p /F\")",
       "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 5000 -State Listen | Select-Object OwningProcess | Sort-Object OwningProcess -Unique | ForEach-Object { Stop-Process -Id \\([int]$_OwningProcess\\) -Force; Write-Host ''Killed'' $_OwningProcess }\")",
       "Bash(powershell -ExecutionPolicy Bypass -File \"C:\\\\Users\\\\limjk\\\\kill5000.ps1\")",
-      "Bash(node -e \":*)"
+      "Bash(node -e \":*)",
+      "Bash(curl -s \"https://scholar.google.com/scholar?q=AI+portfolio+analysis+bias+growth+recency+2024+2025&hl=en\" -H \"User-Agent: Mozilla/5.0\")"
     ],
     "additionalDirectories": [
       "c:\\Users\\limjk\\.claude\\projects\\c--Users-limjk-Quant-service-main\\memory",

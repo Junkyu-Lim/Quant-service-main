@@ -27,6 +27,7 @@
 | **7** | 배당 분석 | 포트폴리오 배당수익률, 연간 배당 추정, 배당 성향 추세 |
 | **8** | 보완 제안 + 관심종목 편입 권고 | 부족한 섹터/테마 + ADD / WATCH / SKIP 판정 |
 | **9** | 리밸런싱 실행 계획 | 우선순위 액션 + 실행 시기 권고 |
+| **10** | **역발상 점검 (Devil's Advocate)** | 포트폴리오 편향 진단, 약세 시나리오, 컨센서스 동조 위험, 추정 최대 낙폭 |
 
 ---
 
@@ -68,6 +69,11 @@ API 요청 body에 `macro_context` 객체를 포함합니다:
     "capex_theme": "AI/전력/반도체 등 주요 테마",
     "china": "상향|중립|하향",
     "semiconductor": "상향|중립|하향",
+    "market_sentiment": "탐욕|중립|공포",
+    "liquidity_conditions": "확대|안정|위축",
+    "market_breadth": "양호|혼조|악화",
+    "earnings_revision": "상향|중립|하향",
+    "credit_cycle_stage": "초기회복|확장|후기|수축",
     "favorable_sectors": ["유리한 섹터"],
     "unfavorable_sectors": ["불리한 섹터"]
   }
@@ -104,7 +110,10 @@ estimated_amount = target_shares × 목표가 중간값
 ## 투자 철학 (최우선 전제)
 - 1순위: 산업의 장기 성장성(전방산업 CAGR, 해자 등급)
 - TRIM/SELL은 산업 성장성 훼손, 해자 소실, 구조적 경쟁력 약화 확인 시에만 권고
-- 단기 고평가(PER 등)는 TRIM 근거가 되지 않음
+- 단기 PER 상승만으로 TRIM하지 않되, 업종 역사적 고평가 + 실적 감속 동반 시 비중 조절 검토
+- 밸류에이션 가드레일: 포트폴리오 평균 PER>25 또는 PBR>3 시 밸류에이션 리스크 경고 필수
+- PER>40 종목 비중 상한 7%, PEG>2 BUY_MORE 시 명시적 정당화 필수
+- 한국 시장 특수: 코리아 디스카운트, 코스닥 좀비 경고, FX 노출 평가, 생존자 편향 주의
 
 ## 분석 프레임워크
 1. 포트폴리오 건강도 평가 (0-100)
@@ -116,6 +125,7 @@ estimated_amount = target_shares × 목표가 중간값
 7. 보완 제안
 8. 관심종목 편입 권고 (ADD/WATCH/SKIP)
 9. 리밸런싱 실행 계획
+10. **역발상 점검 (Devil's Advocate)**: 성장주 편향 진단, 약세 시나리오, 최대 추정 낙폭
 
 ## 매크로 환경 활용 지침 (매크로 컨텍스트 제공 시)
 - 현금 비중: 방어적 환경(성장 하향 + 실질금리 상승 + 금융여건 악화)이면 현금 유지/확대 권고.
@@ -261,6 +271,14 @@ estimated_amount = target_shares × 목표가 중간값
     "urgency": "immediate|monthly|quarterly|none",
     "priority_actions": ["액션 1", "액션 2"],
     "execution_note": "실행 순서·시기 2-3문장"
+  },
+  "perspective_balance": {
+    "growth_vs_value_tilt": "성장 편향|균형|가치 편향",
+    "valuation_risk_level": "low|medium|high",
+    "contrarian_opportunities": ["역발상 기회 종목명"],
+    "consensus_risk": "시장 컨센서스와 동조 정도 2-3문장",
+    "bear_case_summary": "포트폴리오 전체 약세 시나리오 3-5문장",
+    "estimated_max_drawdown": "비관적 시나리오 최대 추정 낙폭 (예: -25%~-35%)"
   },
   "summary": "5-7문장 종합 포트폴리오 전략 의견"
 }

@@ -64,6 +64,30 @@ def cmd_screen(args):
     run()
 
 
+def cmd_us_collect(args):
+    from us_collector import run_full
+    run_full(
+        test_mode=args.test,
+        skip_price_history=args.skip_price_history,
+        daily_only=args.daily_only,
+    )
+
+
+def cmd_us_pipeline(args):
+    from us_pipeline import run_pipeline
+    run_pipeline(
+        skip_collect=args.skip_collect,
+        test_mode=args.test,
+        skip_price_history=args.skip_price_history,
+        daily_only=args.daily_only,
+    )
+
+
+def cmd_us_screen(args):
+    from us_screener import run
+    run()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Quant Service - KOSPI/KOSDAQ analysis")
     sub = parser.add_subparsers(dest="command")
@@ -87,6 +111,19 @@ def main():
 
     sub.add_parser("screen", help="Run screener only (requires existing CSVs)")
 
+    p_us = sub.add_parser("us-collect", help="Collect US stock data (Russell 3000 base universe)")
+    p_us.add_argument("--test", action="store_true", help="Test mode (AAPL, MSFT, GOOGL only)")
+    p_us.add_argument("--daily-only", action="store_true", help="Daily data only (no financial statements)")
+    p_us.add_argument("--skip-price-history", action="store_true", help="Skip price history collection")
+
+    p_usp = sub.add_parser("us-pipeline", help="Full US pipeline (collect + screen)")
+    p_usp.add_argument("--test", action="store_true", help="Test mode (AAPL, MSFT, GOOGL only)")
+    p_usp.add_argument("--skip-collect", action="store_true", help="Skip collection, screen only")
+    p_usp.add_argument("--daily-only", action="store_true", help="Daily data only")
+    p_usp.add_argument("--skip-price-history", action="store_true", help="Skip price history collection")
+
+    sub.add_parser("us-screen", help="Run US screener only (requires existing US data)")
+
     args = parser.parse_args()
 
     commands = {
@@ -95,6 +132,9 @@ def main():
         "collect": cmd_collect,
         "update-prices": cmd_update_prices,
         "screen": cmd_screen,
+        "us-collect": cmd_us_collect,
+        "us-pipeline": cmd_us_pipeline,
+        "us-screen": cmd_us_screen,
     }
     handler = commands.get(args.command)
     if handler:

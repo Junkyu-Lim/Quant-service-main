@@ -24,6 +24,10 @@ from analysis.claude_analyzer import (
     compute_correlation_matrix,
     build_stock_analysis_input_hash,
 )
+from analysis.us_analyzer import (
+    generate_us_report,
+    build_us_analysis_input_hash,
+)
 
 log = logging.getLogger(__name__)
 
@@ -37,9 +41,19 @@ CORS(app)
 # ── In-memory data cache ──
 _cache: dict = {"df": pd.DataFrame(), "mtime": 0}
 _prev_cache: dict = {"df": pd.DataFrame(), "mtime": 0}
+_us_cache: dict = {"df": pd.DataFrame(), "mtime": 0}
+_us_prev_cache: dict = {"df": pd.DataFrame(), "mtime": 0}
 
 # ── Pipeline state ──
 _pipeline: dict = {
+    "running": False,
+    "started_at": None,
+    "finished_at": None,
+    "error": None,
+    "stage": "",
+    "progress": 0,
+}
+_us_pipeline: dict = {
     "running": False,
     "started_at": None,
     "finished_at": None,
@@ -52,6 +66,10 @@ _pipeline: dict = {
 # { code: {"status": "running"|"done"|"error", "result": {...}, "name": str} }
 _analysis_tasks: dict = {}
 _analysis_tasks_lock = threading.Lock()
+
+# ── US Analysis task state (per ticker) ──
+_us_analysis_tasks: dict = {}
+_us_analysis_tasks_lock = threading.Lock()
 
 # Columns exposed to the frontend
 DISPLAY_COLS = [
@@ -99,6 +117,7 @@ DISPLAY_COLS = [
     "Fwd_모멘텀_점수",  # ephemeral: forward_covered 탭에서만 동적 계산됨
     "섹터",
 ]
+US_DISPLAY_COLS = DISPLAY_COLS + ["exchange", "industry", "index_membership"]
 
 def _load_data() -> pd.DataFrame:
     db_path = str(config.DB_PATH)
@@ -134,6 +153,42 @@ def _load_prev_data() -> pd.DataFrame:
         _prev_cache["mtime"] = mtime
     return _prev_cache["df"]
 
+
+def _load_us_data() -> pd.DataFrame:
+    db_path = str(config.DB_PATH)
+    if not os.path.exists(db_path):
+        _us_cache["df"] = pd.DataFrame()
+        _us_cache["mtime"] = 0
+        return _us_cache["df"]
+    mtime = os.path.getmtime(db_path)
+    if mtime != _us_cache["mtime"]:
+        df = _db.load_us_dashboard()
+        if not df.empty:
+            if "종목코드" in df.columns:
+                df["종목코드"] = df["종목코드"].astype(str).str.upper()
+            df = df.replace({np.nan: None})
+        _us_cache["df"] = df
+        _us_cache["mtime"] = mtime
+    return _us_cache["df"]
+
+
+def _load_us_prev_data() -> pd.DataFrame:
+    db_path = str(config.DB_PATH)
+    if not os.path.exists(db_path):
+        _us_prev_cache["df"] = pd.DataFrame()
+        _us_prev_cache["mtime"] = 0
+        return _us_prev_cache["df"]
+    mtime = os.path.getmtime(db_path)
+    if mtime != _us_prev_cache["mtime"]:
+        df = _db.load_us_dashboard_prev()
+        if not df.empty:
+            if "종목코드" in df.columns:
+                df["종목코드"] = df["종목코드"].astype(str).str.upper()
+            df = df.replace({np.nan: None})
+        _us_prev_cache["df"] = df
+        _us_prev_cache["mtime"] = mtime
+    return _us_prev_cache["df"]
+
 def _safe_val(v):
     if v is None: return None
     if isinstance(v, (np.integer,)): return int(v)
@@ -150,9 +205,104 @@ def _normalize_code(code: str) -> str:
         return code.zfill(6)
     return code
 
+
+def _normalize_us_ticker(ticker: str) -> str:
+    return (ticker or "").strip().upper()
+
 @app.route("/")
 def dashboard():
     return render_template("dashboard.html")
+
+
+def _us_cap_tier_mask(df: pd.DataFrame, cap_tier: str) -> pd.Series:
+    cap = pd.to_numeric(df.get("시가총액"), errors="coerce").fillna(0)
+    cap_tier = (cap_tier or "").strip().lower()
+    if cap_tier == "mega":
+        return cap >= 200_000_000_000
+    if cap_tier == "large":
+        return (cap >= 10_000_000_000) & (cap < 200_000_000_000)
+    if cap_tier == "mid":
+        return (cap >= 2_000_000_000) & (cap < 10_000_000_000)
+    return pd.Series(True, index=df.index)
+
+
+def _load_us_financial_frame(ticker: str, period: str = "annual") -> pd.DataFrame:
+    from us_screener import US_ACCOUNTS
+
+    ticker = _normalize_us_ticker(ticker)
+    period_code = "q" if period == "quarter" else "y"
+    alias_map = {
+        "매출액": US_ACCOUNTS["매출액"],
+        "영업이익": US_ACCOUNTS["영업이익"],
+        "당기순이익": US_ACCOUNTS["순이익"],
+    }
+
+    with _db.get_conn() as conn:
+        try:
+            row = conn.execute(
+                "SELECT MAX(collected_date) FROM us_financial_statements"
+            ).fetchone()
+            if not row or not row[0]:
+                return pd.DataFrame()
+            latest = row[0]
+            raw = conn.execute(
+                """SELECT base_date, account, value
+                   FROM us_financial_statements
+                   WHERE ticker = ?
+                   AND collected_date = ?
+                   AND period = ?
+                   ORDER BY base_date""",
+                [ticker, latest, period_code],
+            ).df()
+        except Exception:
+            return pd.DataFrame()
+
+    if raw.empty:
+        return pd.DataFrame()
+
+    frames = []
+    for label, aliases in alias_map.items():
+        sub = raw[raw["account"].isin(aliases)].copy()
+        if sub.empty:
+            continue
+        priority = {alias: i for i, alias in enumerate(aliases)}
+        sub["_prio"] = sub["account"].map(priority).fillna(999)
+        sub = sub.sort_values(["base_date", "_prio"]).drop_duplicates("base_date", keep="first")
+        sub["계정"] = label
+        frames.append(sub[["base_date", "계정", "value"]].rename(columns={"base_date": "기준일", "value": "값"}))
+
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True).sort_values(["기준일", "계정"])
+
+
+def _build_us_financial_payload(ticker: str, period: str = "annual") -> dict:
+    df = _load_us_financial_frame(ticker, period=period)
+    if df.empty:
+        return {"years": [], "series": []}
+
+    if period == "quarter":
+        df["label"] = df["기준일"].astype(str).apply(_month_to_quarter)
+        labels = sorted(df["label"].unique())
+        series = []
+        for acc in ["매출액", "영업이익", "당기순이익"]:
+            values = []
+            for lbl in labels:
+                v = df[(df["label"] == lbl) & (df["계정"] == acc)]["값"]
+                values.append(_safe_val(v.iloc[0]) if not v.empty else None)
+            series.append({"name": acc, "data": values})
+        return {"years": labels, "series": series}
+
+    df["year"] = df["기준일"].astype(str).str[:4]
+    years = sorted(df["year"].unique())
+    series = []
+    for acc in ["매출액", "영업이익", "당기순이익"]:
+        values = []
+        for year in years:
+            v = df[(df["year"] == year) & (df["계정"] == acc)]["값"]
+            values.append(_safe_val(v.iloc[0]) if not v.empty else None)
+        series.append({"name": acc, "data": values})
+    return {"years": years, "series": series}
 
 @app.route("/api/stocks")
 def api_stocks():
@@ -291,6 +441,23 @@ def _run_pipeline_tracked(**opts):
     except Exception as e: _pipeline["error"] = str(e); log.exception("Pipeline failed")
     finally: _pipeline["running"], _pipeline["finished_at"] = False, datetime.now().isoformat()
 
+
+def _set_us_progress(stage: str, pct: int):
+    _us_pipeline["stage"], _us_pipeline["progress"] = stage, pct
+
+
+def _run_us_pipeline_tracked(**opts):
+    from us_pipeline import run_pipeline as run_us_pipeline
+    from datetime import datetime
+    _us_pipeline["running"], _us_pipeline["started_at"], _us_pipeline["error"] = True, datetime.now().isoformat(), None
+    try:
+        run_us_pipeline(progress_callback=_set_us_progress, **opts)
+    except Exception as e:
+        _us_pipeline["error"] = str(e)
+        log.exception("US pipeline failed")
+    finally:
+        _us_pipeline["running"], _us_pipeline["finished_at"] = False, datetime.now().isoformat()
+
 @app.route("/api/batch/trigger", methods=["POST"])
 def api_batch_trigger():
     if _pipeline["running"]: return jsonify({"status": "already_running"}), 409
@@ -317,6 +484,41 @@ def api_batch_changes():
             "added": [{"code": c, "name": curr_df[curr_df["종목코드"]==c].iloc[0]["종목명"]} for c in sorted(added)],
             "removed": [{"code": c, "name": prev_df[prev_df["종목코드"]==c].iloc[0]["종목명"]} for c in sorted(removed)],
             "added_count": len(added), "removed_count": len(removed),
+        }
+    return jsonify({"has_changes": True, "strategies": result})
+
+
+@app.route("/api/us/batch/trigger", methods=["POST"])
+def api_us_batch_trigger():
+    if _us_pipeline["running"]:
+        return jsonify({"status": "already_running"}), 409
+    opts = request.get_json(silent=True) or {}
+    threading.Thread(target=_run_us_pipeline_tracked, kwargs=opts, daemon=True).start()
+    return jsonify({"status": "triggered"})
+
+
+@app.route("/api/us/batch/status")
+def api_us_batch_status():
+    return jsonify(_us_pipeline)
+
+
+@app.route("/api/us/batch/changes")
+def api_us_batch_changes():
+    curr_df, prev_df = _load_us_data(), _load_us_prev_data()
+    if curr_df.empty or prev_df.empty:
+        return jsonify({"has_changes": False, "strategies": {}})
+    screens = ["all", "leaders", "quality_value", "growth_mom", "cash_div", "turnaround", "multi_strategy"]
+    result = {}
+    for screen in screens:
+        curr_filtered = curr_df if screen == "all" else _apply_us_screen_filter(curr_df.copy(), screen)
+        prev_filtered = prev_df if screen == "all" else _apply_us_screen_filter(prev_df.copy(), screen)
+        curr_codes, prev_codes = set(curr_filtered["종목코드"]), set(prev_filtered["종목코드"])
+        added, removed = curr_codes - prev_codes, prev_codes - curr_codes
+        result[screen] = {
+            "added": [{"code": c, "name": curr_df[curr_df["종목코드"] == c].iloc[0]["종목명"]} for c in sorted(added)],
+            "removed": [{"code": c, "name": prev_df[prev_df["종목코드"] == c].iloc[0]["종목명"]} for c in sorted(removed)],
+            "added_count": len(added),
+            "removed_count": len(removed),
         }
     return jsonify({"has_changes": True, "strategies": result})
 
@@ -405,9 +607,8 @@ def api_info():
                 result["latest_quarter"] = qvals.mode().iloc[0]
     # daily 테이블에서 최신 기준일 조회
     try:
-        import db as _db
-        con = _db.get_con()
-        row = con.execute("SELECT MAX(기준일) FROM daily").fetchone()
+        with _db.get_conn() as conn:
+            row = conn.execute("SELECT MAX(기준일) FROM daily").fetchone()
         if row and row[0]:
             price_date_raw = str(row[0])  # e.g. "20260311"
             if len(price_date_raw) == 8:
@@ -434,11 +635,370 @@ def api_stocks_compare():
     stocks = [_row_to_dict(row, available) for _, row in matched.iterrows()]
     return jsonify({"stocks": stocks, "metrics_meta": COMPARE_METRICS_META})
 
+
+@app.route("/api/us/stocks")
+def api_us_stocks():
+    df = _load_us_data()
+    if df.empty:
+        return jsonify({"total": 0, "page": 1, "size": 50, "items": []})
+
+    screen = request.args.get("screen", "all")
+    market = request.args.get("market", request.args.get("exchange", "")).strip()
+    index_member = request.args.get("index_member", request.args.get("index", "")).strip()
+    cap_tier = request.args.get("cap_tier", "").strip()
+    q = request.args.get("q", "").strip()
+    order = request.args.get("order", "desc")
+    try:
+        page = max(int(request.args.get("page", 1)), 1)
+        size = min(int(request.args.get("size", 50)), 200)
+    except (ValueError, TypeError):
+        page, size = 1, 50
+
+    default_sort = {
+        "leaders": "주도주_점수",
+        "quality_value": "우량가치_점수",
+        "growth_mom": "고성장_점수",
+        "cash_div": "현금배당_점수",
+        "turnaround": "턴어라운드_점수",
+        "multi_strategy": "전략수",
+    }
+    sort_col = request.args.get("sort", default_sort.get(screen, "종합점수"))
+
+    filtered = df.copy()
+    if screen in ["leaders", "quality_value", "growth_mom", "cash_div", "turnaround", "multi_strategy"]:
+        filtered = _apply_us_screen_filter(filtered, screen)
+
+    codes_param = request.args.get("codes", "")
+    if codes_param:
+        codes = [_normalize_us_ticker(c) for c in codes_param.split(",") if c.strip()]
+        if codes:
+            filtered = filtered[filtered["종목코드"].astype(str).str.upper().isin(codes)]
+
+    if market and "시장구분" in filtered.columns:
+        filtered = filtered[filtered["시장구분"].astype(str).str.upper() == market.upper()]
+
+    sectors_raw = request.args.get("sectors", request.args.get("sector", "")).strip()
+    if sectors_raw and "섹터" in filtered.columns:
+        sector_list = [s.strip() for s in sectors_raw.split(",") if s.strip()]
+        if sector_list:
+            filtered = filtered[filtered["섹터"].isin(sector_list)]
+
+    if index_member:
+        membership = filtered.get("index_membership", pd.Series("", index=filtered.index))
+        membership = membership.fillna("").astype(str)
+        if membership.str.len().gt(0).any():
+            filtered = filtered[membership.str.contains(index_member, case=False, na=False)]
+
+    if cap_tier:
+        filtered = filtered[_us_cap_tier_mask(filtered, cap_tier)]
+
+    if q:
+        mask = (
+            filtered["종목명"].astype(str).str.contains(q, case=False, na=False)
+            | filtered["종목코드"].astype(str).str.contains(q, case=False, na=False)
+        )
+        filtered = filtered[mask]
+
+    for key, val in request.args.items():
+        if key.startswith("min_") or key.startswith("max_"):
+            col = key[4:]
+            if col in filtered.columns:
+                try:
+                    v = float(val)
+                except (TypeError, ValueError):
+                    continue
+                col_vals = pd.to_numeric(filtered[col], errors="coerce")
+                filtered = filtered[col_vals >= v] if key.startswith("min_") else filtered[col_vals <= v]
+        elif key.startswith("flag_"):
+            col = key[5:]
+            if col in filtered.columns:
+                try:
+                    flag_val = int(float(val))
+                except (TypeError, ValueError):
+                    continue
+                if flag_val not in (0, 1):
+                    continue
+                col_vals = pd.to_numeric(filtered[col], errors="coerce")
+                filtered = filtered[col_vals == 1] if flag_val == 1 else filtered[col_vals != 1]
+
+    badge_filter = request.args.get("badge", "").strip()
+    if badge_filter and not filtered.empty:
+        badges = [b.strip() for b in badge_filter.split(",") if b.strip()]
+        badge_mask = pd.Series(False, index=filtered.index)
+        badge_map = {"관심": ("상승조짐", 40), "조짐": ("상승조짐", 55), "경계": ("과열도", 45), "주의": ("과열도", 60), "과열": ("과열도", 75)}
+        for badge in badges:
+            if badge in badge_map:
+                col, threshold = badge_map[badge]
+                if col in filtered.columns:
+                    badge_mask |= filtered[col].notna() & (pd.to_numeric(filtered[col], errors="coerce") >= threshold)
+        filtered = filtered[badge_mask]
+
+    total = len(filtered)
+    if sort_col in filtered.columns:
+        filtered = filtered.sort_values(sort_col, ascending=(order != "desc"), na_position="last")
+    start = (page - 1) * size
+    page_df = filtered.iloc[start:start + size]
+    available = [c for c in US_DISPLAY_COLS if c in page_df.columns]
+    items = [_row_to_dict(row, available) for _, row in page_df.iterrows()]
+    return jsonify({"total": total, "page": page, "size": size, "items": items})
+
+
+@app.route("/api/us/stocks/<ticker>")
+def api_us_stock_detail(ticker: str):
+    df = _load_us_data()
+    if df.empty:
+        return jsonify({"error": "No data"}), 404
+    ticker = _normalize_us_ticker(ticker)
+    row = df[df["종목코드"].astype(str).str.upper() == ticker]
+    if row.empty:
+        return jsonify({"error": "Stock not found"}), 404
+    return jsonify({c: _safe_val(row.iloc[0].get(c)) for c in df.columns})
+
+
+@app.route("/api/us/sectors")
+def api_us_sectors():
+    df = _load_us_data()
+    if df.empty or "섹터" not in df.columns:
+        return jsonify([])
+    counts = df["섹터"].dropna().value_counts().reset_index()
+    counts.columns = ["섹터", "count"]
+    return jsonify(counts.to_dict(orient="records"))
+
+
+@app.route("/api/us/markets/summary")
+def api_us_market_summary():
+    df = _load_us_data()
+    if df.empty:
+        return jsonify([])
+    results = []
+    for market in ("NYSE", "NASDAQ"):
+        sub = df[df["시장구분"] == market]
+        results.append({
+            "market": market,
+            "stock_count": len(sub),
+            "avg_per": _safe_val(sub["PER"].median()) if "PER" in sub.columns else None,
+            "avg_pbr": _safe_val(sub["PBR"].median()) if "PBR" in sub.columns else None,
+            "avg_roe": _safe_val(sub["ROE(%)"].median()) if "ROE(%)" in sub.columns else None,
+        })
+    return jsonify(results)
+
+
+@app.route("/api/us/stocks/<ticker>/financials")
+def api_us_stock_financials(ticker: str):
+    period = request.args.get("period", "annual")
+    return jsonify(_build_us_financial_payload(ticker, period=period))
+
+
+@app.route("/api/us/stocks/tab_counts")
+def api_us_stocks_tab_counts():
+    df = _load_us_data()
+    screens = ["all", "leaders", "quality_value", "growth_mom", "cash_div", "turnaround", "multi_strategy"]
+    if df.empty:
+        return jsonify({s: 0 for s in screens})
+    result = {"all": len(df)}
+    for screen in screens[1:]:
+        result[screen] = len(_apply_us_screen_filter(df.copy(), screen))
+    return jsonify(result)
+
+
+@app.route("/api/us/info")
+def api_us_info():
+    import datetime
+
+    db_path = str(config.DB_PATH)
+    result = {
+        "db_mtime": None,
+        "stock_count": 0,
+        "latest_quarter": None,
+        "days_old": None,
+        "price_date": None,
+        "price_days_old": None,
+        "index_membership_ready": False,
+    }
+    if os.path.exists(db_path):
+        mtime = os.path.getmtime(db_path)
+        dt = datetime.datetime.fromtimestamp(mtime)
+        result["db_mtime"] = dt.strftime("%Y-%m-%d %H:%M")
+        result["days_old"] = (datetime.datetime.now() - dt).days
+
+    df = _load_us_data()
+    if not df.empty:
+        result["stock_count"] = len(df)
+        if "최근분기" in df.columns:
+            qvals = df["최근분기"].dropna()
+            if not qvals.empty:
+                result["latest_quarter"] = qvals.mode().iloc[0]
+        if "index_membership" in df.columns:
+            result["index_membership_ready"] = bool(
+                df["index_membership"].fillna("").astype(str).str.len().gt(0).any()
+            )
+
+    try:
+        with _db.get_conn() as conn:
+            row = conn.execute("SELECT MAX(base_date) FROM us_daily").fetchone()
+        if row and row[0]:
+            price_date_fmt = str(row[0])[:10]
+            result["price_date"] = price_date_fmt
+            try:
+                pd_dt = datetime.datetime.strptime(price_date_fmt, "%Y-%m-%d")
+                result["price_days_old"] = (datetime.datetime.now() - pd_dt).days
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    return jsonify(result)
+
+
+@app.route("/api/us/stocks/compare")
+def api_us_stocks_compare():
+    codes = [_normalize_us_ticker(c) for c in request.args.get("codes", "").split(",") if c.strip()]
+    if not codes:
+        return jsonify({"error": "No codes"}), 400
+    df = _load_us_data()
+    matched = df[df["종목코드"].astype(str).str.upper().isin(codes)]
+    available = [c for c in US_DISPLAY_COLS if c in matched.columns]
+    stocks = [_row_to_dict(row, available) for _, row in matched.iterrows()]
+    return jsonify({"stocks": stocks, "metrics_meta": COMPARE_METRICS_META})
+
 @app.route("/api/reports", methods=["GET"])
 def api_list_reports():
     reports = _db.list_reports()
     result = {r["종목코드"]: {"model": r["model_used"], "date": r["generated_date"]} for r in reports}
     return jsonify(result)
+
+
+@app.route("/api/us/reports", methods=["GET"])
+def api_us_list_reports():
+    reports = _db.list_us_reports()
+    result = {r["ticker"]: {"model": r["model_used"], "date": r["generated_date"]} for r in reports}
+    return jsonify(result)
+
+
+def _run_us_analysis_task(ticker: str, stock: dict, input_hash: str):
+    """백그라운드 스레드에서 US AI 분석 실행."""
+    try:
+        result = generate_us_report(stock)
+        if "error" not in result:
+            _db.save_us_report(
+                ticker=ticker,
+                name=stock.get("종목명", ""),
+                html=result.get("report_html", ""),
+                scores_json=json.dumps(result.get("scores", {}), ensure_ascii=False),
+                model=result.get("model", ""),
+                date=result.get("generated_date", ""),
+                input_hash=input_hash,
+            )
+        with _us_analysis_tasks_lock:
+            _us_analysis_tasks[ticker]["status"] = "done"
+            _us_analysis_tasks[ticker]["result"] = result
+    except Exception as e:
+        log.exception("US Analysis failed for %s", ticker)
+        err_str = str(e)
+        if "Timeout" in type(e).__name__ or "timeout" in err_str.lower():
+            err_str = "분석 시간이 초과되었습니다. 잠시 후 다시 시도해주세요."
+        with _us_analysis_tasks_lock:
+            _us_analysis_tasks[ticker]["status"] = "error"
+            _us_analysis_tasks[ticker]["result"] = {"error": err_str}
+
+
+@app.route("/api/us/stocks/<ticker>/analysis", methods=["GET", "POST"])
+def api_us_stock_analysis(ticker: str):
+    ticker = _normalize_us_ticker(ticker)
+    df = _load_us_data()
+    rows = df[df["종목코드"].astype(str).str.upper() == ticker] if not df.empty else pd.DataFrame()
+    stock = {c: _safe_val(rows.iloc[0].get(c)) for c in df.columns} if not rows.empty else None
+    current_input_hash = None
+    if stock is not None:
+        current_input_hash = build_us_analysis_input_hash(
+            stock, _db.get_us_analysis_data_version()
+        )
+
+    if request.method == "GET":
+        row = _db.load_us_report(ticker)
+        if row is None:
+            return jsonify({"error": "No report"}), 404
+        stale = bool(stock and row.get("input_hash") != current_input_hash)
+        return jsonify({
+            "report_html": row.get("report_html", ""),
+            "scores": json.loads(row.get("scores_json") or "{}"),
+            "model": row.get("model_used", ""),
+            "generated_date": row.get("generated_date", ""),
+            "mode": "claude",
+            "stale": stale,
+        })
+
+    # POST – 백그라운드 분석 시작
+    with _us_analysis_tasks_lock:
+        task = _us_analysis_tasks.get(ticker)
+        if task and task["status"] == "running":
+            return jsonify({"status": "running", "name": task.get("name", "")}), 202
+
+    if df.empty:
+        return jsonify({"error": "No data"}), 404
+    if rows.empty:
+        return jsonify({"error": "Stock not found"}), 404
+    name = stock.get("종목명", ticker)
+
+    prev_row = _db.load_us_report(ticker)
+    if prev_row and prev_row.get("input_hash") == current_input_hash:
+        return jsonify({
+            "status": "done",
+            "report_html": prev_row.get("report_html", ""),
+            "scores": json.loads(prev_row.get("scores_json") or "{}"),
+            "model": prev_row.get("model_used", ""),
+            "generated_date": prev_row.get("generated_date", ""),
+            "mode": "claude",
+            "cached": True,
+        }), 200
+
+    with _us_analysis_tasks_lock:
+        _us_analysis_tasks[ticker] = {"status": "running", "name": name, "result": None}
+
+    t = threading.Thread(
+        target=_run_us_analysis_task,
+        args=(ticker, stock, current_input_hash),
+        daemon=True,
+    )
+    t.start()
+    return jsonify({"status": "running", "name": name}), 202
+
+
+@app.route("/api/us/stocks/<ticker>/analysis/status", methods=["GET"])
+def api_us_stock_analysis_status(ticker: str):
+    ticker = _normalize_us_ticker(ticker)
+    with _us_analysis_tasks_lock:
+        task = _us_analysis_tasks.get(ticker)
+    if task is None:
+        return jsonify({"status": "idle"}), 200
+    status = task["status"]
+    if status == "running":
+        return jsonify({"status": "running", "name": task.get("name", "")}), 200
+    result = task.get("result") or {}
+    with _us_analysis_tasks_lock:
+        _us_analysis_tasks.pop(ticker, None)
+    if status == "error":
+        return jsonify({"status": "error", **result}), 200
+    return jsonify({"status": "done", **result}), 200
+
+
+@app.route("/api/us/stocks/<ticker>/analysis/history")
+def api_us_stock_analysis_history(ticker: str):
+    ticker = _normalize_us_ticker(ticker)
+    return jsonify(_db.load_us_report_history(ticker))
+
+
+@app.route("/api/us/stocks/analysis/history/<int:history_id>")
+def api_us_stock_analysis_history_detail(history_id: int):
+    row = _db.load_us_report_history_detail(history_id)
+    if row is None:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify({
+        "report_html": row.get("report_html", ""),
+        "scores": json.loads(row.get("scores_json") or "{}"),
+        "model": row.get("model_used", ""),
+        "generated_date": row.get("generated_date", ""),
+    })
 
 def _run_analysis_task(code: str, stock: dict, prev_scores_json, input_hash: str):
     """백그라운드 스레드에서 AI 분석 실행."""
@@ -1178,7 +1738,9 @@ def api_macro_analysis_get():
 def api_macro_analysis_post():
     """AI 매크로 분석 실행 및 저장"""
     try:
-        result = generate_macro_assessment()
+        data = request.get_json(silent=True) or {}
+        user_prompt = data.get("user_prompt", "")
+        result = generate_macro_assessment(user_prompt=user_prompt)
         scores = result.get("scores", {})
         _db.save_macro_analysis(
             scores_json=json.dumps(scores, ensure_ascii=False),
@@ -1531,6 +2093,85 @@ def _apply_screen_filter(df: pd.DataFrame, name: str) -> pd.DataFrame:
             + _rank_w("DPS_CAGR",               True) * 0.05
         )
         return covered
+    return df
+
+
+def _apply_us_screen_filter(df: pd.DataFrame, name: str) -> pd.DataFrame:
+    if name == "leaders":
+        mask = (
+            (pd.to_numeric(df.get("시가총액"), errors="coerce").fillna(0) >= 10_000_000_000)
+            & (pd.to_numeric(df.get("TTM_순이익"), errors="coerce").fillna(0) > 0)
+        )
+        if "RS_등급" in df.columns and df["RS_등급"].notna().any():
+            mask = mask & (pd.to_numeric(df["RS_등급"], errors="coerce").fillna(0) >= 80)
+        if "거래대금_20일평균" in df.columns:
+            amount = pd.to_numeric(df["거래대금_20일평균"], errors="coerce")
+            mask = mask & ((amount > 5_000_000) | amount.isna())
+        return df[mask].sort_values("주도주_점수", ascending=False)
+
+    if name == "quality_value":
+        mask = (
+            (pd.to_numeric(df.get("ROIC(%)"), errors="coerce").fillna(0) >= 10)
+            & (pd.to_numeric(df.get("F스코어"), errors="coerce").fillna(0) >= 5)
+            & (pd.to_numeric(df.get("PEG"), errors="coerce").fillna(99) < 1.5)
+            & (pd.to_numeric(df.get("부채비율(%)"), errors="coerce").fillna(999) < 150)
+            & (pd.to_numeric(df.get("유동비율(%)"), errors="coerce").fillna(0) > 100)
+            & (pd.to_numeric(df.get("순이익_당기양수"), errors="coerce").fillna(0) == 1)
+            & (pd.to_numeric(df.get("순이익_전년음수"), errors="coerce").fillna(0) == 0)
+            & (pd.to_numeric(df.get("시가총액"), errors="coerce").fillna(0) >= 2_000_000_000)
+            & (pd.to_numeric(df.get("가치함정_경고", pd.Series(0, index=df.index)), errors="coerce").fillna(0) == 0)
+        )
+        return df[mask].sort_values("우량가치_점수", ascending=False)
+
+    if name == "growth_mom":
+        mask = (
+            (pd.to_numeric(df.get("매출_CAGR"), errors="coerce").fillna(0) >= 10)
+            & (pd.to_numeric(df.get("영업이익_CAGR"), errors="coerce").fillna(0) >= 10)
+            & (pd.to_numeric(df.get("Q_영업이익_YoY(%)"), errors="coerce").fillna(0) > 0)
+            & (pd.to_numeric(df.get("RS_등급"), errors="coerce").fillna(0) >= 50)
+            & (pd.to_numeric(df.get("TTM_영업CF"), errors="coerce").fillna(-1) > 0)
+            & (pd.to_numeric(df.get("시가총액"), errors="coerce").fillna(0) >= 1_000_000_000)
+        )
+        return df[mask].sort_values("고성장_점수", ascending=False)
+
+    if name == "cash_div":
+        mask = (
+            (pd.to_numeric(df.get("FCF수익률(%)"), errors="coerce").fillna(0) >= 3)
+            & (pd.to_numeric(df.get("배당수익률(%)"), errors="coerce").fillna(0) >= 1)
+            & (pd.to_numeric(df.get("부채비율(%)"), errors="coerce").fillna(999) < 150)
+            & (pd.to_numeric(df.get("시가총액"), errors="coerce").fillna(0) >= 1_000_000_000)
+            & (pd.to_numeric(df.get("배당성향(%)"), errors="coerce").fillna(999) < 80)
+            & (pd.to_numeric(df.get("현금전환율(%)"), errors="coerce").fillna(0) >= 70)
+            & (pd.to_numeric(df.get("배당_연속증가"), errors="coerce").fillna(0) >= 2)
+        )
+        return df[mask].sort_values("현금배당_점수", ascending=False)
+
+    if name == "turnaround":
+        base_mask = (
+            (
+                (pd.to_numeric(df.get("흑자전환"), errors="coerce").fillna(0) == 1)
+                | (pd.to_numeric(df.get("이익률_급개선"), errors="coerce").fillna(0) == 1)
+            )
+            & (pd.to_numeric(df.get("TTM_순이익"), errors="coerce").fillna(0) > 0)
+            & (pd.to_numeric(df.get("TTM_영업CF"), errors="coerce").fillna(-1) > 0)
+            & (pd.to_numeric(df.get("Q_매출_YoY(%)"), errors="coerce").fillna(0) > -15)
+            & (pd.to_numeric(df.get("시가총액"), errors="coerce").fillna(0) >= 500_000_000)
+            & (pd.to_numeric(df.get("이자보상배율"), errors="coerce").fillna(0) > 1.5)
+        )
+        vol = pd.to_numeric(df.get("거래대금_증감(%)", pd.Series(np.nan, index=df.index)), errors="coerce")
+        vcp = pd.to_numeric(df.get("VCP_신호", pd.Series(0, index=df.index)), errors="coerce").fillna(0)
+        mask = base_mask & ((vol.fillna(0) >= 20) | (vcp == 1) | vol.isna())
+        return df[mask].sort_values("턴어라운드_점수", ascending=False)
+
+    if name == "multi_strategy":
+        strategies = ["leaders", "quality_value", "growth_mom", "cash_div", "turnaround"]
+        counts = pd.Series(0, index=df.index)
+        for strategy in strategies:
+            counts[_apply_us_screen_filter(df, strategy).index] += 1
+        result = df[counts >= 3].copy()
+        result["전략수"] = counts[counts >= 3]
+        return result
+
     return df
 
 if __name__ == "__main__":

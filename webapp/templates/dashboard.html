@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <title>Quant Dashboard (5-Strategy)</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/style.css?v=22">
+  <link rel="stylesheet" href="/static/css/style.css?v=23">
   <style>
     .val-pos { color: #d63384; font-weight: 600; }
     .val-neg { color: #0d6efd; font-weight: 600; }
@@ -23,6 +23,10 @@
   <div class="container-fluid">
     <a class="navbar-brand" href="/">Quant Dashboard</a>
     <div class="d-flex gap-2 align-items-center">
+      <div class="btn-group btn-group-sm me-2" id="country-toggle">
+        <button class="btn btn-outline-light active" data-country="kr" type="button">🇰🇷 KR</button>
+        <button class="btn btn-outline-light" data-country="us" type="button">🇺🇸 US</button>
+      </div>
       <span id="data-quality-badge" class="small" style="display:none;"></span>
       <button class="btn btn-sm btn-outline-light" id="btn-refresh">Refresh</button>
       <button class="btn btn-sm btn-outline-info" id="btn-trigger-daily" title="시세·주가히스토리·투자자동향만 수집 후 스크리닝 (빠름)">⚡ 일간 업데이트</button>
@@ -46,8 +50,8 @@
         <li class="nav-item"><a class="nav-link" href="#" data-screen="cash_div">현금배당</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-screen="turnaround">턴어라운드</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-screen="multi_strategy">Multi-Pick</a></li>
-        <li class="nav-item"><a class="nav-link" href="#" data-screen="forward_covered">🔭 Forward Est.</a></li>
-        <li class="nav-item"><a class="nav-link" href="#" data-screen="portfolio">포트폴리오 <span id="cnt-portfolio" class="badge bg-success rounded-pill">0</span></a></li>
+        <li class="nav-item" data-hide-us="1"><a class="nav-link" href="#" data-screen="forward_covered">🔭 Forward Est.</a></li>
+        <li class="nav-item" data-hide-us="1"><a class="nav-link" href="#" data-screen="portfolio">포트폴리오 <span id="cnt-portfolio" class="badge bg-success rounded-pill">0</span></a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-screen="watchlist">관심종목 <span id="cnt-watchlist" class="badge bg-warning text-dark rounded-pill">0</span></a></li>
       </ul>
       <div class="mt-2 p-2 bg-light rounded small d-flex justify-content-between align-items-center">
@@ -150,11 +154,35 @@
     <div class="card-header bg-white py-2">
       <div class="d-flex justify-content-between align-items-center">
         <form id="filter-form" class="d-flex gap-2 align-items-center flex-wrap">
-          <select class="form-select form-select-sm" id="f-market" style="width:100px;">
-            <option value="">All Mkt</option>
-            <option value="KOSPI">KOSPI</option>
-            <option value="KOSDAQ">KOSDAQ</option>
-          </select>
+          <div class="kr-only-filter">
+            <select class="form-select form-select-sm" id="f-market" style="width:100px;">
+              <option value="">All Mkt</option>
+              <option value="KOSPI">KOSPI</option>
+              <option value="KOSDAQ">KOSDAQ</option>
+            </select>
+          </div>
+          <div class="us-only-filter">
+            <select class="form-select form-select-sm" id="f-exchange" style="width:110px;">
+              <option value="">All Exch</option>
+              <option value="NYSE">NYSE</option>
+              <option value="NASDAQ">NASDAQ</option>
+            </select>
+          </div>
+          <div class="us-only-filter">
+            <select class="form-select form-select-sm" id="f-index-member" style="width:126px;">
+              <option value="">All Index</option>
+              <option value="SP500">S&amp;P 500</option>
+              <option value="NASDAQ100">NASDAQ-100</option>
+            </select>
+          </div>
+          <div class="us-only-filter">
+            <div class="btn-group btn-group-sm" id="cap-tier-group" role="group" title="시가총액 티어">
+              <button type="button" class="btn btn-outline-secondary cap-tier-btn active" data-cap-tier="">All Cap</button>
+              <button type="button" class="btn btn-outline-secondary cap-tier-btn" data-cap-tier="mega">Mega</button>
+              <button type="button" class="btn btn-outline-secondary cap-tier-btn" data-cap-tier="large">Large</button>
+              <button type="button" class="btn btn-outline-secondary cap-tier-btn" data-cap-tier="mid">Mid</button>
+            </div>
+          </div>
           <div class="sector-multiselect" id="sector-multiselect-wrap" style="width:150px; position:relative;">
             <button type="button" class="form-select form-select-sm text-start" id="f-sector-btn"
                     style="width:100%; background-image:none; cursor:pointer;">전체 섹터</button>
@@ -494,6 +522,11 @@
               AI 매크로 분석
             </button>
           </div>
+          <div class="px-3 pt-2 pb-1">
+            <textarea id="macro-user-prompt" class="form-control form-control-sm"
+              rows="2" placeholder="추가 분석 요청 입력 (예: 반도체 섹터 집중 분석, 미중 무역전쟁 영향 등)"
+              style="font-size:.78rem; resize:vertical;"></textarea>
+          </div>
           <div id="macro-result-area" class="px-3 pt-2" style="font-size:.8rem;">
             <div id="macro-result-placeholder" class="text-muted py-2" style="font-size:.78rem;">
               AI 매크로 분석 버튼을 눌러 현재 거시경제 환경을 분석하세요. 포트폴리오 AI 분석 시 자동으로 활용됩니다.
@@ -540,6 +573,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script src="/static/js/dashboard.js?v=31"></script>
+<script src="/static/js/dashboard.js?v=33"></script>
 </body>
 </html>

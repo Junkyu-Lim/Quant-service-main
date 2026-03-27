@@ -1,8 +1,9 @@
 """
-AI 종목 정성 분석 보고서 생성기 (Grand Master Protocol v2).
+AI 종목 정성 분석 보고서 생성기 (Grand Master Protocol v3).
 
-6대 투자 거장(Warren Buffett, Aswath Damodaran, Philip Fisher,
-Pat Dorsey, Peter Lynch, André Kostolany)의 핵심 철학을 기반으로
+9대 투자 거장(Warren Buffett, Aswath Damodaran, Philip Fisher,
+Pat Dorsey, Peter Lynch, André Kostolany, Charlie Munger,
+Howard Marks, Seth Klarman)의 핵심 철학을 기반으로
 9단계(Stage 0~8) 심층 분석 프로토콜을 수행합니다.
 """
 
@@ -29,7 +30,7 @@ import db as _db
 import config
 
 log = logging.getLogger("Analyzer")
-ANALYSIS_INPUT_VERSION = "stock-analysis-v5"
+ANALYSIS_INPUT_VERSION = "stock-analysis-v6"
 
 # ─────────────────────────────────────────
 # 프롬프트 템플릿
@@ -37,7 +38,7 @@ ANALYSIS_INPUT_VERSION = "stock-analysis-v5"
 
 SYSTEM_PROMPT = """\
 당신은 한국 주식시장 Grand Master 애널리스트입니다.
-6대 투자 거장의 철학을 통합한 9단계 심층 분석 프로토콜(Stage 0~8)을 수행합니다.
+9대 투자 거장의 철학을 통합한 9단계 심층 분석 프로토콜(Stage 0~8)을 수행합니다.
 
 [환각 방지 - 최우선] 종목명만 보고 업종을 단정짓지 마세요. 불확실하면 hallucination_flag=true.
 
@@ -50,7 +51,7 @@ SYSTEM_PROMPT = """\
 - Stage 4.5: Peer 비교 → 아래 별도 규칙 참조
 - Stage 5: 전망 & 모멘텀 (CAPEX, 수주잔고, 신사업, 12개월 촉매)
 - Stage 6: 밸류에이션 & 코스톨라니 (수명주기 맞춤 방법론, 달걀 1~6 위치)
-- Stage 7: 거장 6인 평가 (각 1줄+분석, 통합 S~F 등급)
+- Stage 7: 거장 9인 평가 (각 1줄+분석, 통합 S~F 등급)
 - Stage 8: 트레이딩 액션 플랜 (진입가·목표가·손절가·비중·보유기간·매도조건)
 
 ### 코스톨라니 달걀 위치 (정량 직접 대입)
@@ -67,13 +68,16 @@ SYSTEM_PROMPT = """\
 10=상위2%·9=탁월·7~8=우수·5~6=평균·3~4=미흡(약점 근거 필수)·1~2=부적합
 [필수] 각 거장 분석에서 핵심 약점 1개 이상 명시. 긍정만 나열 금지.
 
-### 6대 거장 핵심 관점 (키워드)
+### 9대 거장 핵심 관점 (키워드)
 - Buffett: 해자지속성·경영진·S-RIM 안전마진·장기보유
 - Damodaran: 내러티브-숫자일관성·ROIC vs WACC·리스크대비보상
 - Fisher: R&D혁신·이익률개선추세·장기성장·조직문화
 - Dorsey: 4대해자(무형/전환비용/네트워크/원가) 강도·트렌드(확대/축소)
 - Lynch: PEG·이해가능사업·10-bagger잠재력·이익↔주가연동
 - Kostolany: 달걀위치·역발상·유동성수급·인내심
+- Munger: 역전사고(이 투자가 실패하는 시나리오 Top3)·멘탈모델·ROIC지속성·Lollapalooza효과
+- Marks: 2차사고(시장이 이미 아는가?)·사이클위치·가격vs가치괴리·컨센서스갭·영구자본손실확률
+- Klarman: 촉매식별(가치 재평가 트리거)·보수적안전마진·무촉매밸류트랩경고·하방시나리오
 
 ## Stage 4.5: Peer 비교
 - USER_PROMPT에 "동종업계 Peer DB 데이터" 섹션이 있으면 그 값을 peer_comparison.peers에 그대로 사용 (웹 추정 금지)
@@ -99,11 +103,26 @@ SYSTEM_PROMPT = """\
 ## recent_news (3~4건 우선)
 웹 검색에서 투자 판단에 중요한 뉴스·공시를 선별. 각 항목: title, date, summary(1문장 우선), impact(긍정/부정/중립), source.
 
+## 2차 사고 검증 (Howard Marks — 모든 판단에 적용)
+모든 긍정적 판단에 대해 자문하세요: "시장이 이것을 이미 알고 현재 주가에 반영했는가?"
+컨센서스와 동일한 의견이면, 그것이 왜 아직 미반영인지 구체적 근거를 제시해야 합니다.
+긍정 요인이 이미 주가에 반영된 경우: Marks 점수 상한 5, stage8 entry_price를 현재가 대비 할인 설정.
+
+## 역전사고 (Charlie Munger — Stage 7 필수)
+"이 투자가 실패하는 시나리오 Top 3"를 반드시 작성하세요. 시나리오는 구체적(수치/사건 포함)이어야 합니다.
+Stage 7 모든 거장 평균 ≥8이면, 반드시 Munger bear_case에서 과열/과신 리스크를 지적하세요.
+
+## 촉매 식별 (Seth Klarman — Stage 5·7 연동)
+저평가 종목은 반드시 12-18개월 내 가치 재평가 촉매를 식별하세요.
+각 촉매에 예상시기·발생확률(high/medium/low)을 명시합니다.
+촉매 식별 실패 시: Klarman 점수 상한 4, "무촉매 저평가" 경고를 summary에 포함.
+
 ## 가치함정 판별 (Stage 4 value_trap_risk 기준)
 - 매출이익_동행성=0(매출↑마진↓) → divergent, value_trap_risk≥medium
 - PER<8/PBR<0.7 + 지속가치_품질≤2 → "cheap for reason", value_trap_risk 상향
 - 현금전환율<50% → 이익 품질 의심, stage4 analysis에 언급
 - 지속가치_품질≥4 + 괴리율 양수 → "진정한 저평가", value_trap_risk=low
+- [신규] PER<10 + PBR<1 + Klarman 촉매 0건 → "무촉매 저평가 = 밸류트랩 가능성", value_trap_risk 상향
 
 ## 내부 일관성 (JSON 출력 전 자체 검증)
 1. moat_rating=none → fair_value_range PBR/BPS 보수적 산출, 성장 프리미엄 금지
@@ -115,6 +134,10 @@ SYSTEM_PROMPT = """\
 7. 매출이익_동행성=0(매출↑마진↓) → value_trap_risk를 medium 이상으로 설정, Buffett 점수 상한 6
 8. 매출이익_동행성=-1(매출↓마진↓) → value_trap_risk=high, Buffett/Dorsey 점수 각 상한 4
 9. 가치함정_경고=1 → summary에 "가치함정 리스크" 반드시 언급, portfolio_weight 상한 3%
+10. Stage 7 모든 거장 평균 ≥8 → Munger bear_case에서 과열/과신 리스크 필수 지적
+11. Klarman catalysts 0건 + 괴리율>0 → summary에 "무촉매 저평가 경고" 필수 언급, portfolio_weight 상한 3%
+12. 수출비중 높은 종목 + 매크로 불리 → Marks 점수 상한 6
+13. RS등급 > 80 고모멘텀 종목 → risks에 추가: {"description": "생존자 편향 주의: 모멘텀 스크리닝은 상장폐지 종목 제외로 과거 수익률 과대평가 가능. 모멘텀 역전 시 낙폭 확대 위험.", "severity": "low"}
 
 ## risks 필수 규칙
 단순 "경쟁 심화·금리·환율" 기재 금지 — 수치/사건 연결 필수. 재무 약점 1개 이상, severity=high 1개 이상, DART·뉴스 근거 1개 이상.
@@ -222,7 +245,10 @@ USER_PROMPT_TEMPLATE = """\
     "fisher": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<2-3문장>"}},
     "dorsey": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<2-3문장>"}},
     "lynch": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<2-3문장>"}},
-    "kostolany": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<2-3문장>"}}
+    "kostolany": {{"score": <1-10>, "one_liner": "<한 줄 평>", "analysis": "<2-3문장>"}},
+    "munger": {{"score": <1-10>, "one_liner": "<한 줄 평>", "bear_case_top3": ["<실패 시나리오1: 구체적 수치/사건>", "<실패 시나리오2>", "<실패 시나리오3>"], "analysis": "<2-3문장>"}},
+    "marks": {{"score": <1-10>, "one_liner": "<한 줄 평>", "consensus_gap": "<시장 기대 vs 실제 괴리 — 시장이 이미 아는가?>", "analysis": "<2-3문장>"}},
+    "klarman": {{"score": <1-10>, "one_liner": "<한 줄 평>", "catalysts": [{{"event": "<촉매 이벤트>", "timing": "<예상 시기>", "probability": "<high|medium|low>"}}], "analysis": "<2-3문장>"}}
   }},
   "stage8_action": {{
     "entry_price": "<진입 가격대(원)>",
@@ -260,7 +286,7 @@ USER_PROMPT_TEMPLATE = """\
 DEFAULT_LENGTH_GUARDRAILS = """\
 
 ## 응답 길이 규칙
-- recent_news 3건 우선, Stage 1~6 2~4문장, Stage 7 2~3문장, summary 4~5문장, Stage 8 1~2문장
+- recent_news 3건 우선, Stage 1~6 2~4문장, Stage 7 각 거장 2~3문장(Munger bear_case 3건 별도), summary 4~5문장, Stage 8 1~2문장
 """
 
 
@@ -745,12 +771,15 @@ def build_stock_analysis_input_hash(stock: dict, data_version: str = "") -> str:
 
 
 MASTER_SCORE_WEIGHTS = {
-    "buffett": 20,
-    "damodaran": 15,
-    "fisher": 15,
-    "dorsey": 15,
-    "lynch": 15,
+    "buffett": 15,
+    "damodaran": 12,
+    "fisher": 12,
+    "dorsey": 12,
+    "lynch": 12,
     "kostolany": 10,
+    "munger": 12,
+    "marks": 8,
+    "klarman": 7,
 }
 
 
@@ -789,18 +818,34 @@ def _compute_composite_fields(stock: dict, scores: dict) -> tuple[int | None, st
     if not masters:
         return None, None
 
-    total = 0.0
+    # 기존 6인 보고서 호환: 없는 거장은 가중치에서 제외
+    active_weights = {}
     for key, weight in MASTER_SCORE_WEIGHTS.items():
-        try:
-            score = float((masters.get(key) or {}).get("score"))
-        except (TypeError, ValueError):
-            return None, None
-        total += score * weight
+        entry = masters.get(key) or {}
+        if "score" in entry:
+            try:
+                float(entry["score"])
+                active_weights[key] = weight
+            except (TypeError, ValueError):
+                pass
+    # 최소 기존 6인은 있어야 함
+    if len(active_weights) < 6:
+        return None, None
 
-    composite = total / sum(MASTER_SCORE_WEIGHTS.values()) * 10
+    total = 0.0
+    for key, weight in active_weights.items():
+        total += float((masters.get(key) or {}).get("score") or 0) * weight
+
+    composite = total / sum(active_weights.values()) * 10
     confidence = ((scores.get("business_identity") or {}).get("confidence") or "").lower()
     confidence_adj = {"high": 5, "medium": 0, "low": -10}.get(confidence, 0)
     composite += confidence_adj
+
+    def _recalc():
+        t = 0.0
+        for k, w in active_weights.items():
+            t += float((masters.get(k) or {}).get("score") or 0) * w
+        return t / sum(active_weights.values()) * 10 + confidence_adj
 
     try:
         if float(stock.get("괴리율(%)", 0) or 0) <= -30:
@@ -808,15 +853,20 @@ def _compute_composite_fields(stock: dict, scores: dict) -> tuple[int | None, st
             if "score" in buffett:
                 buffett["score"] = min(float(buffett.get("score") or 0), 4)
                 masters["buffett"] = buffett
-                total = 0.0
-                for key, weight in MASTER_SCORE_WEIGHTS.items():
-                    total += float((masters.get(key) or {}).get("score") or 0) * weight
-                composite = total / sum(MASTER_SCORE_WEIGHTS.values()) * 10 + confidence_adj
+                composite = _recalc()
     except (TypeError, ValueError):
         pass
 
     if float(stock.get("F스코어", 0) or 0) <= 3:
         composite = min(composite, 45)
+
+    # 무촉매 밸류트랩 캡핑: 저평가이지만 촉매 없음
+    klarman_data = masters.get("klarman") or {}
+    catalysts = klarman_data.get("catalysts") or []
+    per_val = float(stock.get("PER", 0) or 0)
+    pbr_val = float(stock.get("PBR", 0) or 0)
+    if len(catalysts) == 0 and 0 < per_val < 10 and 0 < pbr_val < 1:
+        composite = min(composite, 50)
 
     composite = round(max(1, min(100, composite)))
     if composite >= 85:
@@ -1276,6 +1326,24 @@ MASTER_INFO = {
         "color": "#c0392b",
         "philosophy": "시장 심리 & 역발상",
     },
+    "munger": {
+        "name": "Charlie Munger",
+        "icon": "CM",
+        "color": "#2c3e50",
+        "philosophy": "역전사고 & 멘탈모델",
+    },
+    "marks": {
+        "name": "Howard Marks",
+        "icon": "HM",
+        "color": "#8e44ad",
+        "philosophy": "2차 사고 & 사이클",
+    },
+    "klarman": {
+        "name": "Seth Klarman",
+        "icon": "SK",
+        "color": "#d35400",
+        "philosophy": "촉매 & 안전마진",
+    },
 }
 
 KOSTOLANY_EGG_LABELS = {
@@ -1615,14 +1683,40 @@ def render_html(code: str, name: str, market: str, stock: dict,
     <div class="stage-analysis">{stage6.get("analysis", "")}</div>
   </div>"""
 
-    # ── Stage 7: 6대 거장 카드 ──
+    # ── Stage 7: 9대 거장 카드 ──
     master_cards = ""
     for key, info in MASTER_INFO.items():
         m = stage7.get(key, {})
+        if not m:
+            continue  # 구버전 보고서 호환: 없는 거장은 건너뜀
         s = m.get("score", 0)
         one_liner = m.get("one_liner", "")
         analysis = m.get("analysis", "")
         bar_w = _score_bar_width(s)
+
+        # 거장별 추가 정보 렌더링
+        extra_html = ""
+        if key == "munger":
+            bear_cases = m.get("bear_case_top3", [])
+            if bear_cases:
+                items = "".join(f'<li style="margin:2px 0;color:#c0392b">{bc}</li>' for bc in bear_cases)
+                extra_html = f'<div style="margin-top:8px;padding:8px 10px;background:#fdf2f2;border-radius:6px;border-left:3px solid #c0392b"><strong style="font-size:12px;color:#c0392b">&#9888; 실패 시나리오 Top 3</strong><ul style="margin:4px 0 0 16px;padding:0;font-size:13px">{items}</ul></div>'
+        elif key == "marks":
+            gap = m.get("consensus_gap", "")
+            if gap:
+                extra_html = f'<div style="margin-top:8px;padding:8px 10px;background:#f4ecf7;border-radius:6px;border-left:3px solid #8e44ad"><strong style="font-size:12px;color:#8e44ad">&#x1F50D; 시장 기대 vs 실제</strong><p style="margin:4px 0 0;font-size:13px">{gap}</p></div>'
+        elif key == "klarman":
+            catalysts_list = m.get("catalysts", [])
+            if catalysts_list:
+                cat_items = ""
+                for cat in catalysts_list:
+                    if isinstance(cat, dict):
+                        prob = cat.get("probability", "medium")
+                        prob_color = {"high": "#27ae60", "medium": "#f39c12", "low": "#e74c3c"}.get(prob, "#888")
+                        cat_items += f'<li style="margin:2px 0"><span style="background:{prob_color};color:#fff;padding:1px 5px;border-radius:3px;font-size:10px;margin-right:4px">{prob}</span>{cat.get("event", "")} <small style="color:#888">({cat.get("timing", "")})</small></li>'
+                    else:
+                        cat_items += f'<li style="margin:2px 0">{cat}</li>'
+                extra_html = f'<div style="margin-top:8px;padding:8px 10px;background:#fdf2e9;border-radius:6px;border-left:3px solid #d35400"><strong style="font-size:12px;color:#d35400">&#x1F4A1; 촉매 식별</strong><ul style="margin:4px 0 0 16px;padding:0;font-size:13px">{cat_items}</ul></div>'
 
         master_cards += f"""
         <div class="master-card">
@@ -1641,6 +1735,7 @@ def render_html(code: str, name: str, market: str, stock: dict,
           </div>
           <div class="master-title">{one_liner}</div>
           <div class="master-analysis">{analysis}</div>
+          {extra_html}
         </div>"""
 
     # ── 리스크 & 촉매 리스트 ──
@@ -1729,7 +1824,7 @@ def render_html(code: str, name: str, market: str, stock: dict,
     <p>{summary}</p>
   </div>
 
-  <h4 class="section-title">6대 투자 거장 관점 분석</h4>
+  <h4 class="section-title">9대 투자 거장 관점 분석</h4>
   <div class="master-cards">{master_cards}</div>
 
   <div class="risk-catalyst-grid">
@@ -1810,13 +1905,19 @@ PORTFOLIO_SYSTEM_PROMPT = """\
 
 - **1순위 판단 기준은 산업의 장기 성장성**입니다. 전방산업 CAGR, AI 분석의 산업분류, 해자 등급을 핵심 근거로 활용하세요.
 - 장기 성장하는 산업에 속한 고품질 종목(해자 wide/narrow)은 단기 등락과 무관하게 HOLD 또는 BUY_MORE를 우선 고려하세요.
-- **TRIM/SELL 권고 기준**: 아래 중 하나라도 해당하면 과감하게 TRIM/SELL을 권고하세요. 단기 고평가(PER 등)만으로는 TRIM 근거가 되지 않습니다.
+- **TRIM/SELL 권고 기준**: 아래 중 하나라도 해당하면 과감하게 TRIM/SELL을 권고하세요. 단기 PER 상승만으로 TRIM하지 않되, PER이 업종 역사적 고평가 수준이면서 분기 실적 감속·RS등급 하락이 동반되면 비중 조절을 검토하세요.
   1. 산업 성장성 훼손, 해자 소실, 구조적 경쟁력 약화 확인
   2. 퀀트 지표 동시 악화: 퀀트점수 < 40 **이면서** RS등급 < 40 (모멘텀+펀더멘털 동시 이탈)
   3. 재무건전성 급격 악화: F스코어 < 4 (피오트로스키)
   4. 영업이익 2분기 이상 연속 역성장하면서 회복 근거 없음
 - 현금(예수금)이 있는 경우, BUY_MORE 권고 시 예수금 범위 내에서 실행 가능한 매수량/금액을 우선 제시하세요.
 - 수급(코스톨라니 달걀 위치, 시장심리)은 매수 타이밍 보조 지표로만 활용하고, 장기 성장성 판단을 뒤집어서는 안 됩니다.
+
+### 밸류에이션 가드레일 (성장 함정 방지)
+- 포트폴리오 가중평균 PER > 25x 또는 PBR > 3x → `portfolio_health.valuation`에 "밸류에이션 리스크" 경고 필수
+- PEG > 2인 종목에 BUY_MORE 권고 시 → rationale에 PEG 수준과 그럼에도 매수하는 근거 명시
+- PER > 40 종목 → recommended_weight 상한 7% 적용 (단, 전방산업 CAGR>15% + 해자 wide 동시 충족 시 예외)
+- 성장률 높지만 과도한 밸류에이션(PER>30, PEG>2.5) → portfolio_risks에 "성장 함정 리스크" 포함 (제레미 시겔: 고성장 기업이 반드시 고수익 투자는 아님)
 
 ## 분석 프레임워크
 
@@ -1867,12 +1968,29 @@ PORTFOLIO_SYSTEM_PROMPT = """\
 - 실행 순서 및 권장 시기 (즉시/이번 달/이번 분기/불필요)
 - 예수금이 있는 경우: 현금 활용 우선순위 포함
 
+### 10. 역발상 점검 (Devil's Advocate — 확증 편향 방지)
+이 섹션은 AI의 성장주·컨센서스 편향을 교정하는 필수 검증입니다. 건너뛰지 마세요.
+- **BUY_MORE 실패 시나리오**: BUY_MORE 권고 종목마다 "이 매수가 실패하는 구체적 시나리오 1개"를 rationale에 반드시 포함
+- **약세 시나리오**: "만약 이 포트폴리오를 공매도한다면?" 논리를 3-5문장으로 작성 (perspective_balance.bear_case_summary)
+- **최대 추정 낙폭**: 섹터별 역사적 최대 하락률 기반 포트폴리오 비관 시나리오 낙폭 추정 (perspective_balance.estimated_max_drawdown)
+- **성장 vs 가치 편향 진단**: 포트폴리오가 성장주 편향인지 가치주 편향인지 객관적 판정 (perspective_balance.growth_vs_value_tilt)
+- **컨센서스 동조 위험**: 주요 종목들이 시장 컨센서스와 동일 방향(모두 성장주, 모두 AI 수혜)이면 군중 동조 리스크 명시
+
+### 한국 시장 특수 리스크 (항상 점검)
+- **코리아 디스카운트**: PBR<1 + 지배구조 우려(재벌 계열) 종목 → 밸류업 프로그램 수혜 가능성 vs 구조적 저평가(밸류트랩) 여부 구분 평가
+- **코스닥 좀비 경고**: 코스닥 종목 중 영업이익 2년+ 연속 적자 + 부채비율>100% → portfolio_risks에 "좀비 리스크" 경고 (코스닥 기업 약 47% 적자, 23.7% 이자보상배율 미달)
+- **FX 노출 평가**: 수출주 vs 내수주 비중 평가. 어느 한쪽 70%+ 편중 시 "환율 편중 리스크" 지적
+- **생존자 편향 주의**: RS등급>80 종목 3개 이상 시 portfolio_risks에 포함 — 모멘텀 전략은 상장폐지 종목 제외로 과거 수익률이 과대평가됨
+
 ## 매크로 환경 활용 지침
 - 프롬프트의 "## 거시경제 환경" 섹션을 참고하여 매크로 환경을 분석하세요.
 - **현금 비중**: 방어적 환경(성장 하향 + 실질금리 상승 + 금융여건 악화)이면 예수금을 BUY_MORE에 소진하지 말고 유지/확대를 권고하세요. 공격적 환경이면 예수금 범위 내 BUY_MORE를 적극 검토하세요.
 - **섹터 배분**: 매크로 유리 섹터에 속한 종목에 BUY_MORE를 가중하고, 불리 섹터에 과집중된 경우 TRIM을 검토하세요. 단, 장기 성장성과 해자가 충분한 종목은 매크로 불리라도 HOLD를 우선합니다.
 - **리스크 평가**: 금리 상승, 달러 강세, 신용스프레드 확대 등 매크로 리스크를 `portfolio_risks`에 포함하세요.
 - **macro_assessment 필드**: 반드시 채워주세요. 제공된 매크로 분석을 기반으로 하되, 포트폴리오 종목 구성과의 적합도(portfolio_alignment)를 함께 평가하세요.
+- **시장 심리 역이용**: 심리가 극단적 공포이면 방어 환경에서도 역발상 BUY_MORE 기회를 검토하세요. 극단적 탐욕이면 공격 환경에서도 신규 매수 자제를 권고하세요.
+- **유동성 보정**: M2 확대 전환 시 금리 긴축에도 자산 가격 지지 가능 → 방어 판단 완화. M2 위축 시 금리 인하에도 자산 하락 가능 → 공격 판단 보수화.
+- **이익 추정치 교차 검증**: 성장 상향 판단이라도 이익 추정치(earnings_revision)가 하향이면 실질 이익 감소 주의를 portfolio_risks에 포함하세요.
 
 ## 웹 검색 활용 지침
 web_search 툴을 활용하여 분석 전 반드시 최신 정보를 확인하세요:
@@ -1892,7 +2010,7 @@ web_search 툴은 최대 2회만 사용 가능합니다. 개별 종목 정보는
 - 포트폴리오 비중이 높은 종목에 더 주의를 기울이세요
 - 종목 간 상관관계와 중복 리스크를 식별하세요
 - 데이터가 없는 종목(ETF, 우선주 등)은 비중 분석에만 포함하세요 (비중=None인 종목은 현재가 없음)
-- 6대 투자 거장(Buffett, Damodaran, Fisher, Dorsey, Lynch, Kostolany)의 관점이 기존 분석에 포함되어 있으면 이를 종합적으로 활용하세요
+- 9대 투자 거장(Buffett, Damodaran, Fisher, Dorsey, Lynch, Kostolany, Munger, Marks, Klarman)의 관점이 기존 분석에 포함되어 있으면 이를 종합적으로 활용하세요
 - 관심종목이 없으면 watchlist_recommendations는 빈 배열로 출력하세요
 - 한국어로 분석하세요
 """
@@ -2011,6 +2129,14 @@ PORTFOLIO_USER_PROMPT_TEMPLATE = """\
     "priority_actions": ["가장 먼저 실행할 액션 1", "액션 2"],
     "execution_note": "실행 순서 및 권장 시기 2-3문장"
   }},
+  "perspective_balance": {{
+    "growth_vs_value_tilt": "성장 편향|균형|가치 편향",
+    "valuation_risk_level": "low|medium|high",
+    "contrarian_opportunities": ["역발상 기회가 있는 종목명 (없으면 빈 배열)"],
+    "consensus_risk": "시장 컨센서스와 동조 정도 2-3문장",
+    "bear_case_summary": "포트폴리오 전체 약세 시나리오 3-5문장",
+    "estimated_max_drawdown": "비관적 시나리오 최대 추정 낙폭 (예: -25%~-35%)"
+  }},
   "summary": "5-7문장 종합 포트폴리오 전략 의견"
 }}
 ```
@@ -2113,6 +2239,10 @@ MACRO_ASSESSMENT_USER_PROMPT = """\
 7. 중국 경기 (상향/중립/하향): 중국 경기 모멘텀, 한국 수출 영향
 8. 반도체 사이클 (상향/중립/하향): 메모리/비메모리 업황, AI 수요
 9. 구조적 CAPEX 테마: 현재 집중되는 산업 테마 (AI 인프라, 전력망, 방산 등)
+10. 시장 심리/변동성 (탐욕/중립/공포): VIX 수준, VKOSPI, 투자심리 종합
+11. 유동성 여건 (확대/안정/위축): 글로벌 M2 증가율 방향, 주요 중앙은행 자산 규모 변화
+12. 시장 내부 건전성 (양호/혼조/악화): 상승종목 비율, 200일 이동평균 위 종목 비율
+13. 이익 추정치 방향 (상향/중립/하향): 한국 상장사 12개월 선행 EPS 수정 방향
 
 ## 현금 비중 판단 기준
 - 공격적: 성장 상향 + 실질금리 하락 + 금융여건 완화 → 현금 축소 (주식 확대)
@@ -2136,6 +2266,11 @@ MACRO_ASSESSMENT_USER_PROMPT = """\
   "credit_spread": "완화|중립|악화",
   "china": "상향|중립|하향",
   "semiconductor": "상향|중립|하향",
+  "market_sentiment": "탐욕|중립|공포",
+  "liquidity_conditions": "확대|안정|위축",
+  "market_breadth": "양호|혼조|악화",
+  "earnings_revision": "상향|중립|하향",
+  "credit_cycle_stage": "초기회복|확장|후기|수축",
   "capex_theme": "AI 인프라, 전력망 등 구체적 테마 텍스트",
   "favorable_sectors": ["유리한 섹터1", "유리한 섹터2"],
   "unfavorable_sectors": ["불리한 섹터1", "불리한 섹터2"],
@@ -2146,10 +2281,13 @@ MACRO_ASSESSMENT_USER_PROMPT = """\
 """
 
 
-def generate_macro_assessment() -> dict:
+def generate_macro_assessment(user_prompt: str = "") -> dict:
     """AI가 웹 검색으로 최신 데이터를 조회 후 거시경제 환경을 분석하여 macro_assessment dict 반환.
 
     웹 검색 툴(web_search)을 사용하여 실시간 환율, 유가, 금리, 주요 뉴스를 조회 후 분석.
+
+    Args:
+        user_prompt: 사용자 추가 분석 요청 (기존 프롬프트에 append)
 
     Returns:
         {
@@ -2166,7 +2304,16 @@ def generate_macro_assessment() -> dict:
         timeout=httpx.Timeout(180.0, connect=10.0),
     )
 
-    log.info("매크로 AI 분석 시작 (model=%s, web_search=True)", config.ANALYSIS_MODEL)
+    log.info("매크로 AI 분석 시작 (model=%s, web_search=True, user_prompt=%s)",
+             config.ANALYSIS_MODEL, bool(user_prompt))
+
+    prompt = MACRO_ASSESSMENT_USER_PROMPT
+    if user_prompt:
+        prompt += (
+            f"\n\n## 사용자 추가 분석 요청\n{user_prompt}\n\n"
+            "위 사용자 요청사항을 반드시 분석에 반영하되, "
+            "기존 필수 검색 항목과 JSON 출력 형식은 그대로 유지하세요."
+        )
 
     # web_search_20250305: server-side tool — Claude가 직접 검색 실행, tool_result 불필요
     message = _call_with_retry(
@@ -2174,7 +2321,7 @@ def generate_macro_assessment() -> dict:
         model=config.ANALYSIS_MODEL,
         max_tokens=4096,
         system=MACRO_ASSESSMENT_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": MACRO_ASSESSMENT_USER_PROMPT}],
+        messages=[{"role": "user", "content": prompt}],
         tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}],
     )
 
@@ -2222,6 +2369,16 @@ def format_macro_context(macro: dict) -> str:
         extra_lines.append(f"- 중국 경기: {macro['china']}")
     if macro.get('semiconductor'):
         extra_lines.append(f"- 반도체 가격: {macro['semiconductor']}")
+    if macro.get('market_sentiment'):
+        extra_lines.append(f"- 시장 심리: {macro['market_sentiment']}")
+    if macro.get('liquidity_conditions'):
+        extra_lines.append(f"- 유동성 여건: {macro['liquidity_conditions']}")
+    if macro.get('market_breadth'):
+        extra_lines.append(f"- 시장 건전성: {macro['market_breadth']}")
+    if macro.get('earnings_revision'):
+        extra_lines.append(f"- 이익 추정치: {macro['earnings_revision']}")
+    if macro.get('credit_cycle_stage'):
+        extra_lines.append(f"- 신용 사이클: {macro['credit_cycle_stage']}")
     if extra_lines:
         lines.append("\n### 추가 컨텍스트")
         lines.extend(extra_lines)
@@ -2737,6 +2894,40 @@ def render_portfolio_html(scores: dict, portfolio_items: list[dict],
     {f'<div class="stage-analysis">{alignment}</div>' if alignment else ''}
   </div>"""
 
+    # 역발상 점검 카드
+    pb = scores.get("perspective_balance", {})
+    perspective_card = ""
+    if pb:
+        tilt = pb.get("growth_vs_value_tilt", "")
+        tilt_colors = {
+            "성장 편향": ("#fadbd8", "#c0392b"),
+            "균형": ("#d5f5e3", "#1e8449"),
+            "가치 편향": ("#d6eaf8", "#1a5276"),
+        }
+        tilt_bg, tilt_fg = tilt_colors.get(tilt, ("#e9ecef", "#6c757d"))
+        val_risk = pb.get("valuation_risk_level", "")
+        val_risk_colors = {"low": "#1e8449", "medium": "#b9770e", "high": "#c0392b"}
+        val_risk_color = val_risk_colors.get(val_risk, "#6c757d")
+        contrarian = pb.get("contrarian_opportunities", [])
+        contrarian_chips = " ".join(
+            f'<span class="badge bg-info me-1">{s}</span>' for s in contrarian
+        ) if contrarian else '<span class="text-muted small">없음</span>'
+        consensus_risk = pb.get("consensus_risk", "")
+        bear_case = pb.get("bear_case_summary", "")
+        max_dd = pb.get("estimated_max_drawdown", "")
+        perspective_card = f"""\
+  <div class="stage-card" style="border-left:4px solid #c0392b;">
+    <div class="stage-card-title">역발상 점검 &amp; 편향 균형 (Devil&#39;s Advocate)</div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
+      {f'<span class="macro-env-badge" style="background:{tilt_bg};color:{tilt_fg};">투자 성향: {tilt}</span>' if tilt else ''}
+      {f'<span class="pf-action-badge" style="background:{val_risk_color};">밸류에이션 리스크: {val_risk.upper()}</span>' if val_risk else ''}
+      {f'<span class="pf-action-badge" style="background:#6c757d;">추정 최대 낙폭: {max_dd}</span>' if max_dd else ''}
+    </div>
+    <div class="stage-field"><strong>역발상 기회 종목:</strong> {contrarian_chips}</div>
+    {f'<div class="stage-field"><strong>컨센서스 동조 위험:</strong> {consensus_risk}</div>' if consensus_risk else ''}
+    {f'<div class="stage-analysis" style="background:#fdf2f2;border-left:3px solid #c0392b;padding:10px;margin-top:8px;"><strong style="color:#c0392b;">약세 시나리오 (Bear Case):</strong><br>{bear_case}</div>' if bear_case else ''}
+  </div>"""
+
     # 과비중/과소비중 섹터 뱃지
     overweight = sector_analysis.get("overweight_sectors", [])
     underweight = sector_analysis.get("underweight_sectors", [])
@@ -2788,6 +2979,8 @@ def render_portfolio_html(scores: dict, portfolio_items: list[dict],
   </div>
 
   {macro_card}
+
+  {perspective_card}
 
   {optimization_card}
 

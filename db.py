@@ -146,6 +146,27 @@ _SCHEMA_STATEMENTS = [
 )""",
     "CREATE INDEX IF NOT EXISTS idx_history_code ON analysis_reports_history (종목코드, generated_date DESC)",
     """CREATE SEQUENCE IF NOT EXISTS seq_report_history START 1""",
+    """CREATE TABLE IF NOT EXISTS us_analysis_reports (
+    ticker         TEXT NOT NULL,
+    종목명         TEXT,
+    report_html    TEXT,
+    scores_json    TEXT,
+    model_used     TEXT,
+    generated_date TEXT NOT NULL,
+    input_hash     TEXT,
+    PRIMARY KEY (ticker)
+)""",
+    """CREATE TABLE IF NOT EXISTS us_analysis_reports_history (
+    id             INTEGER PRIMARY KEY,
+    ticker         TEXT NOT NULL,
+    종목명         TEXT,
+    report_html    TEXT,
+    scores_json    TEXT,
+    model_used     TEXT,
+    generated_date TEXT NOT NULL
+)""",
+    "CREATE INDEX IF NOT EXISTS idx_us_history_ticker ON us_analysis_reports_history (ticker, generated_date DESC)",
+    """CREATE SEQUENCE IF NOT EXISTS seq_us_report_history START 1""",
     """CREATE TABLE IF NOT EXISTS portfolio_analysis (
     id              INTEGER PRIMARY KEY,
     report_html     TEXT,
@@ -290,6 +311,96 @@ _SCHEMA_STATEMENTS = [
     "가치함정_경고"   INTEGER,
     섹터          TEXT
 )""",
+    # ── US Stock Tables ──────────────────────────────────────────────────
+    """CREATE TABLE IF NOT EXISTS us_master (
+    ticker         TEXT NOT NULL,
+    name           TEXT,
+    exchange       TEXT,
+    stock_type     TEXT,
+    sector         TEXT,
+    industry       TEXT,
+    source         TEXT,
+    collected_date TEXT NOT NULL,
+    PRIMARY KEY (ticker, collected_date)
+)""",
+    """CREATE TABLE IF NOT EXISTS us_daily (
+    ticker              TEXT NOT NULL,
+    name                TEXT,
+    close               DOUBLE,
+    market_cap          DOUBLE,
+    shares_outstanding  DOUBLE,
+    eps                 DOUBLE,
+    bps                 DOUBLE,
+    dps                 DOUBLE,
+    base_date           TEXT,
+    collected_date      TEXT NOT NULL,
+    PRIMARY KEY (ticker, collected_date)
+)""",
+    """CREATE TABLE IF NOT EXISTS us_financial_statements (
+    ticker         TEXT NOT NULL,
+    base_date      TEXT,
+    account        TEXT,
+    period         TEXT,
+    value          DOUBLE,
+    is_estimate    INTEGER,
+    collected_date TEXT NOT NULL
+)""",
+    "CREATE INDEX IF NOT EXISTS idx_us_fs_code_date ON us_financial_statements (ticker, collected_date)",
+    """CREATE TABLE IF NOT EXISTS us_indicators (
+    ticker         TEXT NOT NULL,
+    base_date      TEXT,
+    indicator_type TEXT,
+    account        TEXT,
+    value          DOUBLE,
+    collected_date TEXT NOT NULL
+)""",
+    "CREATE INDEX IF NOT EXISTS idx_us_ind_code_date ON us_indicators (ticker, collected_date)",
+    """CREATE TABLE IF NOT EXISTS us_shares (
+    ticker              TEXT NOT NULL,
+    base_date           TEXT,
+    shares_outstanding  BIGINT,
+    float_shares        BIGINT,
+    sector              TEXT,
+    industry            TEXT,
+    collected_date      TEXT NOT NULL,
+    PRIMARY KEY (ticker, collected_date)
+)""",
+    """CREATE TABLE IF NOT EXISTS us_price_history (
+    ticker         TEXT NOT NULL,
+    date           TEXT NOT NULL,
+    open           DOUBLE,
+    high           DOUBLE,
+    low            DOUBLE,
+    close          DOUBLE,
+    volume         DOUBLE,
+    amount         DOUBLE,
+    collected_date TEXT NOT NULL,
+    PRIMARY KEY (ticker, date, collected_date)
+)""",
+    "CREATE INDEX IF NOT EXISTS idx_us_ph_code_date ON us_price_history (ticker, collected_date)",
+    """CREATE TABLE IF NOT EXISTS us_index_history (
+    index_code     TEXT NOT NULL,
+    date           TEXT NOT NULL,
+    close          DOUBLE,
+    collected_date TEXT NOT NULL,
+    PRIMARY KEY (index_code, date, collected_date)
+)""",
+    "CREATE INDEX IF NOT EXISTS idx_us_idx_code_date ON us_index_history (index_code, collected_date)",
+    # ── US Dashboard Result ──────────────────────────────────────────────
+    # save_us_dashboard()가 매번 DROP+CREATE AS SELECT를 수행하므로,
+    # 이 스키마는 최초 init_db() 시 빈 테이블 생성용 안전망이다.
+    """CREATE TABLE IF NOT EXISTS us_dashboard_result (
+    종목코드      TEXT PRIMARY KEY,
+    종목명        TEXT,
+    종가          DOUBLE,
+    시가총액      DOUBLE,
+    시장구분      TEXT,
+    exchange      TEXT,
+    섹터          TEXT,
+    industry      TEXT,
+    index_membership TEXT,
+    종합점수      DOUBLE
+)""",
 ]
 
 
@@ -329,6 +440,16 @@ def init_db():
                 log.info("portfolio_analysis: saved_at 컬럼 추가")
         except Exception as e:
             log.warning("portfolio_analysis 마이그레이션 실패: %s", e)
+        # us_master 테이블 마이그레이션: source 컬럼 추가
+        try:
+            cols = [r[0] for r in conn.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name='us_master'"
+            ).fetchall()]
+            if cols and "source" not in cols:
+                conn.execute("ALTER TABLE us_master ADD COLUMN source TEXT")
+                log.info("us_master: source 컬럼 추가")
+        except Exception as e:
+            log.warning("us_master 마이그레이션 실패: %s", e)
     log.info("DB 초기화 완료: %s", config.DB_PATH)
 
 
@@ -467,6 +588,35 @@ def load_latest(table: str) -> pd.DataFrame:
     return df
 
 
+def load_latest_per_ticker(table: str, ticker_col: str = "ticker") -> pd.DataFrame:
+    """ticker별 최신 collected_date 행을 로드한다.
+
+    load_latest()는 전체 MAX(collected_date) 하루치만 가져오므로
+    rate limit 등으로 일부 종목이 누락된 날이 최신이면 해당 종목 데이터가 사라진다.
+    이 함수는 ticker별로 가장 최근에 수집된 행을 반환한다.
+    """
+    with get_conn() as conn:
+        try:
+            df = conn.execute(f"""
+                SELECT t.*
+                FROM {table} t
+                INNER JOIN (
+                    SELECT {ticker_col}, MAX(collected_date) AS max_date
+                    FROM {table}
+                    GROUP BY {ticker_col}
+                ) latest ON t.{ticker_col} = latest.{ticker_col}
+                         AND t.collected_date = latest.max_date
+            """).df()
+        except Exception:
+            return pd.DataFrame()
+
+    if "collected_date" in df.columns:
+        df = df.drop(columns=["collected_date"])
+
+    log.info("로드(per-ticker): %s (%d건)", table, len(df))
+    return df
+
+
 def load_dashboard() -> pd.DataFrame:
     with get_conn() as conn:
         try:
@@ -481,6 +631,51 @@ def load_dashboard_prev() -> pd.DataFrame:
     with get_conn() as conn:
         try:
             df = conn.execute("SELECT * FROM dashboard_result_prev").df()
+        except Exception:
+            return pd.DataFrame()
+    return df
+
+
+def save_us_dashboard(df: pd.DataFrame):
+    """US dashboard_result 저장. save_dashboard()와 동일한 패턴."""
+    if df.empty:
+        return
+    with get_conn() as conn:
+        try:
+            cnt = conn.execute(
+                "SELECT COUNT(*) FROM information_schema.tables "
+                "WHERE table_name = 'us_dashboard_result'"
+            ).fetchone()[0]
+            if cnt:
+                conn.execute("DROP TABLE IF EXISTS us_dashboard_result_prev")
+                conn.execute(
+                    "CREATE TABLE us_dashboard_result_prev AS "
+                    "SELECT * FROM us_dashboard_result"
+                )
+        except Exception:
+            pass
+        conn.execute("DROP TABLE IF EXISTS us_dashboard_result")
+        conn.register("_us_dash_tmp", df)
+        conn.execute("CREATE TABLE us_dashboard_result AS SELECT * FROM _us_dash_tmp")
+        conn.unregister("_us_dash_tmp")
+    log.info("저장: us_dashboard_result (%d건)", len(df))
+
+
+def load_us_dashboard() -> pd.DataFrame:
+    """us_dashboard_result 전체 반환."""
+    with get_conn() as conn:
+        try:
+            df = conn.execute("SELECT * FROM us_dashboard_result").df()
+        except Exception:
+            return pd.DataFrame()
+    return df
+
+
+def load_us_dashboard_prev() -> pd.DataFrame:
+    """이전 배치의 us_dashboard_result를 반환한다."""
+    with get_conn() as conn:
+        try:
+            df = conn.execute("SELECT * FROM us_dashboard_result_prev").df()
         except Exception:
             return pd.DataFrame()
     return df
@@ -601,6 +796,113 @@ def load_report_history(history_id: int) -> dict | None:
         try:
             cur = conn.execute(
                 "SELECT * FROM analysis_reports_history WHERE id = ?",
+                [history_id],
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            cols = [d[0] for d in cur.description]
+            return dict(zip(cols, row))
+        except Exception:
+            return None
+
+
+# ─────────────────────────────────────────────
+# US 종목 AI 분석 보고서 CRUD
+# ─────────────────────────────────────────────
+
+def save_us_report(ticker: str, name: str, html: str, scores_json: str,
+                   model: str, date: str, input_hash: str | None = None):
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT * FROM us_analysis_reports WHERE ticker = ?", [ticker]
+        )
+        old = cur.fetchone()
+        if old is not None:
+            old_cols = [d[0] for d in cur.description]
+            old_dict = dict(zip(old_cols, old))
+            conn.execute(
+                """INSERT INTO us_analysis_reports_history
+                   (id, ticker, 종목명, report_html, scores_json, model_used, generated_date)
+                   VALUES (nextval('seq_us_report_history'), ?, ?, ?, ?, ?, ?)""",
+                [old_dict["ticker"], old_dict.get("종목명", ""),
+                 old_dict.get("report_html", ""), old_dict.get("scores_json", ""),
+                 old_dict.get("model_used", ""), old_dict.get("generated_date", "")],
+            )
+        conn.execute(
+            """INSERT OR REPLACE INTO us_analysis_reports
+               (ticker, 종목명, report_html, scores_json, model_used, generated_date, input_hash)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            [ticker, name, html, scores_json, model, date, input_hash],
+        )
+    log.info("US 보고서 저장: %s %s", ticker, name)
+
+
+def load_us_report(ticker: str) -> dict | None:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT * FROM us_analysis_reports WHERE ticker = ?",
+            [ticker.upper()],
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        cols = [d[0] for d in cur.description]
+        return dict(zip(cols, row))
+
+
+def list_us_reports() -> list[dict]:
+    with get_conn() as conn:
+        try:
+            cur = conn.execute(
+                "SELECT ticker, 종목명, model_used, generated_date "
+                "FROM us_analysis_reports ORDER BY generated_date DESC"
+            )
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+        except Exception:
+            return []
+
+
+def get_us_analysis_data_version() -> str:
+    """US 종목 AI 분석 캐시 무효화용 데이터 버전 문자열."""
+    tables = ["us_daily", "us_financial_statements"]
+    versions = []
+    with get_conn() as conn:
+        for table in tables:
+            try:
+                row = conn.execute(
+                    f"SELECT MAX(collected_date) FROM {table}"
+                ).fetchone()
+            except Exception:
+                row = None
+            versions.append(f"{table}:{row[0] if row and row[0] else '-'}")
+    return "|".join(versions)
+
+
+def load_us_report_history(ticker: str) -> list[dict]:
+    """특정 ticker의 이전 분석 보고서 목록 (최신순, 최대 10건)."""
+    with get_conn() as conn:
+        try:
+            cur = conn.execute(
+                """SELECT id, ticker, 종목명, model_used, generated_date
+                   FROM us_analysis_reports_history
+                   WHERE ticker = ?
+                   ORDER BY generated_date DESC
+                   LIMIT 10""",
+                [ticker.upper()],
+            )
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+        except Exception:
+            return []
+
+
+def load_us_report_history_detail(history_id: int) -> dict | None:
+    with get_conn() as conn:
+        try:
+            cur = conn.execute(
+                "SELECT * FROM us_analysis_reports_history WHERE id = ?",
                 [history_id],
             )
             row = cur.fetchone()
