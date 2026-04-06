@@ -162,7 +162,12 @@ def normalize_code(x):
 
 def load_table(prefix: str) -> pd.DataFrame:
     import db as _db
-    df = _db.load_latest(prefix)
+    # price_history는 per-ticker 로드: 수집 실패로 최신 배치에서 누락된 종목도
+    # 이전 배치 데이터를 사용해 RS 계산이 가능하도록 함
+    if prefix == "price_history":
+        df = _db.load_latest_per_ticker("price_history", "종목코드")
+    else:
+        df = _db.load_latest(prefix)
     if df.empty: return df
     df.columns = df.columns.str.strip()
     if "종목코드" in df.columns:
@@ -955,10 +960,14 @@ def calc_valuation(daily, anal_df, multiplier, shares_df):
     df["SRIM_오메가"] = omega_series.round(3)
 
     # S-RIM 공식: BPS + BPS × (ROE - Ke) × ω / (1 + Ke - ω)
+    # 적용 조건: ROE > 0 이고 BPS > 0 인 흑자 기업만 (적자 기업은 NaN — S-RIM 이론 적용 불가)
     # ROE > Ke: 초과이익 프리미엄 (동적 omega 적용)
     # 0 < ROE ≤ Ke: 가치 훼손 비례 할인 (BPS × ROE/Ke)
-    # ROE ≤ 0: 심각한 가치 훼손 (BPS × 0.3, 청산가치 근사)
-    _roe = df["ROE(%)"]
+    # ROE ≤ 0: NaN — S-RIM은 지속 가능한 초과이익 기반 모델이므로 적자 기업에 미적용
+    # ── ROE 보정: 영업이익 ≤ 0 + 순이익 > 0 → 일회성 이익 → S-RIM용 ROE = 0 (→ NaN) ──
+    _ttm_op = df["TTM_영업이익"] if "TTM_영업이익" in df.columns else pd.Series(np.nan, index=df.index)
+    _nonrecurring = pd.notna(_ttm_op) & (_ttm_op <= 0) & (df["TTM_순이익"] > 0)
+    _roe = pd.Series(np.where(_nonrecurring, 0.0, df["ROE(%)"]), index=df.index)
     _bps = df["BPS"]
     _srim_premium = _bps + _bps * (_roe / 100.0 - Ke_dec) * omega_series / (
         (1 + Ke_dec - omega_series).clip(lower=1e-6)
@@ -969,10 +978,11 @@ def calc_valuation(daily, anal_df, multiplier, shares_df):
         np.where(
             (_roe > 0) & (_roe <= Ke) & (_bps > 0),
             _bps * (_roe / Ke),          # 가치 훼손: ROE/Ke 비율만큼 할인
-            np.where(_bps > 0, _bps * 0.5, np.nan),  # ROE≤0: 청산가치 50% (일시적 적자 허용)
+            np.nan,                      # ROE≤0: S-RIM 미적용 (적자 기업에 모델 부적합)
         ),
     )
     df["괴리율(%)"] = ((df["적정주가_SRIM"] - df["종가"]) / df["종가"]) * 100
+    df["괴리율(%)"] = df["괴리율(%)"].clip(-90, 300)  # 극단 이상치 방지 (-90%=과대평가 하한, 300%=저평가 상한)
 
     # ── EPV (Earnings Power Value): 정상이익 자본화 ────────────────────
     # Greenwald 방식: 성장 없이 현 FCF가 영속한다는 보수적 가정
@@ -1122,6 +1132,7 @@ def calc_valuation(daily, anal_df, multiplier, shares_df):
     df["적정주가_종합"] = _composite_vals
     df["밸류_모델수"] = _model_counts
     df["종합괴리율(%)"] = ((pd.Series(_composite_vals, index=df.index) - df["종가"]) / df["종가"]) * 100
+    df["종합괴리율(%)"] = df["종합괴리율(%)"].clip(-90, 300)  # 극단 이상치 방지
 
     # PER 이상치 플래그
     df["PER_이상"] = np.where(
@@ -1149,6 +1160,54 @@ def calc_valuation(daily, anal_df, multiplier, shares_df):
                         + f7_val
                         + row.get("F8_매출총이익률", 0) + row.get("F9_자산회전율", 0)
                     )
+
+    # ── 지배구조 건전성 점수 (0-5) ──
+    if shares_df is not None and not shares_df.empty:
+        s_latest = shares_df.sort_values("기준일").drop_duplicates("종목코드", keep="last").set_index("종목코드")
+
+        # G2: 외국인 지분율 >= 10%
+        if "외국인_지분율" in s_latest.columns:
+            foreign_map = s_latest["외국인_지분율"]
+            df["외국인_지분율"] = df["종목코드"].map(foreign_map)
+        else:
+            df["외국인_지분율"] = np.nan
+
+        # G3: 최대주주 지분율 < 50%
+        if "최대주주_지분율" in s_latest.columns:
+            major_map = s_latest["최대주주_지분율"]
+            df["최대주주_지분율"] = df["종목코드"].map(major_map)
+        else:
+            df["최대주주_지분율"] = np.nan
+
+        # G4: 감사의견
+        if "감사의견" in s_latest.columns:
+            audit_map = s_latest["감사의견"]
+            df["감사의견"] = df["종목코드"].map(audit_map)
+        else:
+            df["감사의견"] = None
+    else:
+        df["외국인_지분율"] = np.nan
+        df["최대주주_지분율"] = np.nan
+        df["감사의견"] = None
+
+    g1 = df.get("F7_희석없음", pd.Series(0, index=df.index)).fillna(0).astype(int)
+    g2 = np.where(df["외국인_지분율"].fillna(0) >= 10, 1, 0)
+    g3 = np.where(df["최대주주_지분율"].fillna(100) < 50, 1, 0)
+    g4 = np.where(df["감사의견"].fillna("") == "적정", 1, 0)
+
+    if shares_df is not None and not shares_df.empty and "자사주" in s_latest.columns and "발행주식수" in s_latest.columns:
+        treasury_ratio = (
+            df["종목코드"].map(s_latest["자사주"].fillna(0)) /
+            df["종목코드"].map(s_latest["발행주식수"].replace(0, np.nan)).fillna(np.nan) * 100
+        ).fillna(0)
+    else:
+        treasury_ratio = pd.Series(0, index=df.index)
+
+    has_dividend = df.get("배당수익률(%)", pd.Series(0, index=df.index)).fillna(0) > 0
+    has_buyback = treasury_ratio > 2
+    g5 = np.where(has_dividend | has_buyback, 1, 0)
+
+    df["지배구조_점수"] = g1 + g2 + g3 + g4 + g5
 
     return df
 
@@ -1272,7 +1331,7 @@ def calc_technical_indicators(df, price_hist, index_hist=None, master=None):
                     vp_divergence = 0
 
         # ── Raw RS (기간별 초과수익률) — composite는 루프 후 선랭킹 방식으로 계산 ──
-        rs_60d = rs_120d = rs_250d = np.nan
+        rs_20d = rs_60d = rs_120d = rs_250d = np.nan
         if idx_map:
             market = market_map.get(str(code), "KOSPI")
             if market not in idx_map:
@@ -1280,14 +1339,18 @@ def calc_technical_indicators(df, price_hist, index_hist=None, master=None):
             idx_s = idx_map[market]
             stock_dates = ph["날짜"]
 
+            stock_ret_20 = _rs_ret(ph["종가"], 20)
             stock_ret_60 = _rs_ret(ph["종가"], 60)
             stock_ret_120 = _rs_ret(ph["종가"], 120)
             stock_ret_250 = _rs_ret(ph["종가"], 250)
 
+            idx_ret_20 = _index_ret(idx_s, stock_dates, 20)
             idx_ret_60 = _index_ret(idx_s, stock_dates, 60)
             idx_ret_120 = _index_ret(idx_s, stock_dates, 120)
             idx_ret_250 = _index_ret(idx_s, stock_dates, 250)
 
+            if pd.notna(stock_ret_20) and pd.notna(idx_ret_20):
+                rs_20d = stock_ret_20 - idx_ret_20
             if pd.notna(stock_ret_60) and pd.notna(idx_ret_60):
                 rs_60d = stock_ret_60 - idx_ret_60
             if pd.notna(stock_ret_120) and pd.notna(idx_ret_120):
@@ -1304,7 +1367,7 @@ def calc_technical_indicators(df, price_hist, index_hist=None, master=None):
             "거래대금_20일평균": v20, "거래대금_증감(%)": (v5/v20_prior-1)*100 if pd.notna(v20_prior) and v20_prior > 0 else np.nan,
             "변동성_60일(%)": vol60,
             "거래량_가격_괴리": vp_divergence,
-            "RS_60d": rs_60d, "RS_120d": rs_120d, "RS_250d": rs_250d,
+            "RS_20d": rs_20d, "RS_60d": rs_60d, "RS_120d": rs_120d, "RS_250d": rs_250d,
         })
 
     tech_df = pd.DataFrame(techs)
@@ -1312,8 +1375,10 @@ def calc_technical_indicators(df, price_hist, index_hist=None, master=None):
     # ── Composite RS: 기간별 선랭킹 후 가중합산 (O'Neil 방식) ──
     # 각 기간의 raw RS를 전 종목 대비 percentile rank(0~100)로 먼저 변환 →
     # 이후 가중평균: 수익률 크기 편향 제거, 기간별 균등 기여 보장
+    # RS_20d는 신규상장 등 60일 미만 종목의 fallback 전용 (정상 종목에는 사용 안 함)
     _rs_weights = [("RS_60d", 0.4), ("RS_120d", 0.3), ("RS_250d", 0.3)]
-    for rs_col, _ in _rs_weights:
+    _rs_all_cols = [c for c, _ in _rs_weights] + ["RS_20d"]
+    for rs_col in _rs_all_cols:
         if rs_col in tech_df.columns and tech_df[rs_col].notna().any():
             tech_df[f"_rank_{rs_col}"] = tech_df[rs_col].rank(pct=True, na_option="keep") * 100
         else:
@@ -1326,11 +1391,17 @@ def calc_technical_indicators(df, price_hist, index_hist=None, master=None):
             if pd.notna(v):
                 total_val += v * w
                 total_w += w
+        # 신규상장 fallback: 60d/120d/250d 모두 NaN → 20d 단독 사용
+        if total_w == 0:
+            v_20 = row.get("_rank_RS_20d", np.nan)
+            if pd.notna(v_20):
+                total_val, total_w = v_20, 1.0
         return total_val / total_w if total_w > 0 else np.nan
 
     tech_df["Composite_RS"] = tech_df.apply(_weighted_composite, axis=1)
     # 임시 랭킹 컬럼 제거
-    tech_df = tech_df.drop(columns=[f"_rank_{c}" for c, _ in _rs_weights if f"_rank_{c}" in tech_df.columns])
+    _rank_cols = [f"_rank_{c}" for c in _rs_all_cols if f"_rank_{c}" in tech_df.columns]
+    tech_df = tech_df.drop(columns=_rank_cols)
 
     result = df.merge(tech_df, on="종목코드", how="left")
 
@@ -1353,7 +1424,7 @@ def calc_investor_strength(inv_df, daily, price_hist=None):
     """
     if inv_df.empty: return pd.DataFrame(columns=["종목코드", "수급강도", "외인순매수_20d", "기관순매수_20d"])
     res = []
-    
+
     inv_grouped = {k: v for k, v in inv_df.groupby("종목코드")}
     daily_dedup = daily.drop_duplicates("종목코드").set_index("종목코드")
     daily_mcap = daily_dedup["시가총액"].to_dict()
@@ -1362,21 +1433,34 @@ def calc_investor_strength(inv_df, daily, price_hist=None):
 
     for code in inv_df["종목코드"].unique():
         if code not in inv_grouped: continue
-        df_code = inv_grouped[code].sort_values("날짜", ascending=False).head(20)
-        f_sum, i_sum = df_code["외국인순매수"].sum(), df_code["기관순매수"].sum()
+        df_all = inv_grouped[code].sort_values("날짜", ascending=False)
+        df_20  = df_all.head(20)
+        df_40  = df_all.head(40)
+        df_r10 = df_all.head(10)
+        df_p10 = df_all.iloc[10:20]
+
+        f_sum = df_20["외국인순매수"].sum()
+        i_sum = df_20["기관순매수"].sum()
+        f_sum_40 = df_40["외국인순매수"].sum()
+        i_sum_40 = df_40["기관순매수"].sum()
+
         mcap = daily_mcap.get(code, np.nan)
         close_price = daily_close.get(code, np.nan)
         # 순매수는 주(株) 단위 → 금액으로 변환 후 시가총액 대비 비율 계산
         if pd.notna(mcap) and mcap > 0 and pd.notna(close_price) and close_price > 0:
             strength = ((f_sum + i_sum) * close_price / mcap) * 100
+            strength_40d = ((f_sum_40 + i_sum_40) * close_price / mcap) * 100 if len(df_40) >= 20 else np.nan
         else:
             strength = np.nan
+            strength_40d = np.nan
+
+        strength_change = (strength - strength_40d) if pd.notna(strength) and pd.notna(strength_40d) else np.nan
 
         # ── 스마트머니 매집 연속성 ──
-        n = len(df_code)
+        n = len(df_20)
         if n > 0:
-            buy_days = ((df_code["외국인순매수"] > 0) | (df_code["기관순매수"] > 0)).sum()
-            both_days = ((df_code["외국인순매수"] > 0) & (df_code["기관순매수"] > 0)).sum()
+            buy_days = ((df_20["외국인순매수"] > 0) | (df_20["기관순매수"] > 0)).sum()
+            both_days = ((df_20["외국인순매수"] > 0) & (df_20["기관순매수"] > 0)).sum()
             smart_ratio = buy_days / n
             both_ratio = both_days / n
         else:
@@ -1409,9 +1493,26 @@ def calc_investor_strength(inv_df, daily, price_hist=None):
         if pd.notna(close_price) and close_price > 0:
             f_amount = f_sum * close_price
             i_amount = i_sum * close_price
+            # 매수 가속도: 최근 10일 vs 이전 10일
+            if len(df_p10) > 0:
+                foreign_accel = (df_r10["외국인순매수"].sum() - df_p10["외국인순매수"].sum()) * close_price
+                instit_accel  = (df_r10["기관순매수"].sum()  - df_p10["기관순매수"].sum())  * close_price
+            else:
+                foreign_accel = np.nan
+                instit_accel  = np.nan
         else:
             f_amount = np.nan
             i_amount = np.nan
+            foreign_accel = np.nan
+            instit_accel  = np.nan
+
+        # ── 조용한 매집 점수 (0-100) ──
+        quiet_score = 0.0
+        if pd.notna(strength) and strength > 0:               quiet_score += 20
+        if pd.notna(smart_ratio) and smart_ratio >= 0.60:     quiet_score += 25
+        if pd.notna(both_ratio)  and both_ratio  >= 0.30:     quiet_score += 20
+        if pd.notna(strength_change) and strength_change > 0: quiet_score += 20
+        if vcp == 1:                                           quiet_score += 15
 
         res.append({
             "종목코드": code,
@@ -1421,6 +1522,10 @@ def calc_investor_strength(inv_df, daily, price_hist=None):
             "스마트머니_승률": smart_ratio * 100 if pd.notna(smart_ratio) else np.nan,
             "양매수_비율": both_ratio * 100 if pd.notna(both_ratio) else np.nan,
             "VCP_신호": vcp,
+            "수급강도_변화": strength_change,
+            "외인_매수_가속도": foreign_accel,
+            "기관_매수_가속도": instit_accel,
+            "조용한_매집_점수": min(quiet_score, 100.0),
         })
     return pd.DataFrame(res)
 
@@ -1601,6 +1706,7 @@ def calc_strategy_scores(df):
     S_ROE = get_rank("ROE(%)", asc=True, zero_if_nan=True)  # 엄격
     S_FCF = get_rank("FCF수익률(%)", asc=True, zero_if_nan=True)  # 엄격
     S_OpCAGR, S_QOpYoY = get_rank("영업이익_CAGR"), get_rank("Q_영업이익_YoY(%)")  # 온화
+    S_RevCAGR = get_rank("매출_CAGR")  # 온화: 탑라인 성장률
     S_Div, S_Supply, S_Vol = get_rank("배당수익률(%)"), get_rank("수급강도"), get_rank("거래대금_20일평균")  # 온화
 
     # 퀄리티 지표 — 엄격 처리 (증명된 성장/개선만 인정)
@@ -1611,13 +1717,27 @@ def calc_strategy_scores(df):
     S_GPM_delta = get_rank("GPM_변화(pp)", asc=True, zero_if_nan=True)  # 엄격: 이익률 개선
     S_SustainedQ = get_rank("지속가치_품질", asc=True, zero_if_nan=True)  # 엄격: 가치 성장 지속성
     S_CoMove = get_rank("매출이익_동행성", asc=True, zero_if_nan=True)    # 엄격: 매출-이익 동행
+    S_OpConsec = get_rank("영업이익_연속성장", asc=True, zero_if_nan=True)  # 엄격: 연속성장 횟수 (수주형 배제)
+    S_CashConv = get_rank("현금전환율(%)", asc=True, zero_if_nan=True)     # 엄격: 이익→현금 전환 품질
     # 주도주: RS_등급(25%) + 수급강도(20%) + 거래대금(10%) + 영업이익CAGR(15%) + Q_YoY(15%) + 실적가속(10%) + RSI(5%)
     df["주도주_점수"] = (S_RS*0.25 + S_Supply*0.20 + S_Vol*0.10 + S_OpCAGR*0.15 + S_QOpYoY*0.15 + S_Accel*0.10 + get_rank("RSI_14")*0.05)
     # FCF수익률(20%) + ROIC(20%) + F스코어(15%) + 종합괴리율(20%) + 지속가치_품질(15%) + 매출이익_동행성(10%)
     # PEG역순 제거 → PEG<1.2 하드필터에서 이미 검증됨, 대신 성장지속성/동행성 직접 반영
     df["우량가치_점수"] = (S_FCF*0.20 + S_ROIC*0.20 + get_rank("F스코어")*0.15 + get_rank("종합괴리율(%)")*0.20 + S_SustainedQ*0.15 + S_CoMove*0.10)
-    # Q_영업이익_YoY(20%) + 실적가속_연속(20%) + 영업이익_CAGR(15%) + RS_등급(25%) + PEG역순(20%)
-    df["고성장_점수"] = (S_QOpYoY*0.20 + S_Accel*0.20 + S_OpCAGR*0.15 + S_RS*0.25 + S_PEG_inv*0.20)
+    # ── 복리성장 해자 전략 점수 (4 Pillar) ──
+    # Pillar 1: 성장 기울기(30%) — 기업가치 증가 속도
+    #   영업이익_CAGR(15%) + 매출_CAGR(10%) + Q_영업이익_YoY(5%)
+    # Pillar 2: 성장 지속성(25%) — 수주 싸이클 vs 해자 구분
+    #   영업이익_연속성장(15%) + 실적가속_연속(10%)
+    # Pillar 3: 해자 품질(35%) — 경쟁 우위 강도
+    #   ROIC(15%) + 지속가치_품질(12%) + 현금전환율(8%)
+    # Pillar 4: 추세 확인(10%) — 시장 인식 반영 (RS 25%→10%로 격하, PEG 제거)
+    df["고성장_점수"] = (
+        S_OpCAGR*0.15 + S_RevCAGR*0.10 + S_QOpYoY*0.05
+        + S_OpConsec*0.15 + S_Accel*0.10
+        + S_ROIC*0.15 + S_SustainedQ*0.12 + S_CashConv*0.08
+        + S_RS*0.10
+    )
     # 현금배당: FCF(25%) + 배당수익률(20%) + DPS성장(15%) + ROIC해자(15%) + 배당성향역순(10%) + F스코어(10%) + 부채비율(5%)
     # + 배당연속증가 보너스(로그 스케일, 최대+10) + 수익동반증가 추가보너스(+2) × 경고신호 페널티 승수(×0.7)
     # 기존: 배당_수익동반증가 binary * 5 → 1년=10년 동일 +5점 문제
@@ -1815,16 +1935,18 @@ def apply_quality_value_screen(df):
 
 def apply_growth_mom_screen(df):
     mask = (
-        # 1. 외형과 내실의 동반 성장 (AND 유지, 기준 10%로 현실화)
-        (df["매출_CAGR"].fillna(0) >= 10)
-        & (df["영업이익_CAGR"].fillna(0) >= 10)
-        # 2. 최근 분기 실적 성장 (역성장 제외)
-        & (df["Q_영업이익_YoY(%)"].fillna(0) > 0)
-        # 3. 시장 주도 모멘텀 (70 -> 50: 시장 평균 이상이면 후보군 포함)
-        & (df["RS_등급"].fillna(0) >= 50)
+        # 1. 외형과 내실의 동반 성장 (8%로 소폭 완화 — 해자형 기업은 안정 성장)
+        (df["매출_CAGR"].fillna(0) >= 8)
+        & (df["영업이익_CAGR"].fillna(0) >= 8)
+        # 2. 성장 지속성: 최소 2년 연속 영업이익 성장 (수주 싸이클 배제)
+        & (df["영업이익_연속성장"].fillna(0) >= 2)
+        # 3. 해자 강화 증거: 마진이 개선 중 (매출이익_동행성 >= 1)
+        & (df["매출이익_동행성"].fillna(-1) >= 1)
         # 4. 리스크 방어 (흑자도산 방지)
         & (df["TTM_영업CF"].fillna(-1) > 0)
         & (df["시가총액"].fillna(0) >= 50_000_000_000)
+        # ※ RS_등급 >= 50 제거 (가격 모멘텀 게이트 불필요 — 해자 품질 우선)
+        # ※ Q_영업이익_YoY > 0 제거 (영업이익_연속성장 >= 2가 더 robust)
     )
     return df[mask].sort_values("고성장_점수", ascending=False)
 
@@ -1963,9 +2085,36 @@ def run():
         calc_investor_strength(inv, daily, price_hist=hist if not hist.empty else None),
         on="종목코드", how="left",
     )
+    # ── 외국인 지분율 이력 기반 변화량 계산 ──
+    import db as _db
+    foh_df = _db.load_foreign_ownership_history()
+    if not foh_df.empty:
+        foh_df["날짜_dt"] = pd.to_datetime(foh_df["날짜"])
+        foh_sorted = foh_df.sort_values(["종목코드", "날짜_dt"])
+        foh_sorted["latest_dt"] = foh_sorted.groupby("종목코드")["날짜_dt"].transform("max")
+        foh_sorted["days_back"] = (foh_sorted["latest_dt"] - foh_sorted["날짜_dt"]).dt.days
+        foh_latest = (foh_sorted.groupby("종목코드").last().reset_index()
+                      [["종목코드", "외국인_지분율"]])
+        foh_prior = (foh_sorted[foh_sorted["days_back"] >= 28]
+                     .sort_values(["종목코드", "날짜_dt"])
+                     .groupby("종목코드").last().reset_index()
+                     [["종목코드", "외국인_지분율"]]
+                     .rename(columns={"외국인_지분율": "_prior"}))
+        foh_change = foh_latest.merge(foh_prior, on="종목코드", how="left")
+        foh_change["외국인_지분율_변화"] = foh_change["외국인_지분율"] - foh_change["_prior"]
+        foh_change = foh_change[["종목코드", "외국인_지분율_변화"]]
+        full = full.merge(foh_change, on="종목코드", how="left")
+    else:
+        full["외국인_지분율_변화"] = np.nan
+    # 외국인 지분율 상승 시 조용한_매집_점수 +5 보너스 (최대 100)
+    if "조용한_매집_점수" in full.columns and "외국인_지분율_변화" in full.columns:
+        bonus = full["외국인_지분율_변화"].fillna(0) > 0
+        full.loc[bonus, "조용한_매집_점수"] = (full.loc[bonus, "조용한_매집_점수"].fillna(0) + 5).clip(upper=100)
     # ── 기술적/수급 지표 이상치 클리핑 (표시 왜곡 + 퍼센타일 편향 방지) ──
     if "수급강도" in full.columns:
         full["수급강도"] = full["수급강도"].clip(-10, 10)       # 소형주 대량매수 ±50%+ 방지
+    if "수급강도_변화" in full.columns:
+        full["수급강도_변화"] = full["수급강도_변화"].clip(-10, 10)
     if "거래대금_증감(%)" in full.columns:
         full["거래대금_증감(%)"] = full["거래대금_증감(%)"].clip(-90, 500)  # 거래대금 극소 시 5,000%+ 방지
     if "변동성_60일(%)" in full.columns:

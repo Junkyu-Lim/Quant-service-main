@@ -114,6 +114,21 @@ _SCHEMA_STATEMENTS = [
 )""",
     "ALTER TABLE analysis_reports ADD COLUMN IF NOT EXISTS input_hash TEXT",
     "ALTER TABLE analysis_reports ADD COLUMN IF NOT EXISTS diff_html TEXT",
+    "ALTER TABLE shares ADD COLUMN IF NOT EXISTS \"최대주주_지분율\" DOUBLE",
+    "ALTER TABLE shares ADD COLUMN IF NOT EXISTS \"외국인_지분율\" DOUBLE",
+    "ALTER TABLE shares ADD COLUMN IF NOT EXISTS 감사의견 TEXT",
+    """CREATE TABLE IF NOT EXISTS foreign_ownership_history (
+    종목코드       TEXT NOT NULL,
+    날짜           TEXT NOT NULL,
+    외국인_지분율  DOUBLE,
+    PRIMARY KEY (종목코드, 날짜)
+)""",
+    "CREATE INDEX IF NOT EXISTS idx_foh_code_date ON foreign_ownership_history (종목코드, 날짜)",
+    "ALTER TABLE dashboard_result ADD COLUMN IF NOT EXISTS 조용한_매집_점수 DOUBLE",
+    "ALTER TABLE dashboard_result ADD COLUMN IF NOT EXISTS 수급강도_변화 DOUBLE",
+    "ALTER TABLE dashboard_result ADD COLUMN IF NOT EXISTS 외인_매수_가속도 DOUBLE",
+    "ALTER TABLE dashboard_result ADD COLUMN IF NOT EXISTS 기관_매수_가속도 DOUBLE",
+    "ALTER TABLE dashboard_result ADD COLUMN IF NOT EXISTS 외국인_지분율_변화 DOUBLE",
     """CREATE TABLE IF NOT EXISTS portfolio (
     종목코드      TEXT PRIMARY KEY,
     종목명        TEXT,
@@ -558,6 +573,39 @@ def load_dividend_history() -> pd.DataFrame:
         except Exception:
             return pd.DataFrame(columns=["종목코드", "기준일", "DPS"])
     return df
+
+
+def save_foreign_ownership_history(records_df: pd.DataFrame):
+    """외국인 지분율 일별 이력 누적 저장.
+
+    shares 테이블은 배치마다 덮어쓰므로 추세 분석을 위해
+    날짜별 스냅샷을 별도 이력 테이블에 보존한다.
+    """
+    if records_df.empty:
+        return
+    data = records_df[["종목코드", "날짜", "외국인_지분율"]].copy()
+    data = data.dropna(subset=["외국인_지분율"])
+    if data.empty:
+        return
+    with get_conn() as conn:
+        conn.register("_foh_tmp", data)
+        conn.execute("""
+            INSERT OR REPLACE INTO foreign_ownership_history (종목코드, 날짜, 외국인_지분율)
+            SELECT 종목코드, 날짜, 외국인_지분율 FROM _foh_tmp
+        """)
+        conn.unregister("_foh_tmp")
+    log.info("저장: foreign_ownership_history (%d건)", len(data))
+
+
+def load_foreign_ownership_history() -> pd.DataFrame:
+    """foreign_ownership_history 전체 반환."""
+    with get_conn() as conn:
+        try:
+            return conn.execute(
+                "SELECT 종목코드, 날짜, 외국인_지분율 FROM foreign_ownership_history ORDER BY 종목코드, 날짜"
+            ).df()
+        except Exception:
+            return pd.DataFrame(columns=["종목코드", "날짜", "외국인_지분율"])
 
 
 # ─────────────────────────────────────────────

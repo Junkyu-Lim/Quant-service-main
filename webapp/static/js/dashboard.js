@@ -59,8 +59,9 @@
     quality_value:    "종합점수",
     growth_mom:       "종합점수",
     cash_div:         "종합점수",
-    turnaround:       "종합점수",
-    multi_strategy:   "종합점수",
+    turnaround:           "종합점수",
+    quiet_accumulation:   "조용한_매집_점수",
+    multi_strategy:       "종합점수",
     forward_covered:  "Fwd_모멘텀_점수",
     watchlist:        "종합점수",
     portfolio:        "비중",
@@ -266,10 +267,11 @@
     all:            { title: "📊 전체 종목",            criteria: "전체 시장 종목 조회" },
     leaders:        { title: "🔥 시장 주도주 (Leaders)",  criteria: "시총 1,000억↑ · 순이익 흑자 · RS 80↑ · 수급(+) · 거래 5억↑" },
     quality_value:  { title: "💎 우량가치 (Quality & Value)", criteria: "일반(ROIC 10%·PEG<1.2) + 금융(ROE 8%·PBR<1.5) 듀얼 트랙" },
-    growth_mom:     { title: "🚀 고성장 모멘텀 (Growth)", criteria: "매출/이익 동반성장(10%↑) · RS 50↑ · 흑자도산 방지" },
+    growth_mom:     { title: "🏰 복리성장 해자 (Compounding Moat)", criteria: "매출/이익 CAGR 8%↑ · 연속성장 2년↑ · 마진개선 · 해자품질" },
     cash_div:       { title: "💰 현금배당 (Cash & Div)",  criteria: "FCF수익률 3%↑ · 배당수익률 1%↑ · 배당성향 < 80% · 현금전환율 70%↑ · 부채비율 < 120%" },
-    turnaround:     { title: "🔄 턴어라운드 (Turnaround)", criteria: "흑자전환 OR 이익률 급개선 · TTM 순이익 흑자" },
-    multi_strategy:  { title: "🏆 Multi-Pick (3관왕 이상)", criteria: "5개 전략 중 3개 이상 동시 선정 종목" },
+    turnaround:         { title: "🔄 턴어라운드 (Turnaround)", criteria: "흑자전환 OR 이익률 급개선 · TTM 순이익 흑자" },
+    quiet_accumulation: { title: "🤫 조용한 매집 (Quiet Accumulation)", criteria: "매집점수 60↑ · 수급강도(+) · 스마트머니 55%↑ · 시총 500억↑ · 외인지분율 상승 보너스" },
+    multi_strategy:     { title: "🏆 Multi-Pick (3관왕 이상)", criteria: "5개 전략 중 3개 이상 동시 선정 종목" },
     forward_covered: { title: "🔭 Forward Est. (컨센서스 추정치)", criteria: "애널리스트 커버 ~535종목 내 Forward 모멘텀 점수 순위" },
     watchlist:       { title: "⭐ 관심 종목",             criteria: "사용자가 직접 추가한 종목" },
     portfolio:       { title: "📋 포트폴리오 (보유종목)",   criteria: "매수 수량/단가 기록, 수익률/비중 분석" },
@@ -278,7 +280,7 @@
     all:            { title: "📊 전체 종목", criteria: "NYSE/NASDAQ + GICS 기준 US 스크리너" },
     leaders:        { title: "🔥 시장 주도주 (US)", criteria: "시총 $10B↑ · 흑자 · RS 80↑ · 거래대금 $5M↑" },
     quality_value:  { title: "💎 우량가치 (US)", criteria: "ROIC 10%↑ · F스코어 5↑ · PEG<1.5 · 시총 $2B↑" },
-    growth_mom:     { title: "🚀 고성장 모멘텀 (US)", criteria: "매출/이익 CAGR 10%↑ · 분기 이익 성장 · RS 50↑ · 시총 $1B↑" },
+    growth_mom:     { title: "🏰 복리성장 해자 (US)", criteria: "매출/이익 CAGR 8%↑ · 연속성장 2년↑ · 마진개선 · 해자품질" },
     cash_div:       { title: "💰 현금배당 (US)", criteria: "FCF수익률 3%↑ · 배당수익률 1%↑ · 배당 연속증가 · 시총 $1B↑" },
     turnaround:     { title: "🔄 턴어라운드 (US)", criteria: "흑전/이익률 급개선 · OCF(+) · 거래대금 급증 또는 VCP · 시총 $500M↑" },
     multi_strategy: { title: "🏆 Multi-Pick (US)", criteria: "5개 전략 중 3개 이상 동시 통과" },
@@ -405,39 +407,60 @@
       </ul>
     `,
     growth_mom: `
-      <h6>🚀 고성장 모멘텀주 (Growth) 투자</h6>
-      <p>매출과 이익이 폭발적으로 성장하며 주가 추세가 살아있는 종목입니다.</p>
+      <h6>🏰 복리성장 해자주 (Compounding Moat) 투자</h6>
+      <p>수주 싸이클이 아닌 <strong>단단한 해자(경쟁 우위)</strong>를 바탕으로 기업 가치가 복리로 성장하는 종목입니다. 가격(밸류에이션)보다 성장의 <em>지속성</em>과 <em>품질</em>을 우선합니다.</p>
 
       <h6>✅ 진입 조건 (모두 충족 필요)</h6>
       <ul>
-        <li>매출_CAGR ≥ 10% & 영업이익_CAGR ≥ 10% (연간 복합 성장)</li>
-        <li>분기 영업이익 YoY > 0 (최근 분기도 성장 중)</li>
-        <li><strong>RS_등급 ≥ 50</strong> (시장 대비 상대강도 중위권 이상)</li>
-        <li>TTM 영업현금흐름 > 0 (흑자도산 방지)</li>
+        <li>매출_CAGR ≥ 8% & 영업이익_CAGR ≥ 8% (안정적 복합 성장)</li>
+        <li><strong>영업이익_연속성장 ≥ 2년</strong> (수주 싸이클 기업 배제 — 해자의 핵심 증거)</li>
+        <li><strong>매출이익_동행성 ≥ 1</strong> (마진이 개선 중 — 해자 강화 증거)</li>
+        <li>TTM 영업현금흐름 > 0 (현금 창출력 확인)</li>
         <li>시총 ≥ 500억</li>
       </ul>
 
-      <h6>📐 고성장 점수 구성</h6>
+      <h6>📐 복리성장 점수 구성 (4 Pillar)</h6>
       <ul>
-        <li><span class="badge bg-primary text-white">RS_등급</span> × <strong>25%</strong> — 주가 추세가 점수 최대 비중. 성장주는 주가 선행이 핵심.</li>
-        <li><span class="badge bg-primary text-white">분기영업이익YoY</span> × 20% — 최근 실적 모멘텀</li>
-        <li><span class="badge bg-primary text-white">실적가속_연속</span> × 20% — 2분기 연속 YoY 가속도 양수</li>
-        <li><span class="badge bg-light text-dark border">PEG 역순</span> × 20% — 성장률 대비 밸류에이션</li>
-        <li><span class="badge bg-light text-dark border">영업이익_CAGR</span> × 15% — 연간 성장 지속성</li>
+        <li><strong>Pillar 1 — 성장 기울기 (30%)</strong>
+          <ul>
+            <li><span class="badge bg-success text-white">영업이익_CAGR</span> × 15% — 이익 증가 속도</li>
+            <li><span class="badge bg-success text-white">매출_CAGR</span> × 10% — 탑라인 성장</li>
+            <li><span class="badge bg-light text-dark border">분기영업이익YoY</span> × 5% — 최근 분기 확인</li>
+          </ul>
+        </li>
+        <li><strong>Pillar 2 — 성장 지속성 (25%)</strong>
+          <ul>
+            <li><span class="badge bg-success text-white">영업이익_연속성장</span> × 15% — 연속 성장 연수 (수주형 vs 해자형 구분)</li>
+            <li><span class="badge bg-light text-dark border">실적가속_연속</span> × 10% — 가속도 유지</li>
+          </ul>
+        </li>
+        <li><strong>Pillar 3 — 해자 품질 (35%) ← 최대 비중</strong>
+          <ul>
+            <li><span class="badge bg-warning text-dark">ROIC</span> × 15% — 투하자본수익률 (경쟁 우위의 핵심 지표)</li>
+            <li><span class="badge bg-warning text-dark">지속가치_품질</span> × 12% — ROIC+마진+FCF+이익품질 복합</li>
+            <li><span class="badge bg-warning text-dark">현금전환율</span> × 8% — 이익→현금 전환 품질</li>
+          </ul>
+        </li>
+        <li><strong>Pillar 4 — 추세 확인 (10%)</strong>
+          <ul>
+            <li><span class="badge bg-light text-dark border">RS_등급</span> × 10% — 시장의 인식 반영 (보조 확인용)</li>
+          </ul>
+        </li>
       </ul>
 
       <h6>🎯 핵심 지표 해석</h6>
       <ul>
-        <li><strong>실적가속_연속 = 1:</strong> 분기 영업이익 YoY가 2분기 연속으로 가속 중 (ΔYoY > 0 두 번 연속). 성장 모멘텀이 강화되는 가장 강력한 신호.</li>
-        <li><strong>OP가속도(영업이익_가속도):</strong> 이번 분기 YoY% − 전 분기 YoY%. 양수면 성장 가속, 음수면 감속. 가속 초기 진입이 최적.</li>
-        <li><strong>정배열 초입:</strong> MA60 이격도가 100~103% 구간에서 위를 향하면 추세 상승 초기 시그널입니다.</li>
-        <li><strong>실적 가속화 확인:</strong> 연간 CAGR보다 최근 분기 YoY가 더 높으면 성장이 가속 중 — 최우선 선별 조건.</li>
+        <li><strong>ROIC(%) ≥ 15%:</strong> 경쟁 우위가 존재한다는 강력한 증거. ROIC가 자본비용(WACC ~8~10%)을 지속적으로 초과하는 기업만이 진정한 해자 보유.</li>
+        <li><strong>영업이익_연속성장 ≥ 3:</strong> 3년 연속 영업이익 성장 = 수주 사이클이 아닌 구조적 성장. 숫자가 클수록 해자 강도 높음.</li>
+        <li><strong>매출이익_동행성 = 2:</strong> 매출↑ + 마진↑ 동시 달성 = 가격 결정력 보유 (해자의 핵심). 마진이 떨어지며 성장하는 기업은 점수 낮음.</li>
+        <li><strong>지속가치_품질 (0~6):</strong> 4점 이상이면 ROIC·FCF·이익품질 모두 우수. 진정한 복리 성장 후보.</li>
+        <li><strong>현금전환율 ≥ 100%:</strong> 영업현금흐름이 순이익보다 크면 회계 이익이 아닌 실질 현금을 창출 중.</li>
       </ul>
 
       <h6>⚠️ 주의사항</h6>
       <ul>
-        <li><strong>부채비율 200% 이하 권장:</strong> 성장을 위해 과도한 레버리지를 쓰면 금리 상승 시 취약합니다.</li>
-        <li><strong>TTM 영업CF > 0 필수:</strong> 이익은 나도 현금이 없는 기업은 흑자도산 위험. 현금 창출력 반드시 확인.</li>
+        <li><strong>가격은 의도적으로 배제:</strong> 이 전략은 PER/PBR/PEG 등 밸류에이션을 고려하지 않습니다. 해자가 강한 기업은 비싸더라도 장기 복리 성장이 가격을 정당화합니다.</li>
+        <li><strong>단기 주가 변동 무시:</strong> RS 비중을 10%로 낮췄습니다. 시장이 아직 인식하지 못한 해자 기업을 조기 발굴하는 것이 목적입니다.</li>
       </ul>
     `,
     cash_div: `
@@ -687,29 +710,30 @@
       // 점수
       { key: "우량가치_점수", label: "우량점수", fmt: "f1" }
     ],
-    // 4. 고성장 모멘텀 - CAGR, YoY, 추세, 가속도 (24개)
+    // 4. 복리성장 해자 - 성장률, 지속성, 해자품질, 타이밍 (26개)
     growth_mom: [
       // 기본
       { key: "종목코드", label: "코드" }, { key: "종목명", label: "종목명" }, { key: "섹터", label: "섹터" },
       { key: "종가", label: "현재가", fmt: "int" }, { key: "시가총액", label: "시총", fmt: "eok" },
-      // 성장 CAGR
+      // 성장 기울기 (CAGR)
       { key: "매출_CAGR", label: "매출CAGR", fmt: "f1" }, { key: "영업이익_CAGR", label: "OP CAGR", fmt: "f1" },
-      { key: "순이익_CAGR", label: "NP CAGR", fmt: "f1" }, { key: "FCF_CAGR", label: "FCF CAGR", fmt: "f1" },
+      { key: "순이익_CAGR", label: "NP CAGR", fmt: "f1" },
       // 분기 YoY
       { key: "Q_매출_YoY(%)", label: "Q 매출YoY", fmt: "f1" }, { key: "Q_영업이익_YoY(%)", label: "Q OP YoY", fmt: "f1" },
-      { key: "Q_순이익_YoY(%)", label: "Q NP YoY", fmt: "f1" },
-      // 가속도/감속
-      { key: "실적가속_연속", label: "실적가속" }, { key: "영업이익_가속도", label: "OP가속도", fmt: "f1" },
-      { key: "매출_가속도", label: "매출가속도", fmt: "f1" }, { key: "실적감속_경고", label: "감속경고", fmt: "flag" },
-      // 기술
-      { key: "MA20_이격도(%)", label: "MA20이격", fmt: "f1" }, { key: "MA60_이격도(%)", label: "MA60이격", fmt: "f1" },
-      { key: "52주_최고대비(%)", label: "고가대비%", fmt: "f1" }, { key: "RS_등급", label: "RS등급", fmt: "f1" },
+      // 성장 지속성
+      { key: "영업이익_연속성장", label: "이익연속성장", fmt: "int" }, { key: "매출_연속성장", label: "매출연속성장", fmt: "int" },
+      { key: "실적가속_연속", label: "실적가속" }, { key: "실적감속_경고", label: "감속경고", fmt: "flag" },
+      // 해자 품질
+      { key: "ROIC(%)", label: "ROIC%", fmt: "f1" }, { key: "지속가치_품질", label: "해자품질", fmt: "f1" },
+      { key: "현금전환율(%)", label: "현금전환율", fmt: "f1" }, { key: "매출이익_동행성", label: "마진동행", fmt: "f1" },
+      { key: "GPM_변화(pp)", label: "GPM변화", fmt: "f1" },
       // 수익성
-      { key: "영업이익률(%)", label: "OPM%", fmt: "f1" },
-      // 타이밍
-      { key: "과열도", label: "과열도", fmt: "f1" }, { key: "상승조짐", label: "상승조짐", fmt: "f1" },
+      { key: "영업이익률(%)", label: "OPM%", fmt: "f1" }, { key: "F스코어", label: "F스코어", fmt: "f1" },
+      // 기술/타이밍
+      { key: "RS_등급", label: "RS등급", fmt: "f1" }, { key: "MA20_이격도(%)", label: "MA20이격", fmt: "f1" },
+      { key: "과열도", label: "과열도", fmt: "f1" },
       // 점수
-      { key: "고성장_점수", label: "성장점수", fmt: "f1" }
+      { key: "고성장_점수", label: "해자점수", fmt: "f1" }
     ],
     // 5. 현금배당 - FCF, 배당, 현금흐름 (21개)
     cash_div: [
@@ -915,10 +939,11 @@
     all:            new Set(["PER", "ROE(%)", "영업이익_CAGR", "부채비율(%)", "수급강도", "배당수익률(%)", "과열도", "종합점수"]),
     leaders:        new Set(["수급강도", "RS_등급", "거래대금_증감(%)", "과열도", "주도주_점수"]),
     quality_value:  new Set(["PER", "ROE(%)", "F스코어", "영업이익_CAGR", "우량가치_점수"]),
-    growth_mom:     new Set(["매출_CAGR", "Q_매출_YoY(%)", "실적가속_연속", "MA20_이격도(%)", "영업이익률(%)", "과열도", "고성장_점수"]),
+    growth_mom:     new Set(["매출_CAGR", "Q_매출_YoY(%)", "영업이익_연속성장", "ROIC(%)", "영업이익률(%)", "RS_등급", "고성장_점수"]),
     cash_div:       new Set(["배당수익률(%)", "FCF수익률(%)", "ROIC(%)", "PER", "부채비율(%)", "현금배당_점수"]),
-    turnaround:     new Set(["흑자전환", "이익률_변동폭", "TTM_순이익", "스마트머니_승률", "PBR", "상승조짐", "턴어라운드_점수"]),
-    multi_strategy: new Set(["전략수", "종합점수", "ROE(%)", "F스코어"]),
+    turnaround:         new Set(["흑자전환", "이익률_변동폭", "TTM_순이익", "스마트머니_승률", "PBR", "상승조짐", "턴어라운드_점수"]),
+    quiet_accumulation: new Set(["수급강도", "스마트머니_승률", "양매수_비율", "수급강도_변화", "외인_매수_가속도", "외국인_지분율", "조용한_매집_점수"]),
+    multi_strategy:     new Set(["전략수", "종합점수", "ROE(%)", "F스코어"]),
     forward_covered:new Set(["PER", "Fwd_PER", "Fwd_매출_성장률(%)", "Q_영업이익_YoY(%)", "과열도", "Fwd_모멘텀_점수"]),
     watchlist:      new Set(["PER", "ROE(%)", "매출_CAGR", "부채비율(%)", "배당수익률(%)", "RS_등급", "과열도", "종합점수"]),
   };
@@ -937,9 +962,10 @@
       "영업이익_CAGR": "— 성장 —", "우량가치_점수": "— 점수 —"
     },
     growth_mom: {
-      "매출_CAGR": "— CAGR —", "Q_매출_YoY(%)": "— 분기YoY —", "실적가속_연속": "— 가속도/감속 —",
-      "MA20_이격도(%)": "— 기술 —", "영업이익률(%)": "— 수익성 —",
-      "과열도": "— 타이밍 —", "고성장_점수": "— 점수 —"
+      "매출_CAGR": "— 성장 기울기 —", "Q_매출_YoY(%)": "— 분기YoY —",
+      "영업이익_연속성장": "— 성장 지속성 —", "ROIC(%)": "— 해자 품질 —",
+      "영업이익률(%)": "— 수익성 —", "RS_등급": "— 타이밍 —",
+      "고성장_점수": "— 점수 —"
     },
     cash_div: {
       "배당수익률(%)": "— 배당 —", "FCF수익률(%)": "— 현금흐름 —", "ROIC(%)": "— 수익성 —",
@@ -1209,6 +1235,13 @@
       "스마트머니_승률": "최근 20일 중 외인 또는 기관이 순매수한 날의 비율. (Good: ≥ 60%)",
       "양매수_비율": "최근 20일 중 외인과 기관이 동시에 순매수한 날의 비율. 수급의 질적 강도.",
       "VCP_신호": "변동성 축소(CV20<CV60) + 거래량 감소(Vol20<Vol60) + 스마트머니 승률 60% 이상을 만족하는 급등 전조 패턴.",
+      "조용한_매집_점수": "수급강도·스마트머니승률·양매수비율·수급강도변화·외인매수가속도를 종합한 0-100점 매집 강도. (Good: ≥ 70, Bad: ≤ 30)",
+      "수급강도_변화": "최근 10일 수급강도 - 이전 10일 수급강도. 양수이면 수급 개선 중. (Good: > 0)",
+      "외인_매수_가속도": "외인 순매수 모멘텀 변화. 최근 10일 외인순매수 - 이전 10일. 양수면 외인 매수세 강화.",
+      "기관_매수_가속도": "기관 순매수 모멘텀 변화. 최근 10일 기관순매수 - 이전 10일. 양수면 기관 매수세 강화.",
+      "외국인_지분율": "최근 수집 시점의 외국인 보유 지분율(%). (Good: ≥ 10%)",
+      "외국인_지분율_변화": "직전 수집 대비 외국인 지분율 변화(%p). 양수이면 외인 비중 증가.",
+      "무차입_기업": "이자비용이 0원인 순 무차입 기업 여부. 1이면 외부 차입 없음. 재무 건전성 최상위 신호.",
 
       // 8. TTM 실적
       "TTM_매출": "최근 4분기 합산 매출.",
@@ -1237,6 +1270,9 @@
       "PER_이상": "PER 계산 불가 또는 음수 여부 플래그. 1이면 PER 신뢰 불가.",
       "순이익_전년음수": "전년도 순이익이 적자(음수)였는지 여부. 1이면 전년 적자.",
       "순이익_당기양수": "당기 순이익이 흑자(양수)인지 여부. 1이면 당기 흑자.",
+      "지배구조_점수": "지배구조 건전성 점수 0-5. 외국인지분율·희석없음·최대주주지분율<50%·감사의견적정·대주주무변동 합산. (Good: ≥ 4, Bad: ≤ 2)",
+      "최대주주_지분율": "최대주주 및 특수관계인 합산 보유 지분율(%). 70% 초과 시 지배구조 집중 경고.",
+      "감사의견": "최근 사업연도 감사의견. '적정'이 정상. '한정·부적정·의견거절' 시 투자 위험 신호.",
 
       // 9. 점수 (Good: ≥ 80, Bad: ≤ 50)
       "종합점수": "전체 전략 종합 점수.",
@@ -1245,7 +1281,10 @@
       "가격_점수": "밸류에이션 점수.",
       "주도주_점수": "시장 주도주 점수.",
       "우량가치_점수": "우량 가치주 점수.",
-      "고성장_점수": "고성장 모멘텀 점수.",
+      "고성장_점수": "복리성장 해자 점수. 성장기울기(30%) + 성장지속성(25%) + 해자품질(35%, ROIC·지속가치·현금전환율) + 추세확인(10%). 80↑ 매우 우수, 50↓ 미흡.",
+      "영업이익_연속성장": "영업이익이 연속으로 성장한 연수. 수주 싸이클 기업은 이 숫자가 낮고, 해자가 있는 기업은 높음. 3이상 권장, 5이상 우수.",
+      "매출이익_동행성": "2=매출↑+마진↑(이상적, 가격결정력), 1=마진만↑(원가절감), 0=매출↑+마진↓(성장함정), -1=둘다↓(악화).",
+      "지속가치_품질": "0~6점 복합 해자 점수. ROIC+마진동행+이익품질+FCF 합산. 4이상 우수, 6 최고.",
       "현금배당_점수": "배당주 점수.",
       "턴어라운드_점수": "턴어라운드 점수.",
       "타이밍_점수": "타이밍 점수 (0-100). 과열 회피(40%) + 상승조짐(45%) + 실적감속 패널티로 구성.",
@@ -1412,6 +1451,7 @@
             { key: "실적감속_경고",       label: "실적 감속 경고",  fmt: "flag" },
             { key: "영업이익_감속경고",   label: "OP 감속 경고",    fmt: "flag" },
             { key: "영업이익_감속폭(pp)", label: "OP 감속폭(pp)",   fmt: "f1" },
+            { key: "매출_감속경고",       label: "매출 감속 경고",  fmt: "flag" },
           ]
         },
       ]
@@ -1492,6 +1532,14 @@
             { key: "이자보상배율", label: "이자보상배율", fmt: "f2" },
             { key: "부채상환능력", label: "부채상환능력", fmt: "f2" },
             { key: "무차입_기업",  label: "무차입",       fmt: "flag" },
+          ]
+        },
+        {
+          subTitle: "지배구조",
+          metrics: [
+            { key: "지배구조_점수",   label: "지배구조 점수",   fmt: "int" },
+            { key: "최대주주_지분율", label: "최대주주 지분율%", fmt: "f1" },
+            { key: "감사의견",        label: "감사의견",         fmt: "str" },
           ]
         },
       ]
@@ -1583,6 +1631,22 @@
             { key: "스마트머니_승률", label: "스마트머니 승률", fmt: "f1" },
             { key: "양매수_비율",     label: "양매수 비율",     fmt: "f1" },
             { key: "VCP_신호",        label: "VCP 신호",        fmt: "flag" },
+            { key: "조용한_매집_점수", label: "조용한 매집 점수", fmt: "f1" },
+          ]
+        },
+        {
+          subTitle: "수급 가속도",
+          metrics: [
+            { key: "수급강도_변화",    label: "수급강도 변화",    fmt: "f1" },
+            { key: "외인_매수_가속도", label: "외인 매수 가속도", fmt: "f1" },
+            { key: "기관_매수_가속도", label: "기관 매수 가속도", fmt: "f1" },
+          ]
+        },
+        {
+          subTitle: "지분율",
+          metrics: [
+            { key: "외국인_지분율",      label: "외국인 지분율%",  fmt: "f1" },
+            { key: "외국인_지분율_변화", label: "외국인 지분 변화%", fmt: "f2" },
           ]
         },
       ]
@@ -1711,11 +1775,13 @@
     {
       key: "stability", label: "안정성",
       fields: [
-        { col: "F스코어",        label: "F-Score" },
-        { col: "부채비율(%)",    label: "부채비율%" },
-        { col: "유동비율(%)",    label: "유동비율%" },
-        { col: "부채상환능력",   label: "부채상환능력" },
-        { col: "이자보상배율",   label: "이자보상배율" },
+        { col: "F스코어",         label: "F-Score" },
+        { col: "부채비율(%)",     label: "부채비율%" },
+        { col: "유동비율(%)",     label: "유동비율%" },
+        { col: "부채상환능력",    label: "부채상환능력" },
+        { col: "이자보상배율",    label: "이자보상배율" },
+        { col: "지배구조_점수",   label: "지배구조점수" },
+        { col: "최대주주_지분율", label: "최대주주지분율%" },
       ]
     },
     {
@@ -1735,15 +1801,21 @@
     {
       key: "supply", label: "수급",
       fields: [
-        { col: "외인순매수_20d",   label: "외인순매수(20d)" },
-        { col: "기관순매수_20d",   label: "기관순매수(20d)" },
-        { col: "스마트머니_승률",  label: "스마트머니승률" },
-        { col: "양매수_비율",      label: "양매수비율" },
-        { col: "RS_60d",           label: "RS 60일" },
-        { col: "RS_120d",          label: "RS 120일" },
-        { col: "RS_250d",          label: "RS 250일" },
-        { col: "Composite_RS",     label: "종합RS" },
-        { col: "RS_등급",          label: "RS등급" },
+        { col: "외인순매수_20d",      label: "외인순매수(20d)" },
+        { col: "기관순매수_20d",      label: "기관순매수(20d)" },
+        { col: "스마트머니_승률",     label: "스마트머니승률" },
+        { col: "양매수_비율",         label: "양매수비율" },
+        { col: "조용한_매집_점수",    label: "조용한매집점수" },
+        { col: "수급강도_변화",       label: "수급강도변화" },
+        { col: "외인_매수_가속도",    label: "외인매수가속도" },
+        { col: "기관_매수_가속도",    label: "기관매수가속도" },
+        { col: "외국인_지분율",       label: "외국인지분율%" },
+        { col: "외국인_지분율_변화",  label: "외국인지분변화%" },
+        { col: "RS_60d",              label: "RS 60일" },
+        { col: "RS_120d",             label: "RS 120일" },
+        { col: "RS_250d",             label: "RS 250일" },
+        { col: "Composite_RS",        label: "종합RS" },
+        { col: "RS_등급",             label: "RS등급" },
       ]
     },
     {
@@ -2983,7 +3055,7 @@
       all:            ["PER", "ROE(%)", "영업이익_CAGR", "부채비율(%)", "수급강도", "배당수익률(%)", "종합점수"],
       leaders:        ["수급강도", "RS_등급", "거래대금_증감(%)", "주도주_점수"],
       quality_value:  ["PER", "ROE(%)", "F스코어", "영업이익_CAGR", "우량가치_점수"],
-      growth_mom:     ["매출_CAGR", "Q_매출_YoY(%)", "실적가속_연속", "MA20_이격도(%)", "영업이익률(%)", "고성장_점수"],
+      growth_mom:     ["매출_CAGR", "Q_매출_YoY(%)", "영업이익_연속성장", "ROIC(%)", "영업이익률(%)", "RS_등급", "고성장_점수"],
       cash_div:       ["배당수익률(%)", "FCF수익률(%)", "ROIC(%)", "PER", "부채비율(%)", "현금배당_점수"],
       turnaround:     ["흑자전환", "이익률_변동폭", "TTM_순이익", "스마트머니_승률", "PBR", "턴어라운드_점수"],
       multi_strategy: ["전략수", "종합점수", "ROE(%)", "F스코어"],
@@ -3002,8 +3074,9 @@
         "PER": "— 밸류 —", "ROE(%)": "— 수익성 —", "F스코어": "— 안정성 —", "영업이익_CAGR": "— 성장 —", "우량가치_점수": "— 점수 —"
       },
       growth_mom: {
-        "매출_CAGR": "— CAGR —", "Q_매출_YoY(%)": "— 분기YoY —", "실적가속_연속": "— 가속도 —",
-        "MA20_이격도(%)": "— 기술 —", "영업이익률(%)": "— 수익성 —", "고성장_점수": "— 점수 —"
+        "매출_CAGR": "— 성장 기울기 —", "Q_매출_YoY(%)": "— 분기YoY —",
+        "영업이익_연속성장": "— 성장 지속성 —", "ROIC(%)": "— 해자 품질 —",
+        "영업이익률(%)": "— 수익성 —", "RS_등급": "— 타이밍 —", "고성장_점수": "— 점수 —"
       },
       cash_div: {
         "배당수익률(%)": "— 배당 —", "FCF수익률(%)": "— 현금흐름 —", "ROIC(%)": "— 수익성 —",
@@ -5720,13 +5793,11 @@
 
   // AI 보고서 보기 버튼 (기존 보고서 조회만, 새 분석 시작 안 함)
   document.getElementById("btn-view-report").addEventListener("click", function () {
-    if (isUsMode()) return;
     requestAnalysis(this.dataset.code || currentDetailCode, "claude", true);
   });
 
   // AI 분석 버튼 (항상 새로 분석 시작)
   document.getElementById("btn-analysis-claude").addEventListener("click", function () {
-    if (isUsMode()) return;
     requestAnalysis(this.dataset.code || currentDetailCode, "claude", false);
   });
 

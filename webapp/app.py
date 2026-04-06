@@ -77,7 +77,7 @@ DISPLAY_COLS = [
     "PER", "PBR", "PSR", "PEG", "ROE(%)", "EPS", "BPS",
     "부채비율(%)", "유동비율(%)", "영업이익률(%)", "이익수익률(%)", "FCF수익률(%)",
     "배당수익률(%)", "이익품질_양호", "이자보상배율", "현금전환율(%)", "CAPEX비율(%)",
-    "부채상환능력", "F스코어",
+    "부채상환능력", "무차입_기업", "F스코어",
     "F1_수익성", "F2_영업CF", "F3_ROA개선", "F4_이익품질",
     "F5_레버리지", "F6_유동성", "F7_희석없음", "F8_매출총이익률", "F9_자산회전율",
     "PER_이상", "데이터_연수", "순이익_전년음수", "순이익_당기양수",
@@ -85,6 +85,8 @@ DISPLAY_COLS = [
     "RSI_14", "거래대금_20일평균", "거래대금_증감(%)", "변동성_60일(%)",
     "수급강도", "외인순매수_20d", "기관순매수_20d",
     "스마트머니_승률", "양매수_비율", "VCP_신호",
+    "수급강도_변화", "외인_매수_가속도", "기관_매수_가속도",
+    "조용한_매집_점수", "외국인_지분율", "외국인_지분율_변화",
     "RS_60d", "RS_120d", "RS_250d", "Composite_RS", "RS_등급",
     "영업이익_가속도", "매출_가속도", "실적가속_연속",
     "영업이익_감속경고", "영업이익_감속폭(pp)", "매출_감속경고", "실적감속_경고",
@@ -116,6 +118,8 @@ DISPLAY_COLS = [
     "Fwd_영업이익_성장률(%)", "Fwd_매출_성장률(%)", "Fwd_순이익_성장률(%)", "Fwd_2yr_영업이익_성장(%)",
     "Fwd_모멘텀_점수",  # ephemeral: forward_covered 탭에서만 동적 계산됨
     "섹터",
+    # 지배구조 (shares 테이블에서 수집)
+    "지배구조_점수", "최대주주_지분율", "감사의견",
 ]
 US_DISPLAY_COLS = DISPLAY_COLS + ["exchange", "industry", "index_membership"]
 
@@ -2009,10 +2013,10 @@ def _apply_screen_filter(df: pd.DataFrame, name: str) -> pd.DataFrame:
         return df[mask_general | mask_finance]
     elif name == "growth_mom":
         mask = (
-            (df["매출_CAGR"].fillna(0) >= 10)
-            & (df["영업이익_CAGR"].fillna(0) >= 10)
-            & (df["Q_영업이익_YoY(%)"].fillna(0) > 0)
-            & (df["RS_등급"].fillna(0) >= 50)
+            (df["매출_CAGR"].fillna(0) >= 8)
+            & (df["영업이익_CAGR"].fillna(0) >= 8)
+            & (df["영업이익_연속성장"].fillna(0) >= 2)
+            & (df["매출이익_동행성"].fillna(-1) >= 1)
             & (df["TTM_영업CF"].fillna(-1) > 0)
             & (df["시가총액"].fillna(0) >= 50_000_000_000)
         )
@@ -2048,6 +2052,18 @@ def _apply_screen_filter(df: pd.DataFrame, name: str) -> pd.DataFrame:
         else:
             mask = base_mask
         return df[mask]
+    elif name == "quiet_accumulation":
+        mask_score = df["조용한_매집_점수"].fillna(0) >= 60 if "조용한_매집_점수" in df.columns else pd.Series(False, index=df.index)
+        mask_alt = (
+            (df["수급강도"].fillna(0) > 0)
+            & (df["스마트머니_승률"].fillna(0) >= 55)
+            & (df["양매수_비율"].fillna(0) >= 25)
+        )
+        mask_mcap = df["시가총액"].fillna(0) >= 50_000_000_000
+        mask = (mask_score | mask_alt) & mask_mcap
+        result = df[mask].copy()
+        sort_col = "조용한_매집_점수" if "조용한_매집_점수" in result.columns else "수급강도"
+        return result.sort_values(sort_col, ascending=False)
     elif name == "multi_strategy":
         strats = ["leaders", "quality_value", "growth_mom", "cash_div", "turnaround"]
         counts = pd.Series(0, index=df.index)
@@ -2125,10 +2141,10 @@ def _apply_us_screen_filter(df: pd.DataFrame, name: str) -> pd.DataFrame:
 
     if name == "growth_mom":
         mask = (
-            (pd.to_numeric(df.get("매출_CAGR"), errors="coerce").fillna(0) >= 10)
-            & (pd.to_numeric(df.get("영업이익_CAGR"), errors="coerce").fillna(0) >= 10)
-            & (pd.to_numeric(df.get("Q_영업이익_YoY(%)"), errors="coerce").fillna(0) > 0)
-            & (pd.to_numeric(df.get("RS_등급"), errors="coerce").fillna(0) >= 50)
+            (pd.to_numeric(df.get("매출_CAGR"), errors="coerce").fillna(0) >= 8)
+            & (pd.to_numeric(df.get("영업이익_CAGR"), errors="coerce").fillna(0) >= 8)
+            & (pd.to_numeric(df.get("영업이익_연속성장"), errors="coerce").fillna(0) >= 2)
+            & (pd.to_numeric(df.get("매출이익_동행성"), errors="coerce").fillna(-1) >= 1)
             & (pd.to_numeric(df.get("TTM_영업CF"), errors="coerce").fillna(-1) > 0)
             & (pd.to_numeric(df.get("시가총액"), errors="coerce").fillna(0) >= 1_000_000_000)
         )

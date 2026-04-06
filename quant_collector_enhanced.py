@@ -981,6 +981,7 @@ def fetch_shares(ticker: str) -> dict | None:
 
     # ── FICS 섹터 파싱 (span.stxt.stxt2) ──
     sector = None
+    soup = None
     try:
         soup = BeautifulSoup(raw, "html.parser")
         fics_span = soup.find("span", class_="stxt2")
@@ -991,6 +992,66 @@ def fetch_shares(ticker: str) -> dict | None:
     except Exception:
         pass
 
+    # ── 주주구성 파싱 (최대주주 지분율, 외국인 지분율) ──
+    largest_shareholder_pct = None
+    foreign_pct = None
+    try:
+        for t in tables:
+            if not isinstance(t, pd.DataFrame):
+                continue
+            t_str = t.to_string()
+            if "최대주주" in t_str and "외국인" in t_str:
+                # 첫 번째 컬럼이 주주명, 두 번째 컬럼이 지분율(%) 형태의 테이블 탐색
+                for col_idx in range(min(len(t.columns), 4)):
+                    col_vals = t.iloc[:, col_idx].astype(str)
+                    if col_vals.str.contains("최대주주").any():
+                        pct_col = col_idx + 1 if col_idx + 1 < len(t.columns) else col_idx
+                        for row_idx, cell in enumerate(col_vals):
+                            if "최대주주" in cell:
+                                try:
+                                    v = str(t.iloc[row_idx, pct_col]).replace(",", "").replace("%", "").strip()
+                                    largest_shareholder_pct = float(v)
+                                except Exception:
+                                    pass
+                            if "외국인" in cell:
+                                try:
+                                    v = str(t.iloc[row_idx, pct_col]).replace(",", "").replace("%", "").strip()
+                                    foreign_pct = float(v)
+                                except Exception:
+                                    pass
+                        break
+    except Exception:
+        pass
+
+    # ── 감사의견 파싱 ──
+    audit_opinion = None
+    try:
+        if soup is None:
+            soup = BeautifulSoup(raw, "html.parser")
+        for keyword in ("적정", "한정", "부적정", "의견거절"):
+            tag = soup.find(string=lambda t: t and "감사의견" in t)
+            if tag:
+                parent_text = tag.find_parent().get_text(" ", strip=True) if tag.find_parent() else ""
+                for opinion in ("의견거절", "부적정", "한정", "적정"):
+                    if opinion in parent_text:
+                        audit_opinion = opinion
+                        break
+                break
+        # 테이블에서 재시도
+        if audit_opinion is None:
+            for t in tables:
+                if not isinstance(t, pd.DataFrame):
+                    continue
+                t_str = t.to_string()
+                if "감사의견" in t_str:
+                    for opinion in ("의견거절", "부적정", "한정", "적정"):
+                        if opinion in t_str:
+                            audit_opinion = opinion
+                            break
+                    break
+    except Exception:
+        pass
+
     return {
         "종목코드": ticker,
         "기준일": date.today().isoformat(),
@@ -998,6 +1059,9 @@ def fetch_shares(ticker: str) -> dict | None:
         "자사주": treasury,
         "유통주식수": float_shares,
         "섹터": sector,
+        "최대주주_지분율": largest_shareholder_pct,
+        "외국인_지분율": foreign_pct,
+        "감사의견": audit_opinion,
     }
 
 
@@ -1249,7 +1313,13 @@ def run_full(test_mode: bool = False, skip_price_history: bool = False, skip_inv
     else:
         share_rows = parallel_collect(fetch_shares, targets, "주식수")
         if share_rows:
-            _db.save_df(pd.DataFrame(share_rows), "shares", biz_day)
+            share_df = pd.DataFrame(share_rows)
+            _db.save_df(share_df, "shares", biz_day)
+            # 외국인 지분율 이력 누적 저장
+            if "외국인_지분율" in share_df.columns:
+                foh_df = share_df[["종목코드", "외국인_지분율"]].copy()
+                foh_df["날짜"] = biz_day
+                _db.save_foreign_ownership_history(foh_df)
         else:
             log.warning("⚠️ 주식수 데이터 없음")
 

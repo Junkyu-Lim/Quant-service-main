@@ -30,7 +30,7 @@ import db as _db
 import config
 
 log = logging.getLogger("Analyzer")
-ANALYSIS_INPUT_VERSION = "stock-analysis-v6"
+ANALYSIS_INPUT_VERSION = "stock-analysis-v7"
 
 # ─────────────────────────────────────────
 # 프롬프트 템플릿
@@ -47,7 +47,7 @@ SYSTEM_PROMPT = """\
 - Stage 1: 거시환경 & 밸류체인 (전방산업 CAGR, 경쟁우위)
 - Stage 2: 수익성 해부 (P×Q×C 분석, 캐시카우 vs 성장동력 구분)
 - Stage 3: 수명주기 & 해자 (도입/성장/성숙/쇠퇴, 4대 해자 데이터로 입증)
-- Stage 4: 재무건전성 (매출총이익률 추이, FCF 품질, 부채비율, 컨센서스 괴리)
+- Stage 4: 재무건전성 & 지배구조 (매출총이익률 추이, FCF 품질, 부채비율, 컨센서스 괴리, 지배구조 건전성)
 - Stage 4.5: Peer 비교 → 아래 별도 규칙 참조
 - Stage 5: 전망 & 모멘텀 (CAPEX, 수주잔고, 신사업, 12개월 촉매)
 - Stage 6: 밸류에이션 & 코스톨라니 (수명주기 맞춤 방법론, 달걀 1~6 위치)
@@ -69,7 +69,7 @@ SYSTEM_PROMPT = """\
 [필수] 각 거장 분석에서 핵심 약점 1개 이상 명시. 긍정만 나열 금지.
 
 ### 9대 거장 핵심 관점 (키워드)
-- Buffett: 해자지속성·경영진·S-RIM 안전마진·장기보유
+- Buffett: 해자지속성·경영진건전성(지배구조_점수·오너리스크)·S-RIM 안전마진·장기보유·주주환원
 - Damodaran: 내러티브-숫자일관성·ROIC vs WACC·리스크대비보상
 - Fisher: R&D혁신·이익률개선추세·장기성장·조직문화
 - Dorsey: 4대해자(무형/전환비용/네트워크/원가) 강도·트렌드(확대/축소)
@@ -83,9 +83,12 @@ SYSTEM_PROMPT = """\
 - USER_PROMPT에 "동종업계 Peer DB 데이터" 섹션이 있으면 그 값을 peer_comparison.peers에 그대로 사용 (웹 추정 금지)
 - DB 데이터 없을 때만 웹 검색으로 보완. 지표별 대상 종목 상대 순위 명시. 저평가/적정/고평가 판정. 더 매력적 대안이 있으면 솔직히 언급.
 
-## 웹 검색 (최대 2회)
+## 웹 검색 (최대 3회)
 1. [필수] "{종목명} 실적 영업이익 {연도}" → 최신 실적·뉴스 → Stage 5·recent_news에 반영
 2. [필수] "{종목명} 증권사 리포트 목표주가" → 컨센서스 → Stage 5·8에 반영
+3. [지배구조 데이터가 있거나 의심 시] "{종목명} 지배구조 오너리스크 세습 횡령 배임 내부거래 소액주주" → 최근 3년 이내 지배구조 이슈 파악 → Stage 4 governance_assessment·risks에 반영
+   - 지배구조_점수 ≤ 2이거나, 최대주주_지분율 > 60%이거나, 감사의견 ≠ "적정"이면 반드시 이 검색 수행
+   - 오너 일가 사익편취, 일감 몰아주기, 유상증자 후 주가 하락 패턴, 회사 자금 유용 등을 중점 확인
 검색 결과는 분석 근거에 구체적으로 인용하세요.
 
 ## 근거 인용 규칙 (중요)
@@ -124,6 +127,18 @@ Stage 7 모든 거장 평균 ≥8이면, 반드시 Munger bear_case에서 과열
 - 지속가치_품질≥4 + 괴리율 양수 → "진정한 저평가", value_trap_risk=low
 - [신규] PER<10 + PBR<1 + Klarman 촉매 0건 → "무촉매 저평가 = 밸류트랩 가능성", value_trap_risk 상향
 
+## 지배구조 건전성 판별 (Stage 4 확장)
+지배구조 섹션 데이터가 제공된 경우 반드시 적용하세요.
+- 지배구조_점수 5: 건전 → stage4 governance_assessment="건전", 긍정 언급
+- 지배구조_점수 3-4: 보통 → stage4 governance_assessment="보통", 미흡한 항목 1개 지적
+- 지배구조_점수 0-2: 우려 → stage4 governance_assessment="우려", risks에 category="지배구조" severity=medium 이상 필수 추가
+- 감사의견 ≠ "적정" → risks에 category="지배구조" severity=high 필수, Buffett 점수 상한 4
+- 최대주주_지분율 > 70% → "과도한 지분 집중" 경고; 오너 일가 사익편취·일감 몰아주기·세습 리스크를 웹 검색으로 확인
+- 최대주주_지분율 > 50% + 웹 검색에서 오너리스크 이슈 발견 → risks에 category="지배구조" severity=high, Buffett/Dorsey 점수 각 상한 5
+- 최대주주_지분율 < 20% + 외국인_지분율 < 5% → "경영권 불안정" 리스크 평가
+- F7_희석없음=0 (유상증자 의심) → stage4 analysis에 희석 리스크 명시, Buffett 점수 상한 6
+- 외국인_지분율 >= 20% → 국제 기준 거버넌스 모니터링 존재로 긍정적 평가 가능
+
 ## 내부 일관성 (JSON 출력 전 자체 검증)
 1. moat_rating=none → fair_value_range PBR/BPS 보수적 산출, 성장 프리미엄 금지
 2. TTM_FCF 음수 또는 부채비율>200% → portfolio_weight 최대 2%
@@ -138,6 +153,9 @@ Stage 7 모든 거장 평균 ≥8이면, 반드시 Munger bear_case에서 과열
 11. Klarman catalysts 0건 + 괴리율>0 → summary에 "무촉매 저평가 경고" 필수 언급, portfolio_weight 상한 3%
 12. 수출비중 높은 종목 + 매크로 불리 → Marks 점수 상한 6
 13. RS등급 > 80 고모멘텀 종목 → risks에 추가: {"description": "생존자 편향 주의: 모멘텀 스크리닝은 상장폐지 종목 제외로 과거 수익률 과대평가 가능. 모멘텀 역전 시 낙폭 확대 위험.", "severity": "low"}
+14. 감사의견 ≠ "적정" → Buffett 점수 상한 4, risks에 category="지배구조" severity=high 필수
+15. 지배구조_점수 ≤ 2 → portfolio_weight 상한 3%, summary에 "지배구조 리스크" 필수 언급
+16. 웹 검색에서 세습·횡령·배임·일감 몰아주기 이슈 확인 시 → risks에 category="지배구조" severity=high, Munger bear_case에 해당 시나리오 포함 필수
 
 ## risks 필수 규칙
 단순 "경쟁 심화·금리·환율" 기재 금지 — 수치/사건 연결 필수. 재무 약점 1개 이상, severity=high 1개 이상, DART·뉴스 근거 1개 이상.
@@ -199,7 +217,8 @@ USER_PROMPT_TEMPLATE = """\
     "value_trap_risk": "<low|medium|high>",
     "debt_assessment": "<부채 구조>",
     "consensus_deviation": "<컨센서스 대비>",
-    "analysis": "<2-4문장 — ROIC/ROE 추세·FCF 품질·가치함정 여부 포함>"
+    "governance_assessment": "<건전|보통|우려 — 지배구조_점수·최대주주 지분율·감사의견·오너리스크 이슈 근거 1줄>",
+    "analysis": "<2-4문장 — ROIC/ROE 추세·FCF 품질·가치함정·지배구조 건전성 포함>"
   }},
   "peer_comparison": {{
     "peers": [
@@ -338,6 +357,10 @@ QUANT_SECTIONS = {
     "TTM 요약": [
         ("TTM_매출", "int"), ("TTM_영업이익", "int"), ("TTM_순이익", "int"),
         ("TTM_영업CF", "int"), ("TTM_FCF", "int"), ("자본", "int"), ("부채", "int"),
+    ],
+    "지배구조 건전성": [
+        ("지배구조_점수", "int"), ("최대주주_지분율", "f1"), ("외국인_지분율", "f1"),
+        ("감사의견", "str"), ("F7_희석없음", "int"),
     ],
 }
 
@@ -1198,7 +1221,7 @@ def generate_report(stock: dict, mode: str = "claude") -> dict:
     # --- Prompt caching: 시스템 프롬프트 캐시 적용 ---
     system_with_cache = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
 
-    web_search_max_uses = max(1, min(2, int(config.WEB_SEARCH_MAX_USES)))
+    web_search_max_uses = max(1, min(3, int(config.WEB_SEARCH_MAX_USES)))
     log.info(
         "종목 AI 분석 시작 (%s %s, model=%s, timeout=%.0fs, prompt_chars=%d, web_search max_uses=%d)",
         code, name, config.ANALYSIS_MODEL, config.ANALYSIS_TIMEOUT_SEC,
